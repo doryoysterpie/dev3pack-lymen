@@ -805,3 +805,146 @@ test("a stored full report in E-09's shape gives a body without the fee payer or
       assert.ok(!logged[0]!.includes(form), `${form} reached the body`);
   }
 });
+
+// Pending the owner's ruling: a human's escalation on the dashboard (E-12) also builds the
+// dry-run body. This test and the wiring it checks can be dropped together.
+const TRIAGE_TOKEN = "test-triage-token-0123456789abcdef";
+
+/**
+ * Posts the first fixture report (one device, so the case holds under D-05), then takes each
+ * dashboard action on case 1. The re-simulation returns `resimulated`.
+ */
+async function manualFlow(
+  mode: ChainabuseMode,
+  actions: readonly ("escalate" | "dismiss")[] = ["escalate", "escalate"],
+  resimulated: { summary: unknown; drainPattern: boolean } = {
+    summary: DEVICE_1.summary,
+    drainPattern: true,
+  },
+) {
+  const db = openDatabase(":memory:");
+  const logged: string[] = [];
+  const server: Server = createApiServer({
+    db,
+    version: API_VERSION,
+    reports: {
+      now: () => 1_795_000_500,
+      triageToken: TRIAGE_TOKEN,
+      resimulator: async () => resimulated,
+      onEscalated: chainabuseHook(mode, db, bundledLists(), (line) =>
+        logged.push(line),
+      ),
+    },
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const watch = watchOutbound();
+  const steps: unknown[] = [];
+  try {
+    // One device: the case holds under D-05.
+    const report = await fetch(`${base}/reports`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(DEVICE_1),
+    });
+    steps.push(((await report.json()) as { case_status: string }).case_status);
+    for (const action of actions) {
+      const decided = await fetch(`${base}/cases/1/${action}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${TRIAGE_TOKEN}` },
+      });
+      steps.push(((await decided.json()) as { outcome: string }).outcome);
+    }
+  } finally {
+    watch.restore();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+  return { logged, outbound: watch.outbound, steps };
+}
+
+test("pending ruling: a human's escalation on the dashboard logs the exact dry-run body once", async () => {
+  const { logged, outbound, steps } = await manualFlow("dry-run");
+  assert.deepEqual(steps, ["held", "decided", "unchanged"]);
+  assert.equal(
+    logged.length,
+    1,
+    "one entry, for the escalation that changed the case",
+  );
+  const owed = [
+    {
+      ...OWED_BODY[0],
+      description: OWED_BODY[0]!.description
+        .replace(THRESHOLD_LINE, "- Decided by: human review")
+        .replace(
+          "- Sightings: 2, from 2 distinct reported install IDs",
+          "- Sightings: 1, from 1 distinct reported install ID",
+        ),
+    },
+  ];
+  assert.equal(
+    logged[0],
+    `chainabuse dry run, not sent: POST ${CHAINABUSE_REPORTS_URL}\n${JSON.stringify(owed)}`,
+  );
+  assert.deepEqual(outbound, []);
+});
+
+test("pending ruling: with the flag off, a human's escalation logs and sends nothing", async () => {
+  const { logged, outbound, steps } = await manualFlow("off");
+  assert.deepEqual(steps, ["held", "decided", "unchanged"]);
+  assert.deepEqual(logged, []);
+  assert.deepEqual(outbound, []);
+});
+
+test("pending ruling: escalate, dismiss, escalate logs one body for the case", async () => {
+  const { logged, outbound, steps } = await manualFlow("dry-run", [
+    "escalate",
+    "dismiss",
+    "escalate",
+  ]);
+  assert.deepEqual(steps, ["held", "decided", "decided", "decided"]);
+  assert.equal(logged.length, 2);
+  assert.match(logged[0]!, /^chainabuse dry run, not sent: POST /);
+  assert.equal(
+    logged[1],
+    "chainabuse dry run, nothing built for case 1: its request was already logged once since the service started",
+  );
+  assert.deepEqual(outbound, []);
+});
+
+test("pending ruling: a human's escalation without a reproduced drain does not describe one", async () => {
+  // The re-simulation gives a different summary and no drain, so nothing is reproduced.
+  const { logged } = await manualFlow("dry-run", ["escalate"], {
+    summary: { kind: "transaction", effects: [] },
+    drainPattern: false,
+  });
+  assert.equal(logged.length, 1);
+  const owed = [
+    {
+      ...OWED_BODY[0]!,
+      description: [
+        "### limen escalation: no drain pattern reproduced",
+        "",
+        "A QR reported through limen was escalated, but no re-simulation on limen's server reproduced a drain pattern for it. The summary below is the one the reporter's app showed. limen simulates on Solana devnet only.",
+        "",
+        "- Case: 1",
+        "- Decided by: human review",
+        "- Sightings: 1, from 1 distinct reported install ID",
+        "- Domain: claim-pass.example",
+        "- Domain on the bundled fixture list: no",
+        "- Re-simulation reproduced the reported summary with a drain pattern: no",
+        "",
+        "#### Simulated transaction summary",
+        `- effects: \\[{"lamports":"1500000001","to":"${RECIPIENT}","type":"sol\\_out"}\\]`,
+        "- kind: transaction",
+        "",
+        "#### Programs",
+        `- ${SYSTEM_PROGRAM}`,
+        "",
+        "#### Recipients as reported to limen",
+        `- ${RECIPIENT}`,
+      ].join("\n"),
+    },
+  ];
+  assert.equal(logged[0]!.split("\n")[1], JSON.stringify(owed));
+  assert.ok(!logged[0]!.includes("### limen escalation: drain pattern"));
+});

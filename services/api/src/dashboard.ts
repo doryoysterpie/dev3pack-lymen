@@ -28,6 +28,12 @@ export interface DashboardOptions {
   readonly triageToken: string | undefined;
   readonly lists: DomainLists;
   readonly now: () => number;
+  /**
+   * Called with the case ID when a human's escalate moves a case to escalated (E-13, pending the
+   * owner's ruling that manual escalation also goes to Chainabuse). A failure inside it never
+   * changes the response.
+   */
+  readonly onEscalated?: (caseId: number) => void;
 }
 
 const asset = (name: string): Buffer =>
@@ -226,6 +232,17 @@ export function routeDashboard(
 
   if (methodIs(req, res, "POST") && authorized(options, req, res)) {
     const result = decideCase(db, caseId, action, options.lists, options.now());
+    if (
+      action === "escalate" &&
+      result.outcome === "decided" &&
+      options.onEscalated !== undefined
+    ) {
+      try {
+        options.onEscalated(caseId);
+      } catch {
+        // The decision stands either way; the hook's failure stays in the process.
+      }
+    }
     if (result.outcome === "not_found")
       sendJson(res, 404, { error: "unknown_case" });
     else

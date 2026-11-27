@@ -30,8 +30,9 @@ export interface ReportOptions {
   /** The bearer token for the dashboard's JSON routes (E-12). Unset: those routes answer 503. */
   readonly triageToken?: string;
   /**
-   * Called with the case ID when this report moves its case from held to escalated (E-13).
-   * Unset means nothing is called. A failure inside it never changes the report's response.
+   * Called with the case ID when this report moves its case from held to escalated (E-13), and
+   * when a human escalates a case on the dashboard (E-12's route; pending the owner's ruling).
+   * Unset means nothing is called. A failure inside it never changes the response.
    */
   readonly onEscalated?: (caseId: number) => void;
 }
@@ -179,7 +180,12 @@ export function routeReports(
     }
     lists = loaded;
   }
-  const dashboard = { triageToken: options.triageToken, lists, now };
+  const dashboard = {
+    triageToken: options.triageToken,
+    onEscalated: options.onEscalated,
+    lists,
+    now,
+  };
   if (routeDashboard(db, dashboard, req, res, pathname)) return true;
   if (pathname !== "/reports") return false;
   if (req.method !== "POST") {

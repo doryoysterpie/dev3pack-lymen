@@ -207,11 +207,21 @@ export function buildChainabuseRequest(
     simulationOutcome(JSON.parse(shown.summaryJson)) === "not clean";
   const devices = view.inputs.independentDevices;
   const description = [
-    "### limen escalation: drain pattern",
-    "",
-    fromDecodedOnly
-      ? "A QR reported through limen leads to a transaction whose decoded instructions hand over control of the signer's wallet or its token accounts. Its simulation did not run without an error, so no simulated movement of funds is claimed. limen simulates on Solana devnet only."
-      : "A QR reported through limen leads to a transaction with a drain pattern: its decoded instructions, or a simulation that ran without an error, show control of the signer's wallet or its token accounts handed over, or the wallet swept. limen simulates on Solana devnet only.",
+    // The threshold escalates only on a reproduced drain; a human may escalate without one, and
+    // the opening then says so rather than describe a drain no simulation showed.
+    ...(reproduced
+      ? [
+          "### limen escalation: drain pattern",
+          "",
+          fromDecodedOnly
+            ? "A QR reported through limen leads to a transaction whose decoded instructions hand over control of the signer's wallet or its token accounts. Its simulation did not run without an error, so no simulated movement of funds is claimed. limen simulates on Solana devnet only."
+            : "A QR reported through limen leads to a transaction with a drain pattern: its decoded instructions, or a simulation that ran without an error, show control of the signer's wallet or its token accounts handed over, or the wallet swept. limen simulates on Solana devnet only.",
+        ]
+      : [
+          "### limen escalation: no drain pattern reproduced",
+          "",
+          "A QR reported through limen was escalated, but no re-simulation on limen's server reproduced a drain pattern for it. The summary below is the one the reporter's app showed. limen simulates on Solana devnet only.",
+        ]),
     "",
     `- Case: ${view.id}`,
     // Install IDs are what clients report about themselves, and the domain lists are the bundled
