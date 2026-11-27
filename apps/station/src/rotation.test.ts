@@ -1,9 +1,17 @@
 // E-03: the station page renders a fresh QR every 30 s.
 import assert from "node:assert/strict";
+import { createPrivateKey } from "node:crypto";
+import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 
+import { openDatabase } from "../../../services/api/src/db.ts";
+import {
+  API_VERSION,
+  createApiServer,
+} from "../../../services/api/src/server.ts";
 import {
   fetchStationQr,
+  fragmentParam,
   readStationConfig,
   startRotation,
   type StationQrResponse,
@@ -210,4 +218,145 @@ test("each failed fetch becomes the owed message for the screen", async () => {
   for (const [fetchFn, message] of cases) {
     await assert.rejects(fetchStationQr(fetchFn, "/api", config), { message });
   }
+});
+
+test("a display token with +, / and = is read from #token= exactly as written", () => {
+  const token = "ab+cd/ef+gh==";
+  assert.deepEqual(
+    readStationConfig(`http://localhost:5173/?station=st-front#token=${token}`),
+    {
+      station: "st-front",
+      token,
+    },
+  );
+  assert.equal(fragmentParam("#token=a%2Bb%2Fc%3D", "token"), "a+b/c=");
+  assert.equal(fragmentParam("#x=1&token=a+b", "token"), "a+b");
+  assert.equal(fragmentParam("#token=a=b=", "token"), "a=b=");
+  assert.equal(fragmentParam("#other=1", "token"), null);
+});
+
+test("a +, / and = token reaches the real API intact and gets a QR", async () => {
+  // RFC 8032 section 7.1, TEST 1: a published Ed25519 test vector, not a real key.
+  const signer = {
+    publicKey: Buffer.from(
+      "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+      "hex",
+    ),
+    privateKey: createPrivateKey({
+      key: Buffer.from(
+        "302e020100300506032b657004220420" +
+          "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+        "hex",
+      ),
+      format: "der",
+      type: "pkcs8",
+    }),
+  };
+  const token = "q+Wr/9Kp+Zt0LmN/xYv2+AbC/dEf=GhIjKlMnOpQ==";
+  const db = openDatabase(":memory:");
+  db.exec(`
+    INSERT INTO stations (id, name, created_at) VALUES ('st-front', 'Front desk', 1);
+    INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('day-2', 'Day 2', 1795000000, 1795086400);
+  `);
+  const server = createApiServer({
+    db,
+    version: API_VERSION,
+    stationSigner: signer,
+    stationDisplayToken: token,
+    now: () => 1795000100,
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const config = readStationConfig(
+      `http://localhost:5173/?station=st-front#token=${token}`,
+    );
+    assert.ok(!("error" in config));
+    const qr = await fetchStationQr(fetch, base, config);
+    assert.equal(qr.station, "st-front");
+    assert.ok(qr.qr.startsWith("limen:station:v1."));
+    // The old reader turned "+" into a space, and the API refused the token.
+    const formDecoded =
+      new URLSearchParams(`token=${token}`).get("token") ?? "";
+    await assert.rejects(
+      fetchStationQr(fetch, base, { station: "st-front", token: formDecoded }),
+      {
+        message: "The API refused the display token.",
+      },
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("a fetch that never answers is abandoned after 10 s, shown as a failure, and retried", async () => {
+  const clock = fakeClock();
+  const fetchedAt: number[] = [];
+  const shown: StationView[] = [];
+  let calls = 0;
+  startRotation({
+    fetchQr: (signal) => {
+      fetchedAt.push(clock.now);
+      calls++;
+      if (calls === 2) {
+        // Never settles on its own; only the rotation's abort ends the wait.
+        return new Promise<StationQrResponse>((_, reject) =>
+          signal.addEventListener("abort", () => reject(new Error("aborted"))),
+        );
+      }
+      return Promise.resolve(response(calls));
+    },
+    render: (view) => shown.push(view),
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+  });
+  await flush();
+  await clock.advance(40_000);
+  assert.deepEqual(
+    shown.map((v) => v.kind),
+    ["qr", "error"],
+  );
+  assert.deepEqual(shown[1], {
+    kind: "error",
+    message: "The API did not answer in time.",
+  });
+  await clock.advance(5_000);
+  assert.deepEqual(fetchedAt, [0, 30_000, 45_000]);
+  assert.equal(shown.at(-1)?.kind, "qr");
+});
+
+test("a QR that outlives its lifetime on screen is cleared and the page says it is refreshing", async () => {
+  const clock = fakeClock();
+  const shown: StationView[] = [];
+  let calls = 0;
+  startRotation({
+    // The API asks for a refresh only at 60 s, and that fetch then hangs.
+    fetchQr: (signal) => {
+      calls++;
+      if (calls === 1)
+        return Promise.resolve({ ...response(1), refresh_after_s: 60 });
+      return new Promise<StationQrResponse>((_, reject) =>
+        signal.addEventListener("abort", () => reject(new Error("aborted"))),
+      );
+    },
+    render: (view) => shown.push(view),
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+  });
+  await flush();
+  await clock.advance(59_999);
+  assert.deepEqual(
+    shown.map((v) => v.kind),
+    ["qr"],
+  );
+  await clock.advance(1);
+  assert.deepEqual(
+    shown.map((v) => v.kind),
+    ["qr", "refreshing"],
+  );
+  await clock.advance(10_000);
+  assert.deepEqual(
+    shown.map((v) => v.kind),
+    ["qr", "refreshing", "error"],
+  );
 });

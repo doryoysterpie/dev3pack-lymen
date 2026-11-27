@@ -1,6 +1,8 @@
 // Station display rotation (E-03). Fetches a signed QR from the API, shows it, and fetches a
 // fresh one when the API says to, every 30 s. A failed fetch clears the QR, shows why, and
-// retries after 5 s. This file has no DOM or network code, so the tests drive it with fakes.
+// retries after 5 s; a fetch that takes over 10 s counts as failed. If a QR outlives its own
+// lifetime on screen before a new one arrives, it is cleared and the page says it is refreshing.
+// This file has no DOM code, and the tests drive it with fakes.
 
 /** What the API returns from GET /stations/:id/qr. */
 export interface StationQrResponse {
@@ -20,12 +22,16 @@ export type StationView =
       readonly session: string;
       readonly expiresAt: number;
     }
-  | { readonly kind: "error"; readonly message: string };
+  | { readonly kind: "error"; readonly message: string }
+  | { readonly kind: "refreshing" };
 
 export const RETRY_AFTER_MS = 5_000;
+/** A fetch that takes longer than this is abandoned and retried. */
+export const FETCH_TIMEOUT_MS = 10_000;
 
 export interface RotationDeps {
-  readonly fetchQr: () => Promise<StationQrResponse>;
+  /** Fetches one QR. The rotation aborts `signal` when the fetch runs past FETCH_TIMEOUT_MS. */
+  readonly fetchQr: (signal: AbortSignal) => Promise<StationQrResponse>;
   readonly render: (view: StationView) => void;
   readonly setTimeout: (fn: () => void, ms: number) => unknown;
   readonly clearTimeout: (handle: unknown) => void;
@@ -35,17 +41,39 @@ export interface RotationDeps {
 export function startRotation(deps: RotationDeps): { stop: () => void } {
   let stopped = false;
   let timer: unknown = null;
+  let staleTimer: unknown = null;
 
   const schedule = (ms: number): void => {
     if (!stopped) timer = deps.setTimeout(tick, ms);
+  };
+
+  const clearStale = (): void => {
+    if (staleTimer !== null) deps.clearTimeout(staleTimer);
+    staleTimer = null;
   };
 
   async function tick(): Promise<void> {
     timer = null;
     let next: number;
     try {
-      const res = await deps.fetchQr();
+      const controller = new AbortController();
+      const timedOut = new Promise<never>((_, reject) => {
+        controller.signal.addEventListener("abort", () =>
+          reject(new Error("The API did not answer in time.")),
+        );
+      });
+      const fetchTimer = deps.setTimeout(
+        () => controller.abort(),
+        FETCH_TIMEOUT_MS,
+      );
+      let res: StationQrResponse;
+      try {
+        res = await Promise.race([deps.fetchQr(controller.signal), timedOut]);
+      } finally {
+        deps.clearTimeout(fetchTimer);
+      }
       if (stopped) return;
+      clearStale();
       deps.render({
         kind: "qr",
         qr: res.qr,
@@ -53,9 +81,18 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
         session: res.session,
         expiresAt: res.expires_at,
       });
+      // Once this QR's lifetime has run out on screen, it can no longer check anyone in.
+      staleTimer = deps.setTimeout(
+        () => {
+          staleTimer = null;
+          if (!stopped) deps.render({ kind: "refreshing" });
+        },
+        (res.expires_at - res.issued_at) * 1000,
+      );
       next = res.refresh_after_s * 1000;
     } catch (err) {
       if (stopped) return;
+      clearStale();
       deps.render({
         kind: "error",
         message: err instanceof Error ? err.message : String(err),
@@ -70,18 +107,37 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
     stop: () => {
       stopped = true;
       if (timer !== null) deps.clearTimeout(timer);
+      clearStale();
     },
   };
 }
 
 /** Reads the station ID from ?station= and the display token from #token= in the page URL. */
+/**
+ * The value of `name` in an address fragment such as "#token=abc&x=1". Percent escapes are
+ * decoded, but "+" stays "+": the fragment is not form data, and a base64 token such as
+ * `openssl rand -base64 32` makes often holds "+", "/" and "=".
+ */
+export function fragmentParam(hash: string, name: string): string | null {
+  for (const part of hash.replace(/^#/, "").split("&")) {
+    const eq = part.indexOf("=");
+    if ((eq === -1 ? part : part.slice(0, eq)) !== name) continue;
+    const raw = eq === -1 ? "" : part.slice(eq + 1);
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  }
+  return null;
+}
+
 export function readStationConfig(
   href: string,
 ): { station: string; token: string } | { error: string } {
   const url = new URL(href);
   const station = url.searchParams.get("station") ?? "";
-  const token =
-    new URLSearchParams(url.hash.replace(/^#/, "")).get("token") ?? "";
+  const token = fragmentParam(url.hash, "token") ?? "";
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(station)) {
     return { error: "Add ?station=<station ID> to the page address." };
   }
@@ -120,15 +176,21 @@ export async function fetchStationQr(
   fetchFn: typeof fetch,
   apiBase: string,
   config: { station: string; token: string },
+  signal?: AbortSignal,
 ): Promise<StationQrResponse> {
   let res: Response;
   try {
     res = await fetchFn(`${apiBase}/stations/${config.station}/qr`, {
       headers: { authorization: `Bearer ${config.token}` },
       cache: "no-store",
+      signal,
     });
   } catch {
-    throw new Error("The API cannot be reached.");
+    throw new Error(
+      signal?.aborted
+        ? "The API did not answer in time."
+        : "The API cannot be reached.",
+    );
   }
   if (!res.ok)
     throw new Error(

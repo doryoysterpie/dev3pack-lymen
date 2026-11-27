@@ -97,9 +97,9 @@ function stationQr(
   const now = ctx.now();
   const session = ctx.db
     .prepare(
-      "SELECT id FROM sessions WHERE starts_at <= ? AND ? < ends_at ORDER BY starts_at DESC, id LIMIT 1",
+      "SELECT id, ends_at FROM sessions WHERE starts_at <= ? AND ? < ends_at ORDER BY starts_at DESC, id LIMIT 1",
     )
-    .get(now, now) as { id: string } | undefined;
+    .get(now, now) as { id: string; ends_at: number } | undefined;
   if (session === undefined) {
     sendJson(res, 409, { error: "no_active_session" });
     return;
@@ -109,6 +109,8 @@ function stationQr(
     session: session.id,
     now,
     signer: ctx.stationSigner,
+    // No QR outlives its session.
+    notAfter: session.ends_at,
   });
   sendJson(res, 200, {
     qr: text,
