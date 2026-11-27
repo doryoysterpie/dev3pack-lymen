@@ -122,7 +122,7 @@ export function buildChainabuseRequest(
     "",
     `- Case: ${view.id}`,
     `- Decided by: ${view.decidedBy === "human" ? "human review" : "the automatic threshold (drain pattern, and two or more devices or a listed domain)"}`,
-    `- Sightings: ${view.sightings}, from ${view.inputs.independentDevices} independent devices`,
+    `- Sightings: ${view.sightings}, from ${view.inputs.independentDevices} independent ${view.inputs.independentDevices === 1 ? "device" : "devices"}`,
     `- Domain: ${view.domain === null ? "none" : escapeMarkdown(view.domain)}`,
     `- Domain on the Phantom or PhishDestroy list: ${yesNo(view.inputs.domainListed)}`,
     `- Re-simulation reproduced the reported summary with a drain pattern: ${yesNo(reproduced)}`,
