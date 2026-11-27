@@ -120,15 +120,46 @@ test("an unset ORGANIZER_KEYPAIR_PATH fails with the unset error", () => {
   );
 });
 
-test("a missing key file fails with the unreadable error naming the path and ENOENT", () => {
+test("a missing key file fails with the unreadable error, naming the variable and ENOENT but not its value", () => {
   const missing = join(tmpdir(), "limen-no-such-dir", "organizer.json");
-  assertKeyError(
+  const err = assertKeyError(
     () => loadOrganizerKey(missing),
     "unreadable",
-    new RegExp(
-      `^organizer keypair file ${missing.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} cannot be read \\(ENOENT\\)\\.$`,
-    ),
+    /^The file ORGANIZER_KEYPAIR_PATH names cannot be read \(ENOENT\)\.$/,
   );
+  assert.ok(!err.message.includes(missing));
+});
+
+test("key material set as the variable's value is refused, and no byte of it reaches the error", () => {
+  const values = [
+    JSON.stringify(rfcKeypairBytes),
+    ` \n${JSON.stringify(rfcKeypairBytes)}`,
+    JSON.stringify({ secretKey: rfcKeypairBytes }),
+  ];
+  for (const value of values) {
+    const err = assertKeyError(
+      () => loadOrganizerKey(value),
+      "not_a_path",
+      /^ORGANIZER_KEYPAIR_PATH holds what looks like key material, not a file path\. Put the keypair in a file outside git and set the variable to that file's path\.$/,
+    );
+    // The message has no digits at all, so no byte value of the key can be in it.
+    for (const shown of [err.message, String(err), inspect(err)]) {
+      assert.ok(!/[0-9]/.test(err.message), "the message carries digits");
+      assert.ok(!shown.includes(value.trim()));
+    }
+  }
+});
+
+test("any other value that is not a readable file is never echoed in the error", () => {
+  const secretLike = "5JsecretLookingValueThatIsNotAPath0123456789abcdefABCDEF";
+  const err = assertKeyError(
+    () => loadOrganizerKey(secretLike),
+    "unreadable",
+    /^The file ORGANIZER_KEYPAIR_PATH names cannot be read \(ENOENT\)\.$/,
+  );
+  for (const shown of [err.message, String(err), inspect(err)]) {
+    assert.ok(!shown.includes(secretLike));
+  }
 });
 
 test("a directory in place of the key file fails with the unreadable error and EISDIR", () => {

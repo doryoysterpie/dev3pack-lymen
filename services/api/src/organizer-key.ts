@@ -2,7 +2,8 @@
 //
 // Reads the Solana keypair file named by ORGANIZER_KEYPAIR_PATH: the JSON array of 64 byte
 // values that solana-keygen writes, the 32-byte Ed25519 seed followed by the 32-byte public
-// key. No error message, log line or serialized form produced here carries the file's content.
+// key. No error message, log line or serialized form produced here carries the file's content
+// or the variable's value: a key pasted into the variable by mistake must not reach a terminal.
 import {
   createPrivateKey,
   createPublicKey,
@@ -19,9 +20,12 @@ const PKCS8_ED25519_PREFIX = Buffer.from(
 );
 
 export type OrganizerKeyErrorCode =
-  "unset" | "unreadable" | "malformed" | "mismatch";
+  "unset" | "not_a_path" | "unreadable" | "malformed" | "mismatch";
 
-/** A key file problem the operator can act on. The message names the path and the fault only. */
+/**
+ * A key file problem the operator can act on. The message names the variable and the fault only,
+ * never the variable's value or the file's content.
+ */
 export class OrganizerKeyError extends Error {
   readonly code: OrganizerKeyErrorCode;
 
@@ -87,6 +91,13 @@ export function loadOrganizerKey(path: string | undefined): OrganizerKey {
     );
   }
 
+  if (/^\s*[[{]/.test(path)) {
+    throw new OrganizerKeyError(
+      "not_a_path",
+      "ORGANIZER_KEYPAIR_PATH holds what looks like key material, not a file path. Put the keypair in a file outside git and set the variable to that file's path.",
+    );
+  }
+
   let text: string;
   try {
     text = readFileSync(path, "utf8");
@@ -94,7 +105,7 @@ export function loadOrganizerKey(path: string | undefined): OrganizerKey {
     const reason = (err as NodeJS.ErrnoException).code ?? "unknown error";
     throw new OrganizerKeyError(
       "unreadable",
-      `organizer keypair file ${path} cannot be read (${reason}).`,
+      `The file ORGANIZER_KEYPAIR_PATH names cannot be read (${reason}).`,
     );
   }
 
@@ -102,7 +113,7 @@ export function loadOrganizerKey(path: string | undefined): OrganizerKey {
   if (bytes === null) {
     throw new OrganizerKeyError(
       "malformed",
-      `organizer keypair file ${path} is not a Solana keypair: expected a JSON array of 64 integers from 0 to 255.`,
+      "The file ORGANIZER_KEYPAIR_PATH names is not a Solana keypair: expected a JSON array of 64 integers from 0 to 255.",
     );
   }
 
@@ -117,7 +128,7 @@ export function loadOrganizerKey(path: string | undefined): OrganizerKey {
   if (derived.length !== 32 || !timingSafeEqual(derived, stated)) {
     throw new OrganizerKeyError(
       "mismatch",
-      `organizer keypair file ${path} is inconsistent: its public key does not match its secret key.`,
+      "The file ORGANIZER_KEYPAIR_PATH names is inconsistent: its public key does not match its secret key.",
     );
   }
 
