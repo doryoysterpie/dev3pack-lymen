@@ -20,6 +20,13 @@
       "owed": {
         "effects": [
           {
+            "kind": "priority-fee",
+            "instruction": 0,
+            "microLamportsPerUnit": "50000",
+            "unitLimit": null,
+            "lamports": "70000"
+          },
+          {
             "kind": "sol-out",
             "instruction": 2,
             "to": {
@@ -44,10 +51,6 @@
           }
         ],
         "others": [
-          {
-            "instruction": 0,
-            "kind": "compute-budget"
-          },
           {
             "instruction": 1,
             "kind": "memo"
@@ -74,6 +77,13 @@
       "owed": {
         "effects": [
           {
+            "kind": "priority-fee",
+            "instruction": 0,
+            "microLamportsPerUnit": "50000",
+            "unitLimit": null,
+            "lamports": "70000"
+          },
+          {
             "kind": "sol-out",
             "instruction": 2,
             "to": {
@@ -98,10 +108,6 @@
           }
         ],
         "others": [
-          {
-            "instruction": 0,
-            "kind": "compute-budget"
-          },
           {
             "instruction": 1,
             "kind": "memo"
@@ -123,6 +129,13 @@
       "owed": {
         "effects": [
           {
+            "kind": "priority-fee",
+            "instruction": 0,
+            "microLamportsPerUnit": "50000",
+            "unitLimit": null,
+            "lamports": "70000"
+          },
+          {
             "kind": "sol-out",
             "instruction": 2,
             "to": {
@@ -149,10 +162,6 @@
           }
         ],
         "others": [
-          {
-            "instruction": 0,
-            "kind": "compute-budget"
-          },
           {
             "instruction": 1,
             "kind": "memo"

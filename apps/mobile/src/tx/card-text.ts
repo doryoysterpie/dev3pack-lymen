@@ -113,6 +113,19 @@ function effectRow(effect: Effect): CardRow {
         label: "Closes a token account",
         value: `Closes ${where(effect.account)} and sends its SOL to ${where(effect.destination)}.`,
       };
+    case "tokens-minted":
+      return {
+        label: "Mints tokens",
+        value: `Your wallet's mint authority mints ${tokenAmount(effect.amount, effect.decimals)} of mint ${where(effect.mint)} to token account ${where(effect.destination)}.`,
+      };
+    case "priority-fee":
+      return {
+        label: "Pays a priority fee",
+        value:
+          effect.unitLimit === null
+            ? `Your wallet pays a priority fee of up to ${sol(effect.lamports)}: ${effect.microLamportsPerUnit} micro-lamports per compute unit, for the runtime's default number of units, at most 1400000.`
+            : `Your wallet pays a priority fee of ${sol(effect.lamports)}: ${effect.microLamportsPerUnit} micro-lamports per compute unit for ${effect.unitLimit} units.`,
+      };
     case "tokens-burned":
       return {
         label: "Burns tokens",

@@ -43,12 +43,12 @@ describe("E-09 done test: fixture transactions yield the owed summary", () => {
     });
   }
 
-  it("the drainer shows balance out and a delegate approved", () => {
+  it("the drainer shows its priority fee, balance out and a delegate approved", () => {
     const c = caseNamed("drainer: SOL balance out");
     const summary = summarizeTransaction(parsed(c.transaction), new Map());
     assert.deepEqual(
       summary.effects.map((effect) => effect.kind),
-      ["sol-out", "delegate-approved"],
+      ["priority-fee", "sol-out", "delegate-approved"],
     );
     assert.equal(summary.undecoded.length, 0);
   });

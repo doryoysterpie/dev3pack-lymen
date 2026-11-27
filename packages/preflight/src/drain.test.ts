@@ -121,7 +121,7 @@ describe("preflightTransaction, the server entry point", () => {
     assert.equal(result.summary.summary.signers.feePayer, "user");
     assert.deepEqual(
       result.summary.summary.effects.map((effect) => effect.kind),
-      ["sol-out", "delegate-approved"],
+      ["priority-fee", "sol-out", "delegate-approved"],
     );
   });
 
@@ -133,7 +133,9 @@ describe("preflightTransaction, the server entry point", () => {
     // fields and turns typed arrays into objects, so equality proves plainness.
     assert.deepEqual(JSON.parse(JSON.stringify(summary)), summary);
     assert.ok(summary.kind === "ready");
-    const out = summary.summary.effects[0];
+    const [fee, out] = summary.summary.effects;
+    assert.ok(fee.kind === "priority-fee");
+    assert.equal(fee.lamports, "70000");
     assert.ok(out.kind === "sol-out");
     assert.equal(out.lamports, "4990000000");
   });

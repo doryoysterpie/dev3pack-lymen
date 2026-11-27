@@ -55,8 +55,13 @@ describe("E-09 done test: what the transaction card shows", () => {
       card.status,
       "limen flags this transaction: it would hand control of your tokens or accounts to another address.",
     );
-    assert.deepEqual(card.rows.slice(0, 3), [
+    assert.deepEqual(card.rows.slice(0, 4), [
       { label: "Requested from", value: "pay.example" },
+      {
+        label: "Pays a priority fee",
+        value:
+          "Your wallet pays a priority fee of up to 0.00007 SOL: 50000 micro-lamports per compute unit, for the runtime's default number of units, at most 1400000.",
+      },
       {
         label: "Sends SOL",
         value: `4.99 SOL from your wallet to ${attacker}.`,
@@ -310,6 +315,65 @@ describe("transaction card text", () => {
     const card = transactionCardText(LINK, null, { kind: "fee-payer-not-set" });
     assert.equal(card.title, "Stopped: no fee payer");
     assert.equal(card.tone, "flagged");
+  });
+
+  it("m6: shows a set priority fee in SOL", async () => {
+    const result = await preflight(
+      offline,
+      transactionOf("drainer: SOL balance out"),
+      fixture.user,
+    );
+    assert.ok(result.kind === "ready");
+    const card = transactionCardText(LINK, null, {
+      ...result,
+      summary: {
+        ...result.summary,
+        effects: [
+          {
+            kind: "priority-fee" as const,
+            instruction: 1,
+            microLamportsPerUnit: "3500000000",
+            unitLimit: 1_400_000,
+            lamports: "4900000000",
+          },
+        ],
+      },
+    });
+    assert.deepEqual(card.rows[1], {
+      label: "Pays a priority fee",
+      value:
+        "Your wallet pays a priority fee of 4.9 SOL: 3500000000 micro-lamports per compute unit for 1400000 units.",
+    });
+  });
+
+  it("m7: shows tokens minted with the wallet's mint authority", async () => {
+    const result = await preflight(
+      offline,
+      transactionOf("drainer: SOL balance out"),
+      fixture.user,
+    );
+    assert.ok(result.kind === "ready");
+    const card = transactionCardText(LINK, null, {
+      ...result,
+      summary: {
+        ...result.summary,
+        effects: [
+          {
+            kind: "tokens-minted" as const,
+            instruction: 0,
+            program: "token" as const,
+            mint: { address: fixture.keys.mint },
+            destination: { address: attacker },
+            amount: "1000000000000000",
+            decimals: null,
+          },
+        ],
+      },
+    });
+    assert.deepEqual(card.rows[1], {
+      label: "Mints tokens",
+      value: `Your wallet's mint authority mints 1000000000000000 base units of mint ${fixture.keys.mint} to token account ${attacker}.`,
+    });
   });
 
   it("stops with its own card when the endpoint is not devnet", () => {

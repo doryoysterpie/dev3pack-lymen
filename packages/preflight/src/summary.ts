@@ -21,6 +21,11 @@ import {
   type TokenProgram,
   type UndecodedReason,
 } from "./decode.ts";
+import {
+  cappedUnitLimit,
+  MAX_COMPUTE_UNIT_LIMIT,
+  priorityFeeLamports,
+} from "./fee.ts";
 import { withMarker } from "./marker.ts";
 import type { ParsedTransaction } from "./wire.ts";
 
@@ -97,6 +102,30 @@ export type Effect =
       readonly mint: Place;
       readonly amount: string;
       readonly decimals: number | null;
+    }
+  | {
+      /** New tokens minted with the wallet's mint authority. */
+      readonly kind: "tokens-minted";
+      readonly instruction: number;
+      readonly program: TokenProgram;
+      readonly mint: Place;
+      readonly destination: Place;
+      readonly amount: string;
+      readonly decimals: number | null;
+    }
+  | {
+      /** The fee payer's priority fee (fee.ts). */
+      readonly kind: "priority-fee";
+      /** The SetComputeUnitPrice instruction. */
+      readonly instruction: number;
+      readonly microLamportsPerUnit: string;
+      /**
+       * The SetComputeUnitLimit value after the runtime's cap, or null when
+       * the transaction sets no limit and the runtime's default applies.
+       */
+      readonly unitLimit: number | null;
+      /** The fee; with no limit set, the most it can be. */
+      readonly lamports: string;
     };
 
 export interface Undecoded {
@@ -275,6 +304,20 @@ function effectOf(
             decimals: decoded.decimals,
           }
         : null;
+    case "token-mint-to":
+      // Minting moves nothing out of the wallet's accounts, but it spends
+      // the wallet's authority over the mint.
+      return authorizedByUser(decoded.authorizers, user)
+        ? {
+            kind: "tokens-minted",
+            instruction,
+            program: decoded.program,
+            mint: place(decoded.mint),
+            destination: place(decoded.destination),
+            amount: decoded.amount,
+            decimals: decoded.decimals,
+          }
+        : null;
     case "advance-nonce":
     case "token-other":
     case "compute-budget":
@@ -282,6 +325,38 @@ function effectOf(
     case "undecoded":
       return null;
   }
+}
+
+/**
+ * The priority fee, from the one SetComputeUnitPrice and at most one
+ * SetComputeUnitLimit. With two of either the runtime fails the transaction
+ * (DuplicateInstruction, fee.ts), and the summary gives no fee; it gives none
+ * either when the fee is zero.
+ */
+function priorityFee(decoded: readonly Decoded[]): Effect | null {
+  const budget = (name: string) =>
+    decoded.flatMap((entry, instruction) =>
+      entry.kind === "compute-budget" && entry.name === name
+        ? [{ instruction, value: entry.value }]
+        : [],
+    );
+  const prices = budget("SetComputeUnitPrice");
+  const limits = budget("SetComputeUnitLimit");
+  if (prices.length !== 1 || limits.length > 1) return null;
+  const unitLimit =
+    limits.length === 1 ? cappedUnitLimit(Number(limits[0].value)) : null;
+  const lamports = priorityFeeLamports(
+    prices[0].value,
+    unitLimit ?? MAX_COMPUTE_UNIT_LIMIT,
+  );
+  if (lamports === "0") return null;
+  return {
+    kind: "priority-fee",
+    instruction: prices[0].instruction,
+    microLamportsPerUnit: prices[0].value,
+    unitLimit,
+    lamports,
+  };
 }
 
 function isZero(signature: Uint8Array): boolean {
@@ -304,8 +379,15 @@ export function summarizeTransaction(
   const effects: Effect[] = [];
   const others: TransactionSummary["others"][number][] = [];
   const undecoded: Undecoded[] = [];
-  message.instructions.forEach((compiled, instruction) => {
-    const decoded = decodeInstruction(compiled, accounts);
+  const decodedAll = message.instructions.map((compiled) =>
+    decodeInstruction(compiled, accounts),
+  );
+  const fee = priorityFee(decodedAll);
+  decodedAll.forEach((decoded, instruction) => {
+    if (fee !== null && fee.instruction === instruction) {
+      effects.push(fee);
+      return;
+    }
     if (decoded.kind === "undecoded") {
       undecoded.push({
         instruction,

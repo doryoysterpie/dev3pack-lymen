@@ -109,7 +109,18 @@ const drainerInstructions = () => [
     TOKEN_PROGRAM_ID,
   ),
 ];
+// The priority fee: 50000 micro-lamports per compute unit with no limit set,
+// so at most 50000 * 1400000 / 1000000 = 70000 lamports (agave's cap of
+// 1400000 units).
+const drainerFee = {
+  kind: "priority-fee",
+  instruction: 0,
+  microLamportsPerUnit: "50000",
+  unitLimit: null,
+  lamports: "70000",
+};
 const drainerEffects = [
+  drainerFee,
   {
     kind: "sol-out",
     instruction: 2,
@@ -128,10 +139,7 @@ const drainerEffects = [
     decimals: null,
   },
 ];
-const drainerOthers = [
-  { instruction: 0, kind: "compute-budget" },
-  { instruction: 1, kind: "memo" },
-];
+const drainerOthers = [{ instruction: 1, kind: "memo" }];
 
 const table = new AddressLookupTableAccount({
   key: lookupTable,
@@ -177,12 +185,13 @@ const cases = [
     tables: {},
     owed: {
       effects: [
+        drainerFee,
         {
-          ...drainerEffects[0],
+          ...drainerEffects[1],
           to: { table: lookupTable.toBase58(), index: 1 },
         },
         {
-          ...drainerEffects[1],
+          ...drainerEffects[2],
           delegate: { table: lookupTable.toBase58(), index: 1 },
         },
       ],
