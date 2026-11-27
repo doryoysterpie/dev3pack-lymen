@@ -41,6 +41,7 @@ export type TransferProblem =
   | Extract<
       SolanaPayProblem,
       | "too-long"
+      | "query-invalid"
       | "recipient-invalid"
       | "duplicate-field"
       | "amount-invalid"
@@ -55,6 +56,7 @@ export type TransferCardResult =
 
 const TRANSFER_PROBLEMS: ReadonlySet<SolanaPayProblem> = new Set([
   "too-long",
+  "query-invalid",
   "recipient-invalid",
   "duplicate-field",
   "amount-invalid",

@@ -14,8 +14,8 @@ import { resultCard } from "./src/result-card.ts";
 import { CardView } from "./src/ui/CardView.tsx";
 
 // Devnet fixture lists, loaded once; a list entry that is not a public key
-// fails here, at start-up. The organizer public key created at E-06 goes into
-// "organizers" in src/pay/recipient-lists.json once it exists.
+// fails here, at start-up. "organizers" in src/pay/recipient-lists.json holds
+// the devnet organizer public key; a new organizer key replaces that entry.
 const RECIPIENT_LISTS = loadRecipientLists(recipientListsJson);
 
 interface Scan {

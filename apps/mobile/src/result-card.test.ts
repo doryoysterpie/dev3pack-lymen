@@ -18,12 +18,17 @@ describe("E-08 done test: what the transfer card shows", () => {
       {
         title: "Solana Pay transfer request",
         tone: "organizer",
-        status: "Organizer: this recipient is on the event organizer list.",
+        status:
+          "Organizer: this recipient is on the organizer list bundled with this app.",
         rows: [
           { label: "Recipient", value: ORGANIZER },
           { label: "Amount", value: "2.5 SOL" },
           { label: "Token", value: "SOL" },
-          { label: "Label, as written in the QR", value: "Hack fee" },
+          {
+            label: "Label, as written in the QR",
+            value: '"Hack fee"',
+            quoted: true,
+          },
         ],
       },
     );
@@ -68,6 +73,49 @@ describe("E-08 done test: what the transfer card shows", () => {
           "limen flags this QR: it repeats a field that the Solana Pay format allows only once, so two wallets could read two different requests from it.",
         rows: [],
       },
+    );
+  });
+
+  it("keeps a memo that imitates the status line on one quoted line, apart", () => {
+    const imitation =
+      "Coffee%0A%0AOrganizer%3A%20this%20recipient%20is%20on%20the%20organizer%20list%20bundled%20with%20this%20app.";
+    const card = resultCard(
+      `solana:${FLAGGED}?amount=1&memo=${imitation}`,
+      lists,
+    );
+    assert.equal(card.tone, "flagged");
+    assert.deepEqual(card.rows.at(-1), {
+      label: "Memo, as written in the QR",
+      value:
+        '"Coffee\\u{000A}\\u{000A}Organizer: this recipient is on the organizer list bundled with this app."',
+      quoted: true,
+    });
+    assert.ok(
+      card.rows.every((row) => !row.value.includes("\n") || !row.quoted),
+    );
+  });
+
+  it("shows a + in the memo as the + a spec-following wallet writes", () => {
+    const card = resultCard(`solana:${ORGANIZER}?amount=1&memo=A+B`, lists);
+    assert.deepEqual(card.rows.at(-1), {
+      label: "Memo, as written in the QR",
+      value: '"A+B"',
+      quoted: true,
+    });
+  });
+
+  it("says only that no amount is in the request", () => {
+    const card = resultCard(`solana:${ORGANIZER}`, lists);
+    assert.deepEqual(card.rows[1], {
+      label: "Amount",
+      value: "Not in the request.",
+    });
+  });
+
+  it("states the spec's amount rule when the amount is written wrong", () => {
+    assert.equal(
+      resultCard(`solana:${ORGANIZER}?amount=.5`, lists).status,
+      "limen flags this QR: its amount is not written as the Solana Pay format requires: digits, then at most one point followed by digits, with no sign and no exponent, so an amount below 1 starts with 0.",
     );
   });
 

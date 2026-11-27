@@ -19,7 +19,10 @@ export function CardView({ card }: { readonly card: CardText }) {
       {card.rows.map((row) => (
         <View key={row.label} style={styles.row}>
           <Text style={styles.label}>{row.label}</Text>
-          <Text style={styles.value} selectable>
+          <Text
+            style={row.quoted === true ? styles.quoted : styles.value}
+            selectable
+          >
             {row.value}
           </Text>
         </View>
@@ -35,4 +38,17 @@ const styles = StyleSheet.create({
   row: { gap: 2 },
   label: { fontSize: 13, fontWeight: "600" },
   value: { fontSize: 15, lineHeight: 21 },
+  // Text from the QR or the requester: boxed, monospaced and grey, so it does
+  // not read like limen's status line.
+  quoted: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: "monospace",
+    color: "#455a64",
+    backgroundColor: "#eceff1",
+    borderLeftWidth: 3,
+    borderLeftColor: "#90a4ae",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
 });

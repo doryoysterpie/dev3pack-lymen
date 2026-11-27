@@ -1,5 +1,8 @@
 {
-  "about": "Devnet fixture lists bundled with the app (D-03, rule 7: devnet addresses only). organizers: the event organizer public keys; empty until Lane A creates the organizer key at E-06. flagged: addresses this app marks as flagged. A flagged card means only that the address is on this list; it is not a feed of real scam reports.",
-  "organizers": [],
-  "flagged": []
+  "about": "Devnet fixture lists bundled with the app (D-03, rule 7: devnet addresses only). organizers: the event organizer public key Lane A made for devnet. flagged: fixture addresses the demo uses: the first is the flagged address in fixtures/pay/e08-transfer.json, the second the attacker in the E-09 fixtures (fixtures/tx, added by E-09), the SHA-256 hash of a fixed label, not made from a keypair. A flagged card means only that the address is on this list; it is not a feed of real scam reports.",
+  "organizers": ["5zksGoSe5EEtAMwYMC4eUP8rJUXXdqWyNJudc8UtVrkV"],
+  "flagged": [
+    "9tvU9qFD4Qiq3DFut32Bq1TgU3nEkrUqZdVy7ELe1uTD",
+    "AadqUhBH5BtWcKCxnz9gfrWFCDBRXcdHQwzEsTqK49cK"
+  ]
 }
