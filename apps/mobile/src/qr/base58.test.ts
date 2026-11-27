@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { decodeBase58, decodePublicKey } from "./base58.ts";
+import { decodeBase58, decodePublicKey, encodeBase58 } from "./base58.ts";
 
 const hex = (bytes: Uint8Array | null): string | null =>
   bytes === null ? null : Buffer.from(bytes).toString("hex");
@@ -37,6 +37,15 @@ describe("decodeBase58", () => {
   for (const [text, expected] of OWED) {
     it(JSON.stringify(text), () => {
       assert.equal(hex(decodeBase58(text)), expected);
+    });
+  }
+});
+
+describe("encodeBase58", () => {
+  for (const [text, bytes] of OWED) {
+    if (bytes === null) continue;
+    it(`encodes ${JSON.stringify(bytes)}`, () => {
+      assert.equal(encodeBase58(Buffer.from(bytes, "hex")), text);
     });
   }
 });

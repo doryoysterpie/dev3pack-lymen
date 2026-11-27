@@ -10,8 +10,10 @@ import { Button, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { CardText } from "./src/pay/card-text.ts";
 import { loadRecipientLists } from "./src/pay/recipient-lists.ts";
 import recipientListsJson from "./src/pay/recipient-lists.json";
+import { classifyQr } from "./src/qr/classify.ts";
 import { resultCard } from "./src/result-card.ts";
 import { CardView } from "./src/ui/CardView.tsx";
+import { TransactionRequestView } from "./src/ui/TransactionRequestView.tsx";
 
 // Loaded once. A list entry that is not a public key fails here, at start-up.
 const RECIPIENT_LISTS = loadRecipientLists(recipientListsJson);
@@ -19,6 +21,18 @@ const RECIPIENT_LISTS = loadRecipientLists(recipientListsJson);
 interface Scan {
   readonly text: string;
   readonly card: CardText;
+  /** Set for a Solana Pay transaction request: the https link to ask. */
+  readonly link: string | null;
+}
+
+function scanOf(text: string): Scan {
+  const qr = classifyQr(text);
+  return {
+    text,
+    card: resultCard(text, RECIPIENT_LISTS),
+    link:
+      qr.type === "solana-pay" && qr.request === "transaction" ? qr.link : null,
+  };
 }
 
 export default function App() {
@@ -28,10 +42,7 @@ export default function App() {
   // The scanner can report the same QR several times before the screen
   // changes. Only the first report is kept.
   const onBarcodeScanned = ({ data }: BarcodeScanningResult) => {
-    setScan(
-      (current) =>
-        current ?? { text: data, card: resultCard(data, RECIPIENT_LISTS) },
-    );
+    setScan((current) => current ?? scanOf(data));
   };
 
   if (permission === null) {
@@ -61,7 +72,11 @@ export default function App() {
   if (scan !== null) {
     return (
       <ScrollView contentContainerStyle={styles.card}>
-        <CardView card={scan.card} />
+        {scan.link === null ? (
+          <CardView card={scan.card} />
+        ) : (
+          <TransactionRequestView link={scan.link} intro={scan.card} />
+        )}
         <Text style={styles.label}>Scanned text</Text>
         <Text style={styles.raw} selectable>
           {scan.text}
