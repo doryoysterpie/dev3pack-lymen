@@ -110,8 +110,8 @@ describe("classifyQr edge cases", () => {
     [`solana:${R}?amount=1.`, malformed("amount-invalid")],
     [`solana:${R}?amount=`, malformed("amount-invalid")],
     [`solana:${R}?amount=%201`, malformed("amount-invalid")],
-    // At most 9 decimal places for SOL; an SPL amount is left to the card,
-    // which knows the mint's decimals.
+    // At most 9 decimal places for SOL. An SPL amount's places are not checked
+    // here: the mint's decimals are not in the URL.
     [`solana:${R}?amount=0.000000001`, transfer(R, { amount: "0.000000001" })],
     [`solana:${R}?amount=0.0000000001`, malformed("amount-too-precise")],
     [

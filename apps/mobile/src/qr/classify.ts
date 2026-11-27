@@ -134,8 +134,8 @@ function decimalPlaces(amount: string): number {
  * failure is reported: a field that is not valid percent-encoding, a repeated
  * single-value field, the amount, the
  * spl-token, then each reference. A SOL amount with more than 9 decimal
- * places is refused here; an SPL token amount is checked against its mint's
- * decimals by the transfer card, which knows them.
+ * places is refused here. An SPL token amount's decimal places are not checked
+ * here, because the mint's decimals are not in the URL.
  */
 function readTransfer(recipient: string, search: string): QrClass {
   const params = readQuery(search);
