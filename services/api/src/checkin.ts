@@ -154,21 +154,23 @@ const refuse = (
   body: { error, ...extra },
 });
 
-/** Runs one check-in to its answer. Never throws for a client fault; a minting failure is a 502. */
+/**
+ * Runs one check-in at Unix time `nowMs`, in milliseconds, to its answer. Never throws for a
+ * client fault; a minting failure is a 502.
+ */
 export async function checkIn(
   deps: CheckinDeps,
   body: unknown,
-  now: number,
+  nowMs: number,
 ): Promise<CheckinOutcome> {
+  // The QR window is checked to the millisecond; database times are whole seconds.
+  const now = Math.floor(nowMs / 1000);
   const parsed = parseRequest(body);
   if (!parsed.ok)
     return refuse(400, "invalid_request", { field: parsed.field });
   const req = parsed.req;
 
-  const qr = verifyStationQr(req.qr, {
-    allowlist: deps.allowlist,
-    nowMs: now * 1000,
-  });
+  const qr = verifyStationQr(req.qr, { allowlist: deps.allowlist, nowMs });
   if (!qr.ok) {
     return qr.reason === "expired"
       ? refuse(400, "station_qr_expired")

@@ -183,6 +183,10 @@ function request(
   };
 }
 
+/** checkIn at Unix time `seconds`, which may hold a fraction; checkIn itself takes milliseconds. */
+const checkInAt = (d: CheckinDeps, body: unknown, seconds: number) =>
+  checkIn(d, body, Math.round(seconds * 1000));
+
 const checkinCount = (db: DatabaseSync) =>
   (db.prepare("SELECT count(*) AS n FROM checkins").get() as { n: number }).n;
 
@@ -210,7 +214,7 @@ test("the wallet signs this exact check-in message", () => {
 
 test("a first check-in binds the registration, mints once and records the pass", async () => {
   const { db, deps, alice, minting } = setup();
-  const outcome = await checkIn(deps, request(alice, "LMN-0001"), T + 5);
+  const outcome = await checkInAt(deps, request(alice, "LMN-0001"), T + 5);
   assert.deepEqual(outcome, {
     status: 201,
     body: {
@@ -248,12 +252,12 @@ test("a first check-in binds the registration, mints once and records the pass",
 test("E-05 done test: a second check-in in the same session is refused as already_checked_in", async () => {
   const { db, deps, alice, minting } = setup();
   assert.equal(
-    (await checkIn(deps, request(alice, "LMN-0001"), T + 5)).status,
+    (await checkInAt(deps, request(alice, "LMN-0001"), T + 5)).status,
     201,
   );
   // Again with the registration ID, and again relying on the binding alone, on fresh QRs.
   for (const registrationId of ["LMN-0001", null]) {
-    const again = await checkIn(
+    const again = await checkInAt(
       deps,
       request(alice, registrationId, { issuedAt: T + 40 }),
       T + 45,
@@ -266,7 +270,7 @@ test("E-05 done test: a second check-in in the same session is refused as alread
   assert.equal(minting.calls.length, 1, "no second pass is minted");
   assert.equal(checkinCount(db), 1);
   // The next session is a new check-in.
-  const nextSession = await checkIn(
+  const nextSession = await checkInAt(
     deps,
     request(alice, null, { issuedAt: T + 3700, session: "day-3" }),
     T + 3705,
@@ -277,7 +281,7 @@ test("E-05 done test: a second check-in in the same session is refused as alread
 test("E-05 done test: a check-in on a QR older than 60 s is refused as station_qr_expired", async () => {
   const { db, deps, alice, minting } = setup();
   const req = request(alice, "LMN-0001", { issuedAt: T });
-  assert.deepEqual(await checkIn(deps, req, T + 61), {
+  assert.deepEqual(await checkInAt(deps, req, T + 61), {
     status: 400,
     body: { error: "station_qr_expired" },
   });
@@ -285,13 +289,18 @@ test("E-05 done test: a check-in on a QR older than 60 s is refused as station_q
   assert.equal(checkinCount(db), 0);
   // Nothing was bound either: the window check comes before the registration.
   assert.equal(deps.registrations.bindingOf(alice.address), null);
+  // Measured to the millisecond: half a second past the window is refused too.
+  assert.deepEqual(await checkInAt(deps, req, T + 60.5), {
+    status: 400,
+    body: { error: "station_qr_expired" },
+  });
   // The same request inside the window succeeds, so the window is what refused it.
-  assert.equal((await checkIn(deps, req, T + 60)).status, 201);
+  assert.equal((await checkInAt(deps, req, T + 60)).status, 201);
 });
 
 test("E-05 done test: a fresh wallet with no registration binding is refused as no_registration_binding", async () => {
   const { db, deps, fresh, minting } = setup();
-  assert.deepEqual(await checkIn(deps, request(fresh, null), T + 5), {
+  assert.deepEqual(await checkInAt(deps, request(fresh, null), T + 5), {
     status: 403,
     body: { error: "no_registration_binding" },
   });
@@ -302,14 +311,14 @@ test("E-05 done test: a fresh wallet with no registration binding is refused as 
 test("a registration already bound to another wallet is refused, and nothing is minted", async () => {
   const { deps, alice, bob, minting } = setup();
   assert.equal(
-    (await checkIn(deps, request(alice, "LMN-0001"), T + 5)).status,
+    (await checkInAt(deps, request(alice, "LMN-0001"), T + 5)).status,
     201,
   );
-  assert.deepEqual(await checkIn(deps, request(bob, "LMN-0001"), T + 6), {
+  assert.deepEqual(await checkInAt(deps, request(bob, "LMN-0001"), T + 6), {
     status: 403,
     body: { error: "registration_bound_to_other_wallet" },
   });
-  assert.deepEqual(await checkIn(deps, request(bob, "LMN-9999"), T + 7), {
+  assert.deepEqual(await checkInAt(deps, request(bob, "LMN-9999"), T + 7), {
     status: 403,
     body: { error: "unknown_registration" },
   });
@@ -320,7 +329,7 @@ test("a signature that is not the wallet's over this exact message is refused", 
   const { deps, alice, bob, minting } = setup();
   // Signed by another wallet's key.
   const forged = { ...request(bob, "LMN-0001"), wallet: alice.address };
-  assert.deepEqual(await checkIn(deps, forged, T + 5), {
+  assert.deepEqual(await checkInAt(deps, forged, T + 5), {
     status: 401,
     body: { error: "bad_wallet_signature" },
   });
@@ -329,7 +338,7 @@ test("a signature that is not the wallet's over this exact message is refused", 
     ...request(alice, "LMN-0001"),
     registration_id: "LMN-0002",
   };
-  assert.deepEqual(await checkIn(deps, swapped, T + 5), {
+  assert.deepEqual(await checkInAt(deps, swapped, T + 5), {
     status: 401,
     body: { error: "bad_wallet_signature" },
   });
@@ -339,7 +348,7 @@ test("a signature that is not the wallet's over this exact message is refused", 
 test("a QR from a key off the allowlist, or a closed session, is refused before any binding", async () => {
   const { deps, alice } = setup();
   assert.deepEqual(
-    await checkIn(
+    await checkInAt(
       deps,
       request(alice, "LMN-0001", { signer: STRANGER }),
       T + 5,
@@ -351,7 +360,7 @@ test("a QR from a key off the allowlist, or a closed session, is refused before 
   );
   // Issued 20 s before day-2 ends, used 10 s after: the QR is still in its window, the session is not.
   const late = request(alice, "LMN-0001", { issuedAt: T + 3580 });
-  assert.deepEqual(await checkIn(deps, late, T + 3610), {
+  assert.deepEqual(await checkInAt(deps, late, T + 3610), {
     status: 409,
     body: { error: "session_closed" },
   });
@@ -361,13 +370,13 @@ test("a QR from a key off the allowlist, or a closed session, is refused before 
 test("a failed mint undoes the check-in, so the participant can try again", async () => {
   const { db, deps, alice, minting } = setup();
   minting.failNextMint();
-  assert.deepEqual(await checkIn(deps, request(alice, "LMN-0001"), T + 5), {
+  assert.deepEqual(await checkInAt(deps, request(alice, "LMN-0001"), T + 5), {
     status: 502,
     body: { error: "mint_failed" },
   });
   assert.equal(checkinCount(db), 0);
   // The binding stays, so the retry needs no registration ID.
-  const retry = await checkIn(
+  const retry = await checkInAt(
     deps,
     request(alice, null, { issuedAt: T + 10 }),
     T + 12,
@@ -392,7 +401,7 @@ test("a malformed request is refused by field", async () => {
   ];
   for (const [body, field] of cases) {
     assert.deepEqual(
-      await checkIn(deps, body, T + 5),
+      await checkInAt(deps, body, T + 5),
       { status: 400, body: { error: "invalid_request", field } },
       field,
     );
@@ -454,5 +463,34 @@ test("POST /checkins runs the check-in end to end, and answers 503 until binding
   } finally {
     for (const server of [wired, unwired])
       await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("POST /checkins checks the QR window against the millisecond clock, not the whole second", async () => {
+  const { db, deps, alice } = setup();
+  // The whole-second clock reads T + 60, still inside the window; the real time is 500 ms later.
+  const server = createApiServer({
+    db,
+    version: API_VERSION,
+    stationSigner: ORGANIZER,
+    stationDisplayToken: "test-display-token-0123456789abcdef",
+    now: () => T + 60,
+    nowMs: () => (T + 60) * 1000 + 500,
+    checkin: { registrations: deps.registrations, minter: deps.minter },
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/checkins`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request(alice, "LMN-0001", { issuedAt: T })),
+    });
+    assert.deepEqual(
+      [res.status, await res.json()],
+      [400, { error: "station_qr_expired" }],
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

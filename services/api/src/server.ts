@@ -121,7 +121,7 @@ async function postCheckin(
       minter: ctx.checkin.minter,
     },
     body,
-    ctx.now(),
+    ctx.nowMs?.() ?? ctx.now() * 1000,
   );
   sendJson(res, outcome.status, outcome.body);
 }
