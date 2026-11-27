@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en-CA">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>limen station</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #101214;
+        --fg: #f2f2f2;
+        --muted: #a8adb3;
+        --alert: #ffb4a8;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          20px/1.4 system-ui,
+          sans-serif;
+        text-align: center;
+      }
+      main {
+        padding: 16px;
+      }
+      canvas {
+        display: block;
+        margin: 0 auto 16px;
+        max-width: 100%;
+        height: auto;
+        background: #fff;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      #caption {
+        color: var(--muted);
+      }
+      #problem {
+        color: var(--alert);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Scan with limen to check in</h1>
+      <canvas id="qr" hidden></canvas>
+      <p id="caption"></p>
+      <p id="problem" role="alert" hidden></p>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
