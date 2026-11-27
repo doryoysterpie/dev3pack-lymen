@@ -138,6 +138,16 @@ describe("E-08 done test: what the transfer card shows", () => {
       status,
       rows: [],
     });
+    // The PM's final check (N-1): no recipient and no link, so neither kind.
+    const start = "solana:?amount=1&label=";
+    const neither = start + "a".repeat(2049 - start.length);
+    assert.equal(neither.length, 2049);
+    assert.deepEqual(resultCard(neither, lists), {
+      title: "Malformed Solana Pay request",
+      tone: "malformed",
+      status,
+      rows: [],
+    });
   });
 
   it("leaves other QR types to the E-04 summary", () => {

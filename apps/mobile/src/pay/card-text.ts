@@ -147,12 +147,17 @@ export function transferCardText(card: TransferCard): CardText {
 }
 
 /**
- * A transaction request link over the length limit. The classifier refuses it
- * before it tells the kinds apart; requestKind (transfer.ts) names the kind.
+ * A solana: URL over the length limit that is not a transfer request: a
+ * transaction request link, or, with no recipient and no link, neither kind.
+ * The classifier refuses it before it tells the kinds apart; requestKind
+ * (transfer.ts) names the kind.
  */
-export function longTransactionRequestText(): CardText {
+export function longRequestText(kind: "transaction" | null): CardText {
   return {
-    title: "Malformed Solana Pay transaction request",
+    title:
+      kind === "transaction"
+        ? "Malformed Solana Pay transaction request"
+        : "Malformed Solana Pay request",
     tone: "malformed",
     status: `limen flags this QR: ${PROBLEM["too-long"]}`,
     rows: [],

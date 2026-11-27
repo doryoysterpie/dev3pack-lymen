@@ -2,7 +2,7 @@
 // is tested in Node.
 
 import {
-  longTransactionRequestText,
+  longRequestText,
   transferCardText,
   transferProblemText,
   type CardText,
@@ -25,10 +25,11 @@ export function resultCard(text: string, lists: RecipientLists): CardText {
   if (
     qr.type === "other" &&
     qr.reason === "malformed-solana-pay" &&
-    qr.problem === "too-long" &&
-    requestKind(text) === "transaction"
+    qr.problem === "too-long"
   ) {
-    return longTransactionRequestText();
+    // transferCard already took a long transfer request.
+    const kind = requestKind(text);
+    if (kind !== "transfer") return longRequestText(kind);
   }
   const summary = describeQr(qr);
   const malformed = qr.type === "other" && qr.reason === "malformed-solana-pay";

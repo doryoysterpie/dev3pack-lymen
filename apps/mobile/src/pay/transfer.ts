@@ -76,18 +76,21 @@ function decimalPlaces(amount: string): number {
 
 /**
  * Which kind of Solana Pay request a solana: URL is, by its pathname alone, by
- * the rule the classifier (classify.ts, classifySolanaPay) and the reference
+ * the rules the classifier (classify.ts, classifySolanaPay) and the reference
  * parseURL apply: a pathname that holds ":" or "%" is a transaction request
- * link, anything else a transfer request. The classifier refuses a URL over
- * 2048 characters before it tells the two apart, so the card asks here.
+ * link, any other non-empty pathname a transfer request. An empty pathname,
+ * with no recipient and no link, is neither, and so is text that is not a URL:
+ * both give null. The classifier refuses a URL over 2048 characters before it
+ * tells the kinds apart, so the card asks here.
  */
-export function requestKind(text: string): "transfer" | "transaction" {
+export function requestKind(text: string): "transfer" | "transaction" | null {
   let pathname: string;
   try {
     pathname = new URL(text).pathname;
   } catch {
-    return "transfer";
+    return null;
   }
+  if (pathname === "") return null;
   return /[:%]/.test(pathname) ? "transaction" : "transfer";
 }
 
@@ -104,8 +107,8 @@ export function transferCard(
 ): TransferCardResult {
   const qr = classifyQr(text);
   if (qr.type === "other" && qr.reason === "malformed-solana-pay") {
-    // A long transaction request is not a transfer request.
-    if (qr.problem === "too-long" && requestKind(text) === "transaction") {
+    // A long request is a transfer request only when its pathname says so.
+    if (qr.problem === "too-long" && requestKind(text) !== "transfer") {
       return refuse("not-a-transfer-request");
     }
     return TRANSFER_PROBLEMS.has(qr.problem)
