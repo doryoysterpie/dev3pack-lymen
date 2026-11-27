@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "limen",
+    "slug": "limen",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "limen uses the camera to read QR codes and show what each one would do before you act on it.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ]
+    ]
+  }
+}
