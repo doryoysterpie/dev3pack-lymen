@@ -10,7 +10,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # A step that hangs fails the job after 15 minutes rather than holding the run open.
+    # GitHub cancels the job after 15 minutes, so a step that hangs does not hold the run open.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
