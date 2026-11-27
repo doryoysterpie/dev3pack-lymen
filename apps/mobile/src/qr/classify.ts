@@ -5,38 +5,71 @@
 // Solana Pay rules follow the Solana Pay specification and its reference
 // parseURL in solana-foundation/pay at commit 8e1b87c:
 // typescript/packages/solana-pay/spec/SPEC.md and
-// typescript/packages/solana-pay/core/src/parseURL.ts.
+// typescript/packages/solana-pay/core/src/parseURL.ts. This module is the one
+// place that parses a Solana Pay URL; the transfer card (E-08) reads the
+// fields it returns.
 
-import { URL } from "whatwg-url-minimum";
+import { URL, type URLSearchParams } from "whatwg-url-minimum";
 
 import { decodePublicKey } from "./base58.ts";
 
 /** Every station QR starts with this text. E-03 defines what follows it. */
 export const STATION_PREFIX = "limen:station:";
 
-export type OtherReason = "unrecognized" | "malformed-solana-pay";
+/** The reference parseURL refuses a URL string longer than this. */
+export const MAX_SOLANA_PAY_LENGTH = 2048;
+
+/** The spec: a SOL amount may carry at most 9 decimal places. */
+export const SOL_DECIMALS = 9;
+
+/** Why a solana: URL is malformed. */
+export type SolanaPayProblem =
+  | "too-long"
+  | "no-pathname"
+  | "link-invalid"
+  | "recipient-invalid"
+  | "duplicate-field"
+  | "amount-invalid"
+  | "amount-too-precise"
+  | "spl-token-invalid"
+  | "reference-invalid";
+
+export interface TransferRequest {
+  readonly type: "solana-pay";
+  readonly request: "transfer";
+  readonly recipient: string;
+  /** The amount exactly as written, or null when the wallet must ask. */
+  readonly amount: string | null;
+  readonly splToken: string | null;
+  readonly references: readonly string[];
+  readonly label: string | null;
+  readonly message: string | null;
+  readonly memo: string | null;
+}
 
 export type QrClass =
   | { readonly type: "station"; readonly text: string }
-  | {
-      readonly type: "solana-pay";
-      readonly request: "transfer";
-      readonly recipient: string;
-    }
+  | TransferRequest
   | {
       readonly type: "solana-pay";
       readonly request: "transaction";
       readonly link: string;
     }
   | { readonly type: "url"; readonly href: string }
-  | { readonly type: "other"; readonly reason: OtherReason };
+  | { readonly type: "other"; readonly reason: "unrecognized" }
+  | {
+      readonly type: "other";
+      readonly reason: "malformed-solana-pay";
+      readonly problem: SolanaPayProblem;
+    };
 
-const MALFORMED_SOLANA_PAY: QrClass = {
-  type: "other",
-  reason: "malformed-solana-pay",
-};
+export type OtherReason = Extract<QrClass, { type: "other" }>["reason"];
 
 const UNRECOGNIZED: QrClass = { type: "other", reason: "unrecognized" };
+
+function malformed(problem: SolanaPayProblem): QrClass {
+  return { type: "other", reason: "malformed-solana-pay", problem };
+}
 
 function parseUrl(text: string): URL | null {
   try {
@@ -46,6 +79,69 @@ function parseUrl(text: string): URL | null {
   }
 }
 
+// The spec allows each of these fields once. A second copy is refused, because
+// two wallets reading different copies would show different requests.
+const SINGLE_FIELDS = ["amount", "spl-token", "label", "message", "memo"];
+
+// The spec: a non-negative integer or decimal, with a leading 0 before the
+// point when below 1, and no scientific notation. Same pattern as the
+// reference parseURL.
+const AMOUNT = /^\d+(\.\d+)?$/;
+
+function decimalPlaces(amount: string): number {
+  const point = amount.indexOf(".");
+  return point === -1 ? 0 : amount.length - point - 1;
+}
+
+/**
+ * Reads a transfer request's query. Checks run in this order and the first
+ * failure is reported: a repeated single-value field, the amount, the
+ * spl-token, then each reference. A SOL amount with more than 9 decimal
+ * places is refused here; an SPL token amount is checked against its mint's
+ * decimals by the transfer card, which knows them.
+ */
+function readTransfer(recipient: string, params: URLSearchParams): QrClass {
+  for (const field of SINGLE_FIELDS) {
+    if (params.getAll(field).length > 1) return malformed("duplicate-field");
+  }
+
+  const amount = params.get("amount");
+  if (amount !== null && !AMOUNT.test(amount)) {
+    return malformed("amount-invalid");
+  }
+
+  const splToken = params.get("spl-token");
+  if (splToken !== null && decodePublicKey(splToken) === null) {
+    return malformed("spl-token-invalid");
+  }
+  if (
+    splToken === null &&
+    amount !== null &&
+    decimalPlaces(amount) > SOL_DECIMALS
+  ) {
+    return malformed("amount-too-precise");
+  }
+
+  // The spec: references are base58-encoded 32-byte arrays.
+  const references = params.getAll("reference");
+  if (references.some((reference) => decodePublicKey(reference) === null)) {
+    return malformed("reference-invalid");
+  }
+
+  return {
+    type: "solana-pay",
+    request: "transfer",
+    recipient,
+    amount,
+    splToken,
+    references,
+    // As in the reference parseURL, an empty value counts as absent.
+    label: params.get("label") || null,
+    message: params.get("message") || null,
+    memo: params.get("memo") || null,
+  };
+}
+
 /**
  * Tells a transfer request from a transaction request. The spec puts the
  * recipient public key or the HTTPS link in the pathname. As in the reference
@@ -53,7 +149,7 @@ function parseUrl(text: string): URL | null {
  */
 function classifySolanaPay(url: URL): QrClass {
   const pathname = url.pathname;
-  if (pathname === "") return MALFORMED_SOLANA_PAY;
+  if (pathname === "") return malformed("no-pathname");
 
   if (/[:%]/.test(pathname)) {
     // The spec: the wallet must URL-decode the link, and must reject it as
@@ -62,18 +158,18 @@ function classifySolanaPay(url: URL): QrClass {
     try {
       decoded = decodeURIComponent(pathname);
     } catch {
-      return MALFORMED_SOLANA_PAY;
+      return malformed("link-invalid");
     }
     const link = parseUrl(decoded);
     if (link === null || link.protocol !== "https:") {
-      return MALFORMED_SOLANA_PAY;
+      return malformed("link-invalid");
     }
     return { type: "solana-pay", request: "transaction", link: link.href };
   }
 
   // The spec: the recipient must be a base58-encoded public key.
-  if (decodePublicKey(pathname) === null) return MALFORMED_SOLANA_PAY;
-  return { type: "solana-pay", request: "transfer", recipient: pathname };
+  if (decodePublicKey(pathname) === null) return malformed("recipient-invalid");
+  return readTransfer(pathname, url.searchParams);
 }
 
 /**
@@ -87,7 +183,10 @@ export function classifyQr(text: string): QrClass {
   const url = parseUrl(text);
   if (url === null) return UNRECOGNIZED;
 
-  if (url.protocol === "solana:") return classifySolanaPay(url);
+  if (url.protocol === "solana:") {
+    if (text.length > MAX_SOLANA_PAY_LENGTH) return malformed("too-long");
+    return classifySolanaPay(url);
+  }
   if (url.protocol === "http:" || url.protocol === "https:") {
     return { type: "url", href: url.href };
   }

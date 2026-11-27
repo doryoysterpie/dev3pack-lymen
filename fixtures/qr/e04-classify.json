@@ -1,6 +1,6 @@
 {
   "unit": "E-04",
-  "about": "Ten QR texts and the class each one owes. The last two are malformed Solana Pay URLs and owe \"other\". The public keys here are 32-byte values generated at random for this fixture.",
+  "about": "Ten QR texts and the class each one owes, written from the Solana Pay specification. The last two are malformed Solana Pay URLs and owe \"other\" with the reason for it. The public keys here are 32-byte values generated at random for this fixture.",
   "cases": [
     {
       "name": "station check-in QR",
@@ -16,7 +16,13 @@
       "owed": {
         "type": "solana-pay",
         "request": "transfer",
-        "recipient": "9MJAtNQnuUcAKm6LXbobqTRXySgScVyUEAavmPUhnP3k"
+        "recipient": "9MJAtNQnuUcAKm6LXbobqTRXySgScVyUEAavmPUhnP3k",
+        "amount": "1",
+        "splToken": null,
+        "references": [],
+        "label": "Build Station",
+        "message": "Coffee",
+        "memo": "Order42"
       }
     },
     {
@@ -25,7 +31,13 @@
       "owed": {
         "type": "solana-pay",
         "request": "transfer",
-        "recipient": "9MJAtNQnuUcAKm6LXbobqTRXySgScVyUEAavmPUhnP3k"
+        "recipient": "9MJAtNQnuUcAKm6LXbobqTRXySgScVyUEAavmPUhnP3k",
+        "amount": "0.01",
+        "splToken": "9FDVRcwfqnN19PRjaikWMfGKz9vt5YFa8r8h9Juj3qpw",
+        "references": [],
+        "label": null,
+        "message": null,
+        "memo": null
       }
     },
     {
@@ -49,27 +61,44 @@
     {
       "name": "https link",
       "text": "https://example.org/schedule",
-      "owed": { "type": "url", "href": "https://example.org/schedule" }
+      "owed": {
+        "type": "url",
+        "href": "https://example.org/schedule"
+      }
     },
     {
       "name": "http link",
       "text": "http://example.net/menu?table=4",
-      "owed": { "type": "url", "href": "http://example.net/menu?table=4" }
+      "owed": {
+        "type": "url",
+        "href": "http://example.net/menu?table=4"
+      }
     },
     {
       "name": "plain text",
       "text": "Wi-Fi password is on the whiteboard",
-      "owed": { "type": "other", "reason": "unrecognized" }
+      "owed": {
+        "type": "other",
+        "reason": "unrecognized"
+      }
     },
     {
       "name": "malformed: recipient is not base58",
       "text": "solana:0OIl-not-a-public-key?amount=1",
-      "owed": { "type": "other", "reason": "malformed-solana-pay" }
+      "owed": {
+        "type": "other",
+        "reason": "malformed-solana-pay",
+        "problem": "recipient-invalid"
+      }
     },
     {
       "name": "malformed: transaction request link is http, not https",
       "text": "solana:http%3A%2F%2Fexample.com%2Fsolana-pay",
-      "owed": { "type": "other", "reason": "malformed-solana-pay" }
+      "owed": {
+        "type": "other",
+        "reason": "malformed-solana-pay",
+        "problem": "link-invalid"
+      }
     }
   ]
 }
