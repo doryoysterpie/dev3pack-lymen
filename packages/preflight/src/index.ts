@@ -76,3 +76,4 @@ export {
   type SimulationOutcome,
 } from "./preflight.ts";
 export { drainPattern, SWEEP_DIVISOR } from "./drain.ts";
+export { USER_MARKER, withMarker } from "./marker.ts";

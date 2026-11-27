@@ -2,9 +2,12 @@
 // signing may go ahead. The network is reached only through the Rpc given.
 //
 // Whose wallet: the summary is always written for the transaction's fee
-// payer, its first required signer, read from the bytes. A caller may name the
-// wallet it expects; a different one is refused, never summarized. So the app
-// and a server summarize the same bytes the same way.
+// payer, its first required signer, read from the bytes: limen pre-flights
+// only transactions the user's wallet pays the fee for. A caller may name the
+// wallet it expects; a different one is refused, never summarized. The summary
+// and the balance changes write the role marker "user" in place of that
+// wallet's address, so the app and a server produce the same report for the
+// same bytes, and a report carries no wallet address.
 //
 // Signing follows the Solana Pay specification (solana-foundation/pay
 // 8e1b87c, "POST Response"). The wallet signs only when its signature is
@@ -17,6 +20,7 @@ import { messageAccounts, type LookupTables } from "./accounts.ts";
 import { decodePublicKey } from "./base58.ts";
 import { decodeBase64, encodeBase64 } from "./base64.ts";
 import { drainPattern } from "./drain.ts";
+import { withMarker } from "./marker.ts";
 import { ADDRESS_LOOKUP_TABLE_PROGRAM } from "./programs.ts";
 import { assertDevnet, RpcError, type Rpc } from "./rpc.ts";
 import {
@@ -131,9 +135,13 @@ export async function preflight(
     simulation = {
       status: "ran",
       err: result.err,
+      // Like the summary, the changes name the user's wallet by its role.
       changes:
         result.accounts.length === watched.length
-          ? balanceChanges(feePayer, watched, before, result.accounts)
+          ? withMarker(
+              balanceChanges(feePayer, watched, before, result.accounts),
+              feePayer,
+            )
           : [],
     };
     simulatedAt = { slot: result.slot, blockhash: result.replacementBlockhash };

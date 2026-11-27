@@ -124,7 +124,7 @@ export function TransactionRequestView({
       );
     case "card": {
       const { session, result, message } = step;
-      const card = transactionCardText(link, message, result, session.address);
+      const card = transactionCardText(link, message, result);
       const signable = result.kind === "ready" && result.blocks.length === 0;
       return (
         <View style={styles.column}>

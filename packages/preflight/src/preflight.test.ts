@@ -207,7 +207,12 @@ describe("E-09 done test: the drainer pre-flight", () => {
       status: "ran",
       err: null,
       changes: [
-        { kind: "sol", account: USER, before: "5000000000", after: "9995000" },
+        {
+          kind: "sol",
+          account: "user",
+          before: "5000000000",
+          after: "9995000",
+        },
         {
           kind: "token",
           account: USER_TOKEN_ACCOUNT,
@@ -217,7 +222,7 @@ describe("E-09 done test: the drainer pre-flight", () => {
           delegateBefore: null,
           delegateAfter: ATTACKER,
           delegatedAmountAfter: U64_MAX,
-          ownerAfter: USER,
+          ownerAfter: "user",
         },
       ],
     });
@@ -298,10 +303,9 @@ describe("pre-flight paths", () => {
   it("summarizes a sponsored transaction for its fee payer, and blocks the missing signature", async () => {
     const rpc = drainerRpc();
     const result = ready(await preflight(rpc, sponsored.transaction));
-    assert.equal(
-      result.summary.signers.feePayer,
-      "E3RFTY1NdeAf1fD4HH8v6SJWCxTH3bkvBKMbapev8HGW",
-    );
+    // The organizer pays the fee, so the organizer is the wallet summarized
+    // for, named by its role.
+    assert.equal(result.summary.signers.feePayer, "user");
     assert.deepEqual(result.blocks, ["cosigner-missing"]);
   });
 

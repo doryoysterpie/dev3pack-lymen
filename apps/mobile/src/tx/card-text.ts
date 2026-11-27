@@ -1,14 +1,15 @@
 // Transaction-request card text (E-09). App strings live here so the copy
 // rules (rule 9) can be checked in one place.
 
-import type {
-  BalanceChange,
-  Effect,
-  Place,
-  Preflight,
-  SignBlock,
-  TransactionSummary,
-  UndecodedReason,
+import {
+  type BalanceChange,
+  type Effect,
+  type Place,
+  type Preflight,
+  type SignBlock,
+  type TransactionSummary,
+  type UndecodedReason,
+  USER_MARKER,
 } from "@limen/preflight";
 
 import { asWritten, type CardRow, type CardText } from "../pay/card-text.ts";
@@ -26,9 +27,13 @@ export function withDecimals(amount: string, decimals: number): string {
 
 const sol = (lamports: string) => `${withDecimals(lamports, 9)} SOL`;
 
+// The summary writes the role marker in place of the user's wallet address.
+const shown = (address: string): string =>
+  address === USER_MARKER ? "your wallet" : address;
+
 function where(place: Place): string {
   return "address" in place
-    ? place.address
+    ? shown(place.address)
     : `an address in lookup table ${place.table} (index ${place.index}) that was not loaded`;
 }
 
@@ -96,7 +101,7 @@ function effectRow(effect: Effect): CardRow {
         value:
           effect.newAuthority === null
             ? `${what} of ${where(effect.account)} is removed.`
-            : `${what} of ${where(effect.account)} moves to ${effect.newAuthority}.`,
+            : `${what} of ${where(effect.account)} moves to ${shown(effect.newAuthority)}.`,
       };
     }
     case "account-closed":
@@ -144,7 +149,7 @@ function otherText(kind: TransactionSummary["others"][number]["kind"]): string {
   }
 }
 
-function changeRow(change: BalanceChange, user: string): CardRow {
+function changeRow(change: BalanceChange): CardRow {
   if (change.kind === "sol") {
     return {
       label: "Your SOL, simulated",
@@ -155,14 +160,14 @@ function changeRow(change: BalanceChange, user: string): CardRow {
   if (change.ownerAfter === null) {
     parts.push("The account is closed.");
   } else {
-    if (change.ownerAfter !== user) {
-      parts.push(`Owner after: ${change.ownerAfter}.`);
+    if (change.ownerAfter !== USER_MARKER) {
+      parts.push(`Owner after: ${shown(change.ownerAfter)}.`);
     }
     if (change.delegateAfter !== change.delegateBefore) {
       parts.push(
         change.delegateAfter === null
           ? "The delegate is removed."
-          : `Delegate after: ${change.delegateAfter}, for up to ${tokenAmount(change.delegatedAmountAfter, null)}.`,
+          : `Delegate after: ${shown(change.delegateAfter)}, for up to ${tokenAmount(change.delegatedAmountAfter, null)}.`,
       );
     }
   }
@@ -182,7 +187,6 @@ export function transactionCardText(
   link: string,
   message: string | null,
   result: Preflight,
-  user: string,
 ): CardText {
   const host = (() => {
     const match = /^https:\/\/([^/?#]+)/.exec(link);
@@ -204,7 +208,7 @@ export function transactionCardText(
       title: "Stopped: not your wallet's transaction",
       tone: "flagged",
       status:
-        "limen holds this transaction: its fee payer is another wallet, and limen checks a transaction only for its fee payer.",
+        "limen holds this transaction: its fee payer is another wallet, and limen pre-flights only transactions your wallet pays the fee for.",
       rows: [from, { label: "Fee payer", value: result.feePayer }],
     };
   }
@@ -264,12 +268,13 @@ export function transactionCardText(
           ? "Ran on devnet without an error."
           : `Failed on devnet: ${JSON.stringify(simulation.err)}. Signed now, the transaction would most likely fail the same way.`,
     });
-    rows.push(...simulation.changes.map((change) => changeRow(change, user)));
+    rows.push(...simulation.changes.map(changeRow));
   }
 
   rows.push({
     label: "Fee payer",
-    value: "Your wallet.",
+    value:
+      "Your wallet. limen pre-flights only transactions your wallet pays the fee for.",
   });
   for (const block of blocks) {
     rows.push({ label: "limen holds this transaction", value: BLOCK[block] });

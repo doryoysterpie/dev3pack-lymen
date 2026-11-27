@@ -9,7 +9,8 @@
 // Every key is the SHA-256 of a fixed label, used as a public key. None was
 // made from a keypair, so none was built to sign. Signatures in the "partly
 // signed" cases are fixed filler bytes, not real signatures. Each summary is
-// written for the transaction's fee payer, as the decoder writes it.
+// written for the transaction's fee payer, as the decoder writes it, with the
+// role marker "user" in place of the fee payer's address.
 
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -82,8 +83,9 @@ function build(
 
 const at = (publicKey) => ({ address: publicKey.toBase58() });
 const lamports = (sol) => String(Math.round(sol * 1e9));
+// The summary writes "user" for the fee payer's wallet, never its address.
 const userSigner = (others = [], unsigned = true) => ({
-  feePayer: user.toBase58(),
+  feePayer: "user",
   others,
   unsigned,
 });
@@ -400,7 +402,7 @@ const cases = [
       others: [{ instruction: 0, kind: "memo" }],
       undecoded: [],
       signers: {
-        feePayer: organizer.toBase58(),
+        feePayer: "user",
         others: [{ address: user.toBase58(), signed: false }],
         unsigned: false,
       },
