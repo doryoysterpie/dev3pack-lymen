@@ -1,21 +1,16 @@
-// Solana Pay transfer request parsing and card fields (E-08). Pure module.
+// Solana Pay transfer request card fields (E-08). Pure module.
 //
-// Field rules follow the Solana Pay specification, "Specification: Transfer
-// Request", and the reference parseURL in solana-foundation/pay at commit
-// 8e1b87c (typescript/packages/solana-pay/core/src/parseURL.ts).
+// It does not parse the URL itself: classify.ts (E-04) is the one place that
+// parses and checks a Solana Pay URL, and this module reads the fields and the
+// problem it returns. The one rule added here is the SPL token decimal check,
+// which needs the mint's decimals.
 
-import { URL } from "whatwg-url-minimum";
-
-import { decodePublicKey } from "../qr/base58.ts";
-import { classifyQr } from "../qr/classify.ts";
+import { classifyQr, type SolanaPayProblem } from "../qr/classify.ts";
 import {
   recipientStatus,
   type RecipientLists,
   type RecipientStatus,
 } from "./recipient-lists.ts";
-
-/** The spec: SOL amounts may carry at most 9 decimal places. */
-export const SOL_DECIMALS = 9;
 
 export type TransferToken =
   { readonly kind: "sol" } | { readonly kind: "spl"; readonly mint: string };
@@ -40,26 +35,33 @@ export interface TransferCard {
   readonly memo: string | null;
 }
 
+/** The classifier's transfer request problems, and anything that is not one. */
 export type TransferProblem =
   | "not-a-transfer-request"
-  | "duplicate-field"
-  | "amount-invalid"
-  | "amount-too-precise"
-  | "spl-token-invalid"
-  | "reference-invalid";
+  | Extract<
+      SolanaPayProblem,
+      | "too-long"
+      | "recipient-invalid"
+      | "duplicate-field"
+      | "amount-invalid"
+      | "amount-too-precise"
+      | "spl-token-invalid"
+      | "reference-invalid"
+    >;
 
 export type TransferCardResult =
   | { readonly ok: true; readonly card: TransferCard }
   | { readonly ok: false; readonly problem: TransferProblem };
 
-// The spec allows each of these fields once. A second copy is refused, because
-// two wallets reading different copies would show different requests.
-const SINGLE_FIELDS = ["amount", "spl-token", "label", "message", "memo"];
-
-// The spec: a non-negative integer or decimal, with a leading 0 before the
-// point when below 1, and no scientific notation. Same pattern as the
-// reference parseURL.
-const AMOUNT = /^\d+(\.\d+)?$/;
+const TRANSFER_PROBLEMS: ReadonlySet<SolanaPayProblem> = new Set([
+  "too-long",
+  "recipient-invalid",
+  "duplicate-field",
+  "amount-invalid",
+  "amount-too-precise",
+  "spl-token-invalid",
+  "reference-invalid",
+]);
 
 function refuse(problem: TransferProblem): TransferCardResult {
   return { ok: false, problem };
@@ -73,7 +75,8 @@ function decimalPlaces(amount: string): number {
 /**
  * Builds the transfer card for the text of a scanned QR. mintDecimals is the
  * SPL mint's decimals when the caller knows them, or null. The spec has the
- * wallet reject an amount with more decimal places than the token supports.
+ * wallet reject an amount with more decimal places than the token supports;
+ * the classifier already did so for SOL.
  */
 export function transferCard(
   text: string,
@@ -81,35 +84,23 @@ export function transferCard(
   mintDecimals: number | null = null,
 ): TransferCardResult {
   const qr = classifyQr(text);
+  if (qr.type === "other" && qr.reason === "malformed-solana-pay") {
+    return TRANSFER_PROBLEMS.has(qr.problem)
+      ? refuse(qr.problem as TransferProblem)
+      : refuse("not-a-transfer-request");
+  }
   if (qr.type !== "solana-pay" || qr.request !== "transfer") {
     return refuse("not-a-transfer-request");
   }
 
-  const params = new URL(text).searchParams;
-  for (const field of SINGLE_FIELDS) {
-    if (params.getAll(field).length > 1) return refuse("duplicate-field");
-  }
-
-  const amount = params.get("amount");
-  if (amount !== null && !AMOUNT.test(amount)) return refuse("amount-invalid");
-
-  const mint = params.get("spl-token");
-  if (mint !== null && decodePublicKey(mint) === null) {
-    return refuse("spl-token-invalid");
-  }
-
-  const references = params.getAll("reference");
-  if (references.some((reference) => decodePublicKey(reference) === null)) {
-    return refuse("reference-invalid");
-  }
-
-  const allowedDecimals = mint === null ? SOL_DECIMALS : mintDecimals;
   let amountCheck: AmountCheck;
-  if (amount === null) {
+  if (qr.amount === null) {
     amountCheck = "no-amount";
-  } else if (allowedDecimals === null) {
+  } else if (qr.splToken === null) {
+    amountCheck = "within-decimals";
+  } else if (mintDecimals === null) {
     amountCheck = "decimals-not-checked";
-  } else if (decimalPlaces(amount) > allowedDecimals) {
+  } else if (decimalPlaces(qr.amount) > mintDecimals) {
     return refuse("amount-too-precise");
   } else {
     amountCheck = "within-decimals";
@@ -120,14 +111,16 @@ export function transferCard(
     card: {
       recipient: qr.recipient,
       recipientStatus: recipientStatus(qr.recipient, lists),
-      amount,
+      amount: qr.amount,
       amountCheck,
-      token: mint === null ? { kind: "sol" } : { kind: "spl", mint },
-      references,
-      // As in the reference parseURL, an empty value counts as absent.
-      label: params.get("label") || null,
-      message: params.get("message") || null,
-      memo: params.get("memo") || null,
+      token:
+        qr.splToken === null
+          ? { kind: "sol" }
+          : { kind: "spl", mint: qr.splToken },
+      references: qr.references,
+      label: qr.label,
+      message: qr.message,
+      memo: qr.memo,
     },
   };
 }

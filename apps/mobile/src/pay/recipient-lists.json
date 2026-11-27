@@ -1,5 +1,5 @@
 {
-  "about": "Recipient lists the app checks Solana Pay transfer requests against. Devnet addresses only (D-03, rule 7). organizers: the event organizer keys. flagged: known-scam recipients. Both are empty until the organizer key from E-02 and the demo list are added.",
+  "about": "Devnet fixture lists bundled with the app (D-03, rule 7: devnet addresses only). organizers: the event organizer public keys; empty until Lane A creates the organizer key at E-06. flagged: addresses this app marks as flagged. A flagged card means only that the address is on this list; it is not a feed of real scam reports.",
   "organizers": [],
   "flagged": []
 }

@@ -33,7 +33,8 @@ describe("E-08 done test: what the transfer card shows", () => {
     assert.deepEqual(resultCard(`solana:${FLAGGED}?amount=10`, lists), {
       title: "Solana Pay transfer request",
       tone: "flagged",
-      status: "Flagged: this recipient is on the limen known-scam list.",
+      status:
+        "Flagged: this recipient is on the devnet list of flagged addresses bundled with this app.",
       rows: [
         { label: "Recipient", value: FLAGGED },
         { label: "Amount", value: "10 SOL" },

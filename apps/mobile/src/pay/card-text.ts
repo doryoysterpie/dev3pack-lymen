@@ -19,15 +19,21 @@ export interface CardText {
   readonly rows: readonly CardRow[];
 }
 
+// "Flagged" means on the devnet list bundled with this app, and nothing wider:
+// no string here may suggest a check against real scam reports.
 const STATUS: Readonly<Record<RecipientStatus, string>> = {
   organizer: "Organizer: this recipient is on the event organizer list.",
-  flagged: "Flagged: this recipient is on the limen known-scam list.",
+  flagged:
+    "Flagged: this recipient is on the devnet list of flagged addresses bundled with this app.",
   unlisted:
-    "This recipient is not on the organizer list or the known-scam list.",
+    "This recipient is not on the organizer list or on the bundled devnet list of flagged addresses.",
 };
 
 const PROBLEM: Readonly<Record<TransferProblem, string>> = {
   "not-a-transfer-request": "it is not a Solana Pay transfer request.",
+  "too-long":
+    "it is longer than the 2048 characters the Solana Pay reference parser accepts.",
+  "recipient-invalid": "its recipient is not a valid public key.",
   "duplicate-field":
     "it repeats a field that the Solana Pay format allows only once, so two wallets could read two different requests from it.",
   "amount-invalid": "its amount is not a plain non-negative number.",

@@ -12,15 +12,15 @@ import { classifyQr } from "./qr/classify.ts";
 import { describeQr } from "./qr/describe.ts";
 
 export function resultCard(text: string, lists: RecipientLists): CardText {
-  const qr = classifyQr(text);
-  if (qr.type === "solana-pay" && qr.request === "transfer") {
-    // The app does not look up SPL mint decimals, so it passes null and the
-    // card says the decimals were not checked.
-    const result = transferCard(text, lists, null);
-    return result.ok
-      ? transferCardText(result.card)
-      : transferProblemText(result.problem);
+  // The app does not look up SPL mint decimals, so it passes null and the
+  // card says the decimals were not checked.
+  const transfer = transferCard(text, lists, null);
+  if (transfer.ok) return transferCardText(transfer.card);
+  if (transfer.problem !== "not-a-transfer-request") {
+    return transferProblemText(transfer.problem);
   }
+
+  const qr = classifyQr(text);
   const summary = describeQr(qr);
   const malformed = qr.type === "other" && qr.reason === "malformed-solana-pay";
   return {
