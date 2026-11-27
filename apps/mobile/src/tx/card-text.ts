@@ -2,11 +2,15 @@
 // rules (rule 9) can be checked in one place.
 
 import {
+  drainPattern,
+  handsOverControl,
+  toReport,
   type BalanceChange,
   type Effect,
   type Place,
   type Preflight,
   type SignBlock,
+  type SimulationOutcome,
   type TransactionSummary,
   type UndecodedReason,
   USER_MARKER,
@@ -34,7 +38,7 @@ const shown = (address: string): string =>
 function where(place: Place): string {
   return "address" in place
     ? shown(place.address)
-    : `an address in lookup table ${place.table} (index ${place.index}) that was not loaded`;
+    : `an address in lookup table ${place.table} (index ${place.index}) that limen could not read`;
 }
 
 function tokenAmount(amount: string, decimals: number | null): string {
@@ -117,19 +121,13 @@ function effectRow(effect: Effect): CardRow {
   }
 }
 
-// Effects that hand control of the user's tokens or accounts to someone else.
-const HANDS_OVER = new Set<Effect["kind"]>([
-  "owner-assigned",
-  "delegate-approved",
-  "authority-changed",
-  "account-closed",
-]);
-
+// One sentence per undecoded reason, after "Instruction N calls <program>".
 const UNDECODED: Readonly<Record<UndecodedReason, string>> = {
-  "unknown-program": "a program limen does not decode",
-  "instruction-not-decoded": "an instruction limen does not decode",
-  "unexpected-data": "instruction data of a length limen does not expect",
-  "missing-accounts": "fewer accounts than the instruction needs",
+  "unknown-program": ", a program limen does not decode.",
+  "instruction-not-decoded": " with an instruction limen does not decode.",
+  "unexpected-data":
+    " with instruction data of a length limen does not expect.",
+  "missing-accounts": " with fewer accounts than the instruction needs.",
 };
 
 // The summary keeps each instruction the wallet does not authorize as its index
@@ -206,7 +204,21 @@ function changeRow(change: BalanceChange): CardRow {
 const BLOCK: Readonly<Record<SignBlock, string>> = {
   "cosigner-missing":
     "it needs another signature that is missing. The Solana Pay format has wallets refuse such a transaction.",
+  "simulation-not-run":
+    "the simulation did not run, so this card shows only the decoded instructions. Signing waits for a simulation on devnet.",
+  "simulation-failed":
+    "the transaction failed when simulated on devnet. Signed now, it would most likely fail the same way.",
 };
+
+// What the simulation adds to the fallback card, said only as far as it ran.
+function simulated(simulation: SimulationOutcome): string {
+  if (simulation.status === "not-run") {
+    return "The simulation did not run, so no balance change is shown.";
+  }
+  return simulation.err === null
+    ? "The simulation ran, and the balance changes it found are shown below."
+    : "The simulation failed, so no balance change is shown.";
+}
 
 /** The card for a transaction request, from its link and pre-flight. */
 export function transactionCardText(
@@ -249,9 +261,9 @@ export function transactionCardText(
 
   const { summary, simulation, blocks } = result;
   const fallback = summary.undecoded.length > 0;
-  const handsOver = summary.effects.some((effect) =>
-    HANDS_OVER.has(effect.kind),
-  );
+  // The card's flag is the drain pattern, the one definition (drain.ts).
+  const handsOver = summary.effects.some(handsOverControl);
+  const drains = drainPattern(toReport(result));
 
   const rows: CardRow[] = [from];
   if (message !== null) {
@@ -265,7 +277,7 @@ export function transactionCardText(
   for (const entry of summary.undecoded) {
     rows.push({
       label: "Not decoded",
-      value: `Instruction ${entry.instruction + 1} calls ${entry.programId}, with ${UNDECODED[entry.reason]}.`,
+      value: `Instruction ${entry.instruction + 1} calls ${entry.programId}${UNDECODED[entry.reason]}`,
     });
   }
   for (const other of summary.others) {
@@ -277,7 +289,10 @@ export function transactionCardText(
   if (summary.unresolvedAccounts > 0) {
     rows.push({
       label: "Lookup tables",
-      value: `${summary.unresolvedAccounts} addresses come from lookup tables that were not loaded.`,
+      value:
+        summary.unresolvedAccounts === 1
+          ? "1 address comes from a lookup table limen could not read."
+          : `${summary.unresolvedAccounts} addresses come from lookup tables limen could not read.`,
     });
   }
 
@@ -310,12 +325,14 @@ export function transactionCardText(
     title: fallback
       ? "Fallback: limen cannot decode all of this transaction"
       : "Solana Pay transaction request",
-    tone: fallback || handsOver || blocks.length > 0 ? "flagged" : "neutral",
+    tone: fallback || drains || blocks.length > 0 ? "flagged" : "neutral",
     status: fallback
-      ? "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation still shows the balance changes it found."
+      ? `limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. ${simulated(simulation)}`
       : handsOver
         ? "limen flags this transaction: it would hand control of your tokens or accounts to another address."
-        : "This card shows what the transaction would do before you sign.",
+        : drains
+          ? "limen flags this transaction: as simulated, it would hand control of your wallet or tokens to another address, or leave your wallet or a token account with less than a tenth of what it holds."
+          : "This card shows what the transaction would do before you sign.",
     rows,
   };
 }

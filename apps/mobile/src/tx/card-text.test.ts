@@ -103,7 +103,7 @@ describe("E-09 done test: what the transaction card shows", () => {
         (row) =>
           row.label === "Not decoded" &&
           row.value ===
-            `Instruction 2 calls ${unknownProgram}, with a program limen does not decode.`,
+            `Instruction 2 calls ${unknownProgram}, a program limen does not decode.`,
       ),
     );
   });
@@ -175,6 +175,114 @@ describe("transaction card text", () => {
         '"Thanks\\u{000A}Organizer: this recipient is on the organizer list."',
       quoted: true,
     });
+  });
+
+  it("m4: the fallback card says how far the simulation ran", async () => {
+    const lead =
+      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do.";
+    const walletAccount = (lamports: number) => ({
+      lamports,
+      owner: SYSTEM_PROGRAM,
+      data: ["", "base64"] as const,
+    });
+    const statusWith = async (rpc: Parameters<typeof preflight>[0]) =>
+      transactionCardText(
+        LINK,
+        null,
+        await preflight(rpc, transactionOf("unknown program"), fixture.user),
+      ).status;
+    assert.equal(
+      await statusWith(offline),
+      `${lead} The simulation did not run, so no balance change is shown.`,
+    );
+    assert.equal(
+      await statusWith(
+        recordedRpc({
+          accounts: { [fixture.user]: walletAccount(5_000_000_000) },
+          simulation: {
+            err: null,
+            accounts: { [fixture.user]: walletAccount(4_999_995_000) },
+          },
+        }),
+      ),
+      `${lead} The simulation ran, and the balance changes it found are shown below.`,
+    );
+    assert.equal(
+      await statusWith(
+        recordedRpc({
+          accounts: { [fixture.user]: walletAccount(5_000_000_000) },
+          simulation: {
+            err: { InstructionError: [1, "Custom"] },
+            accounts: {},
+          },
+        }),
+      ),
+      `${lead} The simulation failed, so no balance change is shown.`,
+    );
+  });
+
+  it("m5: a token account closed back to the wallet is not flagged", async () => {
+    const ran = await preflight(
+      recordedRpc({
+        accounts: {},
+        simulation: { err: null, accounts: {} },
+      }),
+      transactionOf("drainer: SOL balance out"),
+      fixture.user,
+    );
+    assert.ok(ran.kind === "ready");
+    const closeOnly = {
+      ...ran,
+      summary: {
+        ...ran.summary,
+        effects: [
+          {
+            kind: "account-closed" as const,
+            instruction: 0,
+            program: "token" as const,
+            account: { address: userTokenAccount },
+            destination: { address: "user" },
+          },
+        ],
+      },
+      simulation: { status: "ran" as const, err: null, changes: [] },
+      blocks: [],
+    };
+    const card = transactionCardText(LINK, null, closeOnly);
+    assert.equal(card.tone, "neutral");
+    assert.equal(
+      card.status,
+      "This card shows what the transaction would do before you sign.",
+    );
+    assert.deepEqual(card.rows[1], {
+      label: "Closes a token account",
+      value: `Closes ${userTokenAccount} and sends its SOL to your wallet.`,
+    });
+  });
+
+  it("m12: names an address from a lookup table limen could not read", async () => {
+    const result = await preflight(
+      offline,
+      transactionOf("drainer as a v0 transaction, lookup table not loaded"),
+      fixture.user,
+    );
+    const card = transactionCardText(LINK, null, result);
+    assert.ok(
+      card.rows.some(
+        (row) =>
+          row.label === "Sends SOL" &&
+          row.value ===
+            `4.99 SOL from your wallet to an address in lookup table ${fixture.keys.lookupTable} (index 1) that limen could not read.`,
+      ),
+    );
+    assert.ok(
+      card.rows.some(
+        (row) =>
+          row.label === "Lookup tables" &&
+          row.value ===
+            "1 address comes from a lookup table limen could not read.",
+      ),
+    );
   });
 
   it("stops with its own card when the endpoint is not devnet", () => {

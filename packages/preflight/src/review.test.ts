@@ -11,8 +11,17 @@ import * as web3 from "@solana/web3.js";
 
 import { decodePublicKey } from "./base58.ts";
 import { encodeBase64 } from "./base64.ts";
-import { preflightTransaction } from "./preflight.ts";
-import { SYSTEM_PROGRAM, TOKEN_PROGRAM } from "./programs.ts";
+import {
+  preflight,
+  preflightTransaction,
+  signingAllowed,
+} from "./preflight.ts";
+import {
+  DEVNET_GENESIS_HASH,
+  SYSTEM_PROGRAM,
+  TOKEN_PROGRAM,
+} from "./programs.ts";
+import { jsonRpc, type Fetch } from "./rpc.ts";
 import {
   recordedRpc,
   type RecordedAccount,
@@ -339,5 +348,125 @@ describe("known false alarms, held for the owner", () => {
       },
     };
     assert.equal(await drain(transaction, recording), true);
+  });
+});
+
+describe("m9, m10, m11: a simulation that did not run is not a clean run", () => {
+  const transaction = () => build([unknown([])]);
+  const base64 = () => encodeBase64(transaction());
+
+  it("m9: an answer with no err field and no accounts is marked not run, and blocks signing", async () => {
+    const answer: Fetch = async (_url, init) => {
+      const request = JSON.parse(init.body) as {
+        id: number;
+        method: string;
+      };
+      const result =
+        request.method === "getGenesisHash"
+          ? DEVNET_GENESIS_HASH
+          : request.method === "getMultipleAccounts"
+            ? { context: { slot: 1 }, value: [null] }
+            : { context: { slot: 1 }, value: { logs: [] } };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ jsonrpc: "2.0", id: request.id, result }),
+      };
+    };
+    const result = await preflight(jsonRpc(answer, "x"), base64());
+    assert.ok(result.kind === "ready");
+    assert.equal(result.simulation.status, "not-run");
+    assert.deepEqual(result.blocks, ["simulation-not-run"]);
+    assert.equal(signingAllowed(result, base64()), false);
+  });
+
+  it("m10: an endpoint that never answers times out as not run", async () => {
+    const hang: Fetch = () => new Promise(() => {});
+    const result = await preflight(jsonRpc(hang, "x", 50), base64());
+    assert.ok(result.kind === "ready");
+    assert.deepEqual(result.simulation, {
+      status: "not-run",
+      reason: "the RPC endpoint did not answer within 0.05 seconds",
+    });
+    assert.deepEqual(result.blocks, ["simulation-not-run"]);
+  });
+
+  it("m11: devnet never confirmed (getGenesisHash HTTP 503) blocks signing", async () => {
+    const down: Fetch = async () => ({
+      ok: false,
+      status: 503,
+      json: async () => ({}),
+    });
+    const result = await preflight(jsonRpc(down, "x"), base64());
+    assert.ok(result.kind === "ready");
+    assert.equal(result.simulation.status, "not-run");
+    assert.equal(signingAllowed(result, base64()), false);
+  });
+
+  it("m11: a failed simulation blocks signing", async () => {
+    const result = await preflight(
+      recordedRpc({
+        accounts: { [USER]: wallet(5_000_000_000) },
+        simulation: { err: { InstructionError: [0, "Custom"] }, accounts: {} },
+      }),
+      base64(),
+    );
+    assert.ok(result.kind === "ready");
+    assert.deepEqual(result.blocks, ["simulation-failed"]);
+    assert.equal(signingAllowed(result, base64()), false);
+  });
+
+  it("a clean simulation leaves signing to the card", async () => {
+    const result = await preflight(
+      recordedRpc({
+        accounts: { [USER]: wallet(5_000_000_000) },
+        simulation: { err: null, accounts: { [USER]: wallet(4_999_995_000) } },
+      }),
+      base64(),
+    );
+    assert.ok(result.kind === "ready");
+    assert.deepEqual(result.blocks, []);
+    assert.equal(signingAllowed(result, base64()), true);
+  });
+});
+
+describe("m5: an empty token account closed back to the wallet", () => {
+  const transaction = () =>
+    build([spl.createCloseAccountInstruction(tokenAccount, user, user)]);
+
+  it("shows no drain pattern from the decode alone", async () => {
+    const result = await preflightTransaction(transaction(), {
+      rpc: jsonRpc(async () => {
+        throw new Error("offline");
+      }, "x"),
+    });
+    assert.equal(result.summary.kind, "ready");
+    assert.equal(result.drainPattern, false);
+  });
+
+  it("shows no drain pattern as simulated", async () => {
+    const recording: Recording = {
+      accounts: {
+        [USER]: wallet(1_000_000_000),
+        [K.userTokenAccount]: token({ amount: BigInt(0) }),
+      },
+      simulation: {
+        err: null,
+        accounts: { [USER]: wallet(1_002_034_280), [K.userTokenAccount]: null },
+      },
+    };
+    assert.equal(await drain(transaction(), recording), false);
+  });
+
+  it("does show one when the SOL goes to another address", async () => {
+    const closeToAttacker = build([
+      spl.createCloseAccountInstruction(tokenAccount, attacker, user),
+    ]);
+    const result = await preflightTransaction(closeToAttacker, {
+      rpc: jsonRpc(async () => {
+        throw new Error("offline");
+      }, "x"),
+    });
+    assert.equal(result.drainPattern, true);
   });
 });
