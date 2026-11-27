@@ -1,8 +1,9 @@
 // Report routes (E-10, E-11): POST /reports takes an evidence bundle from the app, stores it as
-// a sighting, and triages it into a case. Later triage units add their routes here.
+// a sighting, and triages it into a case. The dashboard routes (E-12) are served from here too.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { DatabaseSync } from "node:sqlite";
 
+import { routeDashboard } from "./dashboard.ts";
 import {
   parseReport,
   resimulateBundle,
@@ -23,6 +24,8 @@ export interface ReportOptions {
   readonly resimulationTimeoutMs?: number;
   /** The domain lists the D-05 threshold reads. Defaults to the bundled fixture lists. */
   readonly lists?: DomainLists;
+  /** The bearer token for the dashboard's JSON routes (E-12). Unset: those routes answer 503. */
+  readonly triageToken?: string;
 }
 
 function sendJson(
@@ -42,6 +45,8 @@ function sendJson(
 }
 
 class BodyTooLarge extends Error {}
+
+const systemNow = (): number => Math.floor(Date.now() / 1000);
 
 function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -84,7 +89,7 @@ async function postReport(
     sendJson(res, 400, { error: "invalid_json" });
     return;
   }
-  const now = options.now ?? (() => Math.floor(Date.now() / 1000));
+  const now = options.now ?? systemNow;
   const result = parseReport(body, now());
   if (!result.ok) {
     sendJson(res, 400, { error: "invalid_report", field: result.field });
@@ -135,6 +140,13 @@ export function routeReports(
   res: ServerResponse,
   pathname: string,
 ): boolean {
+  const now = options.now ?? systemNow;
+  const dashboard = {
+    triageToken: options.triageToken,
+    lists: options.lists ?? bundledLists(),
+    now,
+  };
+  if (routeDashboard(db, dashboard, req, res, pathname)) return true;
   if (pathname !== "/reports") return false;
   if (req.method !== "POST") {
     sendJson(res, 405, { error: "method_not_allowed" }, { allow: "POST" });

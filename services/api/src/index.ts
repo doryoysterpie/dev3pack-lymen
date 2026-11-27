@@ -42,7 +42,12 @@ export async function start(
   const port = parsePort(env.API_PORT);
   const host = env.API_HOST || "127.0.0.1";
   const db = openDatabase(env.DATABASE_PATH || "limen.db");
-  const server = createApiServer({ db, version: API_VERSION });
+  // The dashboard's JSON routes answer 503 until TRIAGE_TOKEN is set (E-12).
+  const server = createApiServer({
+    db,
+    version: API_VERSION,
+    reports: { triageToken: env.TRIAGE_TOKEN || undefined },
+  });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, () => {
