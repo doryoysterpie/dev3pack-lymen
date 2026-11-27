@@ -67,13 +67,15 @@ const result = await preflightTransaction(drainerBytes, { rpc });
 
 ## The drain pattern
 
-`drainPattern(report)` in `src/drain.ts` is the one definition of the drain pattern, the first condition of D-05's auto-escalation threshold. E-11's threshold and E-15's claims table read it. A ready report shows a drain pattern when, for the fee payer's wallet, any of these holds:
+`drainPattern(report)` in `src/drain.ts` is the one definition of the drain pattern, the first condition of D-05's auto-escalation threshold. E-11's threshold, E-15's claims table and the app's card read it; the card's "hands over control" flag uses the same `handsOverControl`. The definition is limen's: D-05 names the condition without defining it, so it is held for the owner. A ready report shows a drain pattern when, for the user's wallet (the fee payer, written `"user"`), any of these holds:
 
 1. **Control handed over, in the decoded instructions:** a delegate approved over one of the wallet's token accounts; the wallet account assigned to another program; a token account or mint authority moved to an address other than the wallet; or a token account closed with its SOL sent to an address other than the wallet.
-2. **Control handed over, in a simulation that ran without an error:** a token account the wallet owned has a new delegate other than the wallet, or a new owner other than the wallet.
-3. **A sweep, in a simulation that ran without an error:** the wallet is left with less than a tenth of its SOL, or a token account the wallet owns is emptied without being closed.
+2. **Control handed over, in a simulation that ran without an error:** the wallet account given a new owner program or a different data length; or a token account the wallet owned given a new delegate other than the wallet, a raised allowance for a delegate other than the wallet, a new owner other than the wallet, or a new close authority other than the wallet.
+3. **A sweep, in a simulation that ran without an error:** the wallet, or a token account the wallet owned, left with less than a tenth of what it held. A closed token account counts as left with nothing.
 
-A malformed transaction and a stop at a non-devnet endpoint never show a drain pattern. A simulation that failed, or a plain payment that leaves the wallet a tenth or more of its SOL, shows one only when the decoded instructions hand over control. The tenth is `SWEEP_DIVISOR`. The definition reads both the decoded instructions and the simulation: a stored drainer re-simulated after the wallet was already emptied can fail, and its instructions still show what it asked for.
+A malformed transaction, a stop at a non-devnet endpoint, and another wallet's transaction never show a drain pattern. A simulation that failed shows one only when the decoded instructions hand over control. The tenth is `SWEEP_DIVISOR`. The definition reads both the decoded instructions and the simulation: a stored drainer re-simulated after the wallet was already emptied can fail, and its instructions still show what it asked for.
+
+What the definition does not look at: where the SOL or tokens go. A payment to the event organizer of a whole token balance, or of more than nine tenths of the wallet's SOL, shows a drain pattern; so does unwrapping wrapped SOL back to the wallet, which closes a token account that held a balance. `src/review.test.ts` holds the cases.
 
 ## Using it from Node
 

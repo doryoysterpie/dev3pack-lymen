@@ -151,10 +151,22 @@ function otherText(kind: TransactionSummary["others"][number]["kind"]): string {
 
 function changeRow(change: BalanceChange): CardRow {
   if (change.kind === "sol") {
-    return {
-      label: "Your SOL, simulated",
-      value: `${sol(change.before)} before, ${sol(change.after)} after.`,
-    };
+    const parts = [`${sol(change.before)} before, ${sol(change.after)} after.`];
+    if (
+      change.ownerBefore !== null &&
+      change.ownerAfter !== null &&
+      change.ownerBefore !== change.ownerAfter
+    ) {
+      parts.push(
+        `Your wallet account's owner program changes from ${change.ownerBefore} to ${change.ownerAfter}, which would then control its SOL.`,
+      );
+    }
+    if (change.dataLengthBefore !== change.dataLengthAfter) {
+      parts.push(
+        `Your wallet account's data changes from ${change.dataLengthBefore} to ${change.dataLengthAfter} bytes.`,
+      );
+    }
+    return { label: "Your wallet, simulated", value: parts.join(" ") };
   }
   const parts = [`${change.before} base units before, ${change.after} after.`];
   if (change.ownerAfter === null) {
@@ -168,6 +180,20 @@ function changeRow(change: BalanceChange): CardRow {
         change.delegateAfter === null
           ? "The delegate is removed."
           : `Delegate after: ${shown(change.delegateAfter)}, for up to ${tokenAmount(change.delegatedAmountAfter, null)}.`,
+      );
+    } else if (
+      change.delegateAfter !== null &&
+      change.delegatedAmountAfter !== change.delegatedAmountBefore
+    ) {
+      parts.push(
+        `The allowance of delegate ${shown(change.delegateAfter)} changes from ${tokenAmount(change.delegatedAmountBefore, null)} to ${tokenAmount(change.delegatedAmountAfter, null)}.`,
+      );
+    }
+    if (change.closeAuthorityAfter !== change.closeAuthorityBefore) {
+      parts.push(
+        change.closeAuthorityAfter === null
+          ? "The close authority is removed."
+          : `Close authority after: ${shown(change.closeAuthorityAfter)}.`,
       );
     }
   }

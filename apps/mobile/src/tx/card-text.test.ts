@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
-import { jsonRpc, preflight, type Fetch } from "@limen/preflight";
+import {
+  jsonRpc,
+  preflight,
+  recordedRpc,
+  SYSTEM_PROGRAM,
+  type Fetch,
+} from "@limen/preflight";
 
 import { transactionCardText, withDecimals } from "./card-text.ts";
 
@@ -104,6 +110,42 @@ describe("E-09 done test: what the transaction card shows", () => {
 });
 
 describe("transaction card text", () => {
+  it("says when the simulation gives the wallet a new owner program", async () => {
+    const rpc = recordedRpc({
+      accounts: {
+        [fixture.user]: {
+          lamports: 5_000_000_000,
+          owner: SYSTEM_PROGRAM,
+          data: ["", "base64"],
+        },
+      },
+      simulation: {
+        err: null,
+        accounts: {
+          [fixture.user]: {
+            lamports: 4_999_995_000,
+            owner: unknownProgram,
+            data: ["", "base64"],
+          },
+        },
+      },
+    });
+    const result = await preflight(
+      rpc,
+      transactionOf("unknown program"),
+      fixture.user,
+    );
+    const card = transactionCardText(LINK, null, result);
+    assert.ok(
+      card.rows.some(
+        (row) =>
+          row.label === "Your wallet, simulated" &&
+          row.value ===
+            `5 SOL before, 4.999995 SOL after. Your wallet account's owner program changes from ${SYSTEM_PROGRAM} to ${unknownProgram}, which would then control its SOL.`,
+      ),
+    );
+  });
+
   it("stops when the connected wallet is not the transaction's fee payer", async () => {
     const result = await preflight(
       offline,
