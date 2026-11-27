@@ -1,0 +1,5 @@
+{
+  "about": "Recipient lists the app checks Solana Pay transfer requests against. Devnet addresses only (D-03, rule 7). organizers: the event organizer keys. flagged: known-scam recipients. Both are empty until the organizer key from E-02 and the demo list are added.",
+  "organizers": [],
+  "flagged": []
+}
