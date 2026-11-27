@@ -1,6 +1,8 @@
 // Balance changes from a simulation (E-09). Pure module: it compares account
 // state read before the simulation with the state the simulation reports
-// after it, for the user's wallet and the token accounts the wallet owns.
+// after it, for the user's wallet (its SOL, owner and data length) and the
+// token accounts the wallet owns (amount, delegate, allowance, owner and close
+// authority).
 
 import type { Account } from "./accounts.ts";
 import { TOKEN_2022_PROGRAM, TOKEN_PROGRAM } from "./programs.ts";
@@ -10,9 +12,16 @@ import { parseTokenAccount } from "./state.ts";
 export type BalanceChange =
   | {
       readonly kind: "sol";
+      /** The user's wallet. */
       readonly account: string;
       readonly before: string;
       readonly after: string;
+      /** The program that owns the wallet account; null when it is absent. */
+      readonly ownerBefore: string | null;
+      readonly ownerAfter: string | null;
+      /** The wallet account's data length in bytes; 0 when it is absent. */
+      readonly dataLengthBefore: number;
+      readonly dataLengthAfter: number;
     }
   | {
       readonly kind: "token";
@@ -23,9 +32,12 @@ export type BalanceChange =
       readonly after: string;
       readonly delegateBefore: string | null;
       readonly delegateAfter: string | null;
+      readonly delegatedAmountBefore: string;
       readonly delegatedAmountAfter: string;
       /** The owner after the simulation, or null when it closed the account. */
       readonly ownerAfter: string | null;
+      readonly closeAuthorityBefore: string | null;
+      readonly closeAuthorityAfter: string | null;
     };
 
 /** The simulateTransaction accounts list is capped like getMultipleAccounts. */
@@ -69,15 +81,24 @@ export function balanceChanges(
     const pre = before[i] ?? null;
     const post = after[i] ?? null;
     if (address === user) {
-      const lamportsBefore = pre?.lamports ?? "0";
-      const lamportsAfter = post?.lamports ?? "0";
-      if (lamportsBefore !== lamportsAfter) {
-        changes.push({
-          kind: "sol",
-          account: address,
-          before: lamportsBefore,
-          after: lamportsAfter,
-        });
+      // The wallet's SOL, and also who owns it and how much data it holds:
+      // a program that takes ownership of the wallet controls its SOL.
+      const change: BalanceChange = {
+        kind: "sol",
+        account: address,
+        before: pre?.lamports ?? "0",
+        after: post?.lamports ?? "0",
+        ownerBefore: pre?.owner ?? null,
+        ownerAfter: post?.owner ?? null,
+        dataLengthBefore: pre?.data.length ?? 0,
+        dataLengthAfter: post?.data.length ?? 0,
+      };
+      if (
+        change.before !== change.after ||
+        change.ownerBefore !== change.ownerAfter ||
+        change.dataLengthBefore !== change.dataLengthAfter
+      ) {
+        changes.push(change);
       }
       return;
     }
@@ -96,14 +117,18 @@ export function balanceChanges(
       after: now?.amount ?? "0",
       delegateBefore: was.delegate,
       delegateAfter: now?.delegate ?? null,
+      delegatedAmountBefore: was.delegatedAmount,
       delegatedAmountAfter: now?.delegatedAmount ?? "0",
       ownerAfter: now?.owner ?? null,
+      closeAuthorityBefore: was.closeAuthority,
+      closeAuthorityAfter: now?.closeAuthority ?? null,
     };
     if (
       change.before !== change.after ||
       change.delegateBefore !== change.delegateAfter ||
-      was.delegatedAmount !== change.delegatedAmountAfter ||
-      change.ownerAfter !== user
+      change.delegatedAmountBefore !== change.delegatedAmountAfter ||
+      change.ownerAfter !== user ||
+      change.closeAuthorityBefore !== change.closeAuthorityAfter
     ) {
       changes.push(change);
     }

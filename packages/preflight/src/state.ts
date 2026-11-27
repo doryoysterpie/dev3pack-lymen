@@ -3,7 +3,8 @@
 // - Token account: solana-program/token 38de8d1, interface/src/state.rs,
 //   `impl Pack for Account`: 165 bytes, mint 0..32, owner 32..64, amount
 //   64..72, delegate 72..108 (4-byte tag, then the key), delegated amount
-//   121..129. Token-2022 accounts start with the same 165 bytes.
+//   121..129, close authority 129..165 (4-byte tag, then the key). Token-2022
+//   accounts start with the same 165 bytes.
 // - Lookup table: anza-xyz/solana-sdk 7b382f6,
 //   address-lookup-table-interface/src/state.rs: a u32 ProgramState tag
 //   (1 = LookupTable), addresses from LOOKUP_TABLE_META_SIZE (56) on.
@@ -16,6 +17,7 @@ export interface TokenAccount {
   readonly amount: string;
   readonly delegate: string | null;
   readonly delegatedAmount: string;
+  readonly closeAuthority: string | null;
 }
 
 const TOKEN_ACCOUNT_LENGTH = 165;
@@ -44,12 +46,16 @@ export function parseTokenAccount(data: Uint8Array): TokenAccount | null {
   if (data.length < TOKEN_ACCOUNT_LENGTH) return null;
   const delegateTag = u32(data, 72);
   if (delegateTag !== 0 && delegateTag !== 1) return null;
+  const closeTag = u32(data, 129);
+  if (closeTag !== 0 && closeTag !== 1) return null;
   return {
     mint: encodeBase58(data.subarray(0, 32)),
     owner: encodeBase58(data.subarray(32, 64)),
     amount: u64(data, 64),
     delegate: delegateTag === 1 ? encodeBase58(data.subarray(76, 108)) : null,
     delegatedAmount: u64(data, 121),
+    closeAuthority:
+      closeTag === 1 ? encodeBase58(data.subarray(133, 165)) : null,
   };
 }
 

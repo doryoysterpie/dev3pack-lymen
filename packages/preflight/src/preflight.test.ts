@@ -212,6 +212,10 @@ describe("E-09 done test: the drainer pre-flight", () => {
           account: "user",
           before: "5000000000",
           after: "9995000",
+          ownerBefore: SYSTEM_PROGRAM,
+          ownerAfter: SYSTEM_PROGRAM,
+          dataLengthBefore: 0,
+          dataLengthAfter: 0,
         },
         {
           kind: "token",
@@ -221,8 +225,11 @@ describe("E-09 done test: the drainer pre-flight", () => {
           after: "1000",
           delegateBefore: null,
           delegateAfter: ATTACKER,
+          delegatedAmountBefore: "0",
           delegatedAmountAfter: U64_MAX,
           ownerAfter: "user",
+          closeAuthorityBefore: null,
+          closeAuthorityAfter: null,
         },
       ],
     });

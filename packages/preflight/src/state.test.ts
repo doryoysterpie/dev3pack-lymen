@@ -43,6 +43,7 @@ describe("account data readers", () => {
       amount: "7",
       delegate: null,
       delegatedAmount: "0",
+      closeAuthority: null,
     });
     assert.equal(parseTokenAccount(token(USER, 7, 164)), null);
     const badTag = token(USER, 7);
@@ -83,8 +84,11 @@ describe("balance changes", () => {
         after: "0",
         delegateBefore: null,
         delegateAfter: null,
+        delegatedAmountBefore: "0",
         delegatedAmountAfter: "0",
         ownerAfter: null,
+        closeAuthorityBefore: null,
+        closeAuthorityAfter: null,
       },
     ]);
   });
