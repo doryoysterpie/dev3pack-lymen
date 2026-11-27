@@ -12,6 +12,7 @@ import {
   MAX_DATE_SECONDS,
   MAX_TRANSACTION_BYTES,
   parseReport,
+  RESIMULATION_TIMEOUT_MS,
   resimulateBundle,
   storeReport,
   type Report,
@@ -295,6 +296,23 @@ test("a failed re-simulation is recorded, keeps the report, and leaves any earli
     n: number;
   };
   assert.equal(n, 1);
+});
+
+test("a re-simulation that never answers counts as failed after the time limit", async () => {
+  assert.equal(RESIMULATION_TIMEOUT_MS, 15_000);
+  const db = openDatabase(":memory:");
+  const id = storeReport(db, parsed(fixture("drainer_device_1")), 1);
+  const never = (): Promise<never> => new Promise(() => {});
+  const started = Date.now();
+  assert.deepEqual(await resimulateBundle(db, id, never, 60, 20), {
+    status: "failed",
+  });
+  assert.ok(
+    Date.now() - started < 5_000,
+    "answered well before any client timeout",
+  );
+  assert.equal(loadBundle(db, id)?.resimulationFailedAt, 60);
+  assert.equal(loadBundle(db, id)?.resimulation, null);
 });
 
 test("re-simulation of a bundle with no transaction or no bundle runs nothing", async () => {

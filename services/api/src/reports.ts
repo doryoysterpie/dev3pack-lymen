@@ -18,6 +18,8 @@ export interface ReportOptions {
   readonly now?: () => number;
   /** Re-simulates stored bundles. Unset until the E-09 package lands; then no re-simulation runs. */
   readonly resimulator?: Resimulator;
+  /** How long a re-simulation may take before it counts as failed. Defaults to 15 s. */
+  readonly resimulationTimeoutMs?: number;
 }
 
 function sendJson(
@@ -96,6 +98,7 @@ async function postReport(
       sightingId,
       options.resimulator,
       now(),
+      options.resimulationTimeoutMs,
     );
     resimulation =
       outcome.status === "resimulated"

@@ -127,6 +127,32 @@ test("a failing re-simulator still answers 201 once and stores one sighting, so 
   );
 });
 
+test("a re-simulator that never answers still gets 201 once, after the time limit", async () => {
+  const hangingDb = openDatabase(":memory:");
+  const hanging = createApiServer({
+    db: hangingDb,
+    version: API_VERSION,
+    reports: {
+      now: () => 1_795_000_700,
+      resimulator: () => new Promise(() => {}),
+      resimulationTimeoutMs: 50,
+    },
+  });
+  const url = await listen(hanging);
+  const res = await post(url, JSON.stringify(FIXTURES.drainer_device_1));
+  assert.equal(res.status, 201);
+  assert.deepEqual(await res.json(), {
+    sighting_id: 1,
+    resimulation: "failed",
+  });
+  const { n } = hangingDb
+    .prepare("SELECT count(*) AS n FROM sightings")
+    .get() as {
+    n: number;
+  };
+  assert.equal(n, 1);
+});
+
 test("a report with no transaction answers resimulation no_transaction when a re-simulator is set", async () => {
   const res = await post(
     resimBase,

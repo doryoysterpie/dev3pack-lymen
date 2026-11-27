@@ -371,6 +371,22 @@ export type Resimulator = (
   transaction: Uint8Array,
 ) => Promise<{ readonly summary: unknown; readonly drainPattern: boolean }>;
 
+/**
+ * How long a re-simulation may take before it counts as failed. The report is already stored,
+ * so a re-simulator that never answers must not hold the client's request open until it retries
+ * and files the report twice.
+ */
+export const RESIMULATION_TIMEOUT_MS = 15_000;
+
+/** Rejects when `work` has not settled within `ms` milliseconds. */
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error("re-simulation timed out")), ms);
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
+
 export type ResimulationResult =
   | { readonly status: "no_bundle" | "no_transaction" | "failed" }
   | {
@@ -389,6 +405,7 @@ export async function resimulateBundle(
   sightingId: number,
   resimulate: Resimulator,
   now: number,
+  timeoutMs: number = RESIMULATION_TIMEOUT_MS,
 ): Promise<ResimulationResult> {
   const bundle = loadBundle(db, sightingId);
   if (bundle === null) return { status: "no_bundle" };
@@ -396,7 +413,7 @@ export async function resimulateBundle(
   let result: Awaited<ReturnType<Resimulator>>;
   let summaryJson: string;
   try {
-    result = await resimulate(bundle.transaction);
+    result = await withTimeout(resimulate(bundle.transaction), timeoutMs);
     summaryJson = canonicalJson(result.summary);
   } catch {
     // An RPC outage or a summary JSON cannot hold. The report stays stored; the failure is
