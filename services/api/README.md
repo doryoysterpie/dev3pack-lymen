@@ -16,6 +16,16 @@ The API migrates its database on start and serves `GET /health`, which returns t
 
 What the tests show, and no more: `src/organizer-key.test.ts` checks each key error's exact message for the bad files and values it tries (including the keypair JSON set as the value), so none of them carries the path, the seed or the variable's value, and checks that no printed or serialized form of the loaded key carries the seed. `src/index.test.ts` checks that start-up with the keypair JSON as the value prints no digit, so no byte of the key, to stderr.
 
+## Registrations (E-07)
+
+Set `REGISTRATION_SALT` in `.env` (at least 32 characters), then import the registration list, a JSON array of registration IDs:
+
+```bash
+npm run import-registrations -w @limen/api -- ../../fixtures/registrations.json
+```
+
+The database stores only HMAC-SHA256 hashes of the IDs, keyed by the salt. `fixtures/registrations.json` is a mock list of ten IDs. A real import from the organizer's applicant list is H-07.
+
 ## Test
 
 ```bash
@@ -29,3 +39,4 @@ npm test -w @limen/api
 | `src/organizer-key.test.ts` | The RFC 8032 test vector loads to its owed public key and signature; bad key files fail with clear errors                                                                                                                                                                                                                                                            |
 | `src/index.test.ts`         | Start-up with an unset, missing or unreadable key file, key material as the path, a port of only spaces, or a `.env` line that Node hands over as spaces or as the next line, exits 1 with one line; each `.env` layout tried reaches the API as Node reads it, and only an empty value gives 8787; a symlinked entry path still runs; a good key file serves health |
 | `src/main-module.test.ts`   | The entry check counts a script reached through a symlinked file or directory                                                                                                                                                                                                                                                                                        |
+| `src/registration.test.ts`  | A registration bound to one wallet refuses a second wallet, and nothing changes; hashes match Python's HMAC                                                                                                                                                                                                                                                          |

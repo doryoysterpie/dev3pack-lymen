@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node --env-file-if-exists=../../.env src/index.ts",
+    "import-registrations": "node --env-file-if-exists=../../.env src/registration.ts",
     "test": "node --test \"src/**/*.test.ts\""
   }
 }
