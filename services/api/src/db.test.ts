@@ -37,6 +37,7 @@ const OWED_SCHEMA: Record<string, string[]> = {
     "resimulated_at",
     "resimulation_matches",
     "drain_pattern",
+    "resimulation_failed_at",
   ],
   registrations: ["reg_hash", "wallet", "bound_at"],
   sessions: ["id", "name", "starts_at", "ends_at"],
@@ -193,4 +194,18 @@ test("an evidence bundle cannot record a simulation or a re-simulation without t
     /CHECK constraint failed/,
   );
   insert.run("AA==", 5, "bh", 2, 1, 0);
+});
+
+test("an evidence bundle cannot record a failed re-simulation without transaction bytes", () => {
+  const db = openDatabase(":memory:");
+  db.exec(
+    "INSERT INTO sightings (id, device_hash, qr_text, created_at) VALUES (1, 'd-1', 'qr', 1), (2, 'd-2', 'qr', 1)",
+  );
+  const insert = db.prepare(
+    `INSERT INTO evidence_bundles (sighting_id, transaction_b64, summary_json, program_ids_json,
+       recipients_json, reported_at, app_version, resimulation_failed_at)
+     VALUES (?, ?, '{}', '[]', '[]', 1, '0.1.0', 3)`,
+  );
+  assert.throws(() => insert.run(1, null), /CHECK constraint failed/);
+  insert.run(2, "AA==");
 });

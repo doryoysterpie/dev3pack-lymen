@@ -99,6 +99,62 @@ test("with a re-simulator set, the response says whether the stored bytes re-sim
   });
 });
 
+test("a failing re-simulator still answers 201 once and stores one sighting, so a retry is not needed", async () => {
+  const failingDb = openDatabase(":memory:");
+  const failing = createApiServer({
+    db: failingDb,
+    version: API_VERSION,
+    reports: {
+      now: () => 1_795_000_700,
+      resimulator: async () => {
+        throw new Error("rpc down");
+      },
+    },
+  });
+  const url = await listen(failing);
+  const res = await post(url, JSON.stringify(FIXTURES.drainer_device_1));
+  assert.equal(res.status, 201);
+  assert.deepEqual(await res.json(), {
+    sighting_id: 1,
+    resimulation: "failed",
+  });
+  const rows = failingDb
+    .prepare("SELECT resimulation_failed_at FROM evidence_bundles")
+    .all() as { resimulation_failed_at: number }[];
+  assert.deepEqual(
+    rows.map((r) => r.resimulation_failed_at),
+    [1_795_000_700],
+  );
+});
+
+test("a report with no transaction answers resimulation no_transaction when a re-simulator is set", async () => {
+  const res = await post(
+    resimBase,
+    JSON.stringify({
+      ...FIXTURES.drainer_device_1,
+      transaction: null,
+      simulation: null,
+    }),
+  );
+  assert.equal(res.status, 201);
+  assert.deepEqual(await res.json(), {
+    sighting_id: 2,
+    resimulation: "no_transaction",
+  });
+});
+
+test("a timestamp more than 300 s ahead of the server's clock is refused", async () => {
+  const res = await post(
+    base,
+    JSON.stringify({ ...FIXTURES.drainer_device_1, timestamp: 1_795_000_801 }),
+  );
+  assert.equal(res.status, 400);
+  assert.deepEqual(await res.json(), {
+    error: "invalid_report",
+    field: "timestamp",
+  });
+});
+
 test("a malformed report is refused with 400 naming the field, and nothing is stored", async () => {
   const before = (
     db.prepare("SELECT count(*) AS n FROM sightings").get() as { n: number }

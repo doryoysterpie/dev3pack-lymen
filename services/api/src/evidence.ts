@@ -17,6 +17,10 @@ const MAX_PAYLOAD_CHARS = 4096;
 const MAX_URL_CHARS = 2048;
 const MAX_SUMMARY_CHARS = 16384;
 const MAX_ADDRESSES = 64;
+/** How far ahead of the server's clock a report's timestamp may be, for phone clock drift. */
+export const MAX_CLOCK_AHEAD_S = 300;
+/** The last whole second a JavaScript Date can hold (8.64e15 ms). */
+export const MAX_DATE_SECONDS = 8_640_000_000_000;
 
 const REPORT_FIELDS = new Set([
   "device_id",
@@ -59,6 +63,8 @@ export interface Report {
 export interface StoredBundle extends Report {
   readonly sightingId: number;
   readonly receivedAt: number;
+  /** When the latest re-simulation was tried and failed; null once one succeeds. */
+  readonly resimulationFailedAt: number | null;
   readonly resimulation: {
     readonly at: number;
     readonly matches: boolean;
@@ -145,8 +151,11 @@ function transactionBytes(value: unknown): Uint8Array | null | undefined {
   return new Uint8Array(bytes);
 }
 
-/** Checks a parsed JSON report body. On failure, names the first field that failed. */
-export function parseReport(body: unknown): ParseResult {
+/**
+ * Checks a parsed JSON report body against the server's clock `now` (Unix seconds). On failure,
+ * names the first field that failed.
+ */
+export function parseReport(body: unknown, now: number): ParseResult {
   const fail = (field: string): ParseResult => ({ ok: false, field });
   if (!isPlainObject(body)) return fail("body");
   for (const key of Object.keys(body))
@@ -201,7 +210,13 @@ export function parseReport(body: unknown): ParseResult {
   if (programIds === null) return fail("program_ids");
   const recipients = addressList(body.recipients);
   if (recipients === null) return fail("recipients");
-  if (!isUnixSeconds(timestamp)) return fail("timestamp");
+  if (
+    !isUnixSeconds(timestamp) ||
+    timestamp > now + MAX_CLOCK_AHEAD_S ||
+    timestamp > MAX_DATE_SECONDS
+  ) {
+    return fail("timestamp");
+  }
   if (
     typeof app_version !== "string" ||
     !/^[0-9A-Za-z.+-]{1,32}$/.test(app_version)
@@ -299,6 +314,7 @@ interface BundleRow {
   resimulated_at: number | null;
   resimulation_matches: number | null;
   drain_pattern: number | null;
+  resimulation_failed_at: number | null;
 }
 
 /** Loads a stored sighting and its bundle, or null when there is none. */
@@ -334,6 +350,7 @@ export function loadBundle(
     reportedAt: row.reported_at,
     appVersion: row.app_version,
     wallet: row.wallet,
+    resimulationFailedAt: row.resimulation_failed_at,
     resimulation:
       row.resimulated_at === null
         ? null
@@ -355,7 +372,7 @@ export type Resimulator = (
 ) => Promise<{ readonly summary: unknown; readonly drainPattern: boolean }>;
 
 export type ResimulationResult =
-  | { readonly status: "no_bundle" | "no_transaction" }
+  | { readonly status: "no_bundle" | "no_transaction" | "failed" }
   | {
       readonly status: "resimulated";
       readonly matches: boolean;
@@ -376,11 +393,23 @@ export async function resimulateBundle(
   const bundle = loadBundle(db, sightingId);
   if (bundle === null) return { status: "no_bundle" };
   if (bundle.transaction === null) return { status: "no_transaction" };
-  const result = await resimulate(bundle.transaction);
-  const summaryJson = canonicalJson(result.summary);
+  let result: Awaited<ReturnType<Resimulator>>;
+  let summaryJson: string;
+  try {
+    result = await resimulate(bundle.transaction);
+    summaryJson = canonicalJson(result.summary);
+  } catch {
+    // An RPC outage or a summary JSON cannot hold. The report stays stored; the failure is
+    // recorded, and any earlier outcome is left as it was.
+    db.prepare(
+      "UPDATE evidence_bundles SET resimulation_failed_at = ? WHERE sighting_id = ?",
+    ).run(now, sightingId);
+    return { status: "failed" };
+  }
   const matches = summaryJson === bundle.summaryJson;
   db.prepare(
-    `UPDATE evidence_bundles SET resimulated_at = ?, resimulation_matches = ?, drain_pattern = ?
+    `UPDATE evidence_bundles SET resimulated_at = ?, resimulation_matches = ?, drain_pattern = ?,
+       resimulation_failed_at = NULL
      WHERE sighting_id = ?`,
   ).run(now, matches ? 1 : 0, result.drainPattern ? 1 : 0, sightingId);
   return {

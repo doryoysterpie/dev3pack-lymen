@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
+import { decodeBase58 } from "./base58.ts";
 import { openDatabase } from "./db.ts";
 import {
   canonicalJson,
   loadBundle,
+  MAX_CLOCK_AHEAD_S,
+  MAX_DATE_SECONDS,
   MAX_TRANSACTION_BYTES,
   parseReport,
   resimulateBundle,
@@ -25,8 +28,11 @@ const FIXTURES = JSON.parse(
 
 const fixture = (name: string): Body => structuredClone(FIXTURES[name]);
 
+/** The server clock the tests parse against: after both fixture timestamps. */
+const NOW = 1_795_000_100;
+
 function parsed(body: unknown): Report {
-  const result = parseReport(body);
+  const result = parseReport(body, NOW);
   assert.ok(
     result.ok,
     `report should parse, failed on ${result.ok ? "" : result.field}`,
@@ -34,8 +40,8 @@ function parsed(body: unknown): Report {
   return result.report;
 }
 
-function failedField(body: unknown): string {
-  const result = parseReport(body);
+function failedField(body: unknown, now: number = NOW): string {
+  const result = parseReport(body, now);
   assert.equal(result.ok, false);
   return result.ok ? "" : result.field;
 }
@@ -43,7 +49,7 @@ function failedField(body: unknown): string {
 const RECIPIENT = "FZegoJg97QC3nCnjTqW473XZK2osgy2xX5vRq8zccu2o";
 const VICTIM_1 = "4FLJyfdzkWbs2yhhpymoZkudtsuJ3S8A8ft81gTWAPRa";
 
-test("a stored fixture report loads back with every owed bundle field and no wallet", () => {
+test("a stored fixture report loads back with every owed bundle field and no wallet field", () => {
   const db = openDatabase(":memory:");
   const body = fixture("drainer_device_1");
   const id = storeReport(db, parsed(body), 1_795_000_100);
@@ -84,8 +90,42 @@ test("a stored fixture report loads back with every owed bundle field and no wal
   );
   const raw = db.prepare("SELECT * FROM sightings").all();
   assert.equal(JSON.stringify(raw).includes("fixture-device-01"), false);
+  // The wallet field is not stored: the victim's address appears in no column as text.
   const stored = db.prepare("SELECT * FROM evidence_bundles").all();
   assert.equal(JSON.stringify(stored).includes(VICTIM_1), false);
+  // The transaction bytes still name the signing wallet, as account key 0: bytes 69 to 100,
+  // after one signature count byte, a 64-byte signature, a 3-byte header and a key count byte.
+  assert.ok(bundle.transaction);
+  assert.deepEqual(
+    Buffer.from(bundle.transaction.subarray(69, 101)),
+    Buffer.from(decodeBase58(VICTIM_1) ?? []),
+  );
+});
+
+test("the timestamp may be at most 300 s ahead of the server's clock and inside the Date range", () => {
+  const body = fixture("drainer_device_1");
+  assert.equal(MAX_CLOCK_AHEAD_S, 300);
+  assert.equal(parsed({ ...body, timestamp: NOW + 300 }).reportedAt, NOW + 300);
+  assert.equal(failedField({ ...body, timestamp: NOW + 301 }), "timestamp");
+  // Milliseconds sent as seconds land far in the future and are refused.
+  assert.equal(failedField({ ...body, timestamp: NOW * 1000 }), "timestamp");
+  // 8640000000000 s is the last second a JavaScript Date can hold.
+  assert.equal(MAX_DATE_SECONDS, 8_640_000_000_000);
+  assert.equal(
+    new Date(MAX_DATE_SECONDS * 1000).toISOString(),
+    "+275760-09-13T00:00:00.000Z",
+  );
+  const late = MAX_DATE_SECONDS;
+  const atLimit = parseReport({ ...body, timestamp: late }, late);
+  assert.equal(atLimit.ok, true);
+  assert.equal(
+    failedField({ ...body, timestamp: late + 1 }, late),
+    "timestamp",
+  );
+  assert.equal(
+    failedField({ ...body, timestamp: Number.MAX_SAFE_INTEGER }, late),
+    "timestamp",
+  );
 });
 
 test("the wallet is stored only when the report opts in with include_wallet", () => {
@@ -207,6 +247,54 @@ test("re-simulation receives exactly the stored bytes and records whether the su
     matches: false,
     drainPattern: false,
   });
+});
+
+test("a failed re-simulation is recorded, keeps the report, and leaves any earlier outcome", async () => {
+  const db = openDatabase(":memory:");
+  const body = fixture("drainer_device_1");
+  const id = storeReport(db, parsed(body), 1);
+  const throwing = async (): Promise<never> => {
+    throw new Error("rpc down");
+  };
+  assert.deepEqual(await resimulateBundle(db, id, throwing, 20), {
+    status: "failed",
+  });
+  assert.equal(loadBundle(db, id)?.resimulationFailedAt, 20);
+  assert.equal(loadBundle(db, id)?.resimulation, null);
+
+  // A later success records its outcome and clears the failure.
+  await resimulateBundle(
+    db,
+    id,
+    async () => ({ summary: body.summary, drainPattern: true }),
+    30,
+  );
+  assert.equal(loadBundle(db, id)?.resimulationFailedAt, null);
+  // A failure after that leaves the successful outcome in place.
+  assert.deepEqual(await resimulateBundle(db, id, throwing, 40), {
+    status: "failed",
+  });
+  assert.deepEqual(loadBundle(db, id)?.resimulation, {
+    at: 30,
+    matches: true,
+    drainPattern: true,
+  });
+  assert.equal(loadBundle(db, id)?.resimulationFailedAt, 40);
+
+  // A summary that JSON cannot hold fails the same way.
+  assert.deepEqual(
+    await resimulateBundle(
+      db,
+      id,
+      async () => ({ summary: { lamports: 1n }, drainPattern: true }),
+      50,
+    ),
+    { status: "failed" },
+  );
+  const { n } = db.prepare("SELECT count(*) AS n FROM sightings").get() as {
+    n: number;
+  };
+  assert.equal(n, 1);
 });
 
 test("re-simulation of a bundle with no transaction or no bundle runs nothing", async () => {

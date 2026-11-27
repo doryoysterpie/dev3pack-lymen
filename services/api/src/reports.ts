@@ -79,12 +79,15 @@ async function postReport(
     sendJson(res, 400, { error: "invalid_json" });
     return;
   }
-  const result = parseReport(body);
+  const now = options.now ?? (() => Math.floor(Date.now() / 1000));
+  const result = parseReport(body, now());
   if (!result.ok) {
     sendJson(res, 400, { error: "invalid_report", field: result.field });
     return;
   }
-  const now = options.now ?? (() => Math.floor(Date.now() / 1000));
+  // From here the report is stored, so the answer is 201 whatever the re-simulation does: a
+  // failed re-simulation is recorded on the bundle and answered as "failed", never as a 500
+  // that would make a client retry and file the report twice.
   const sightingId = storeReport(db, result.report, now());
   let resimulation: string = "not_run";
   if (options.resimulator !== undefined) {
