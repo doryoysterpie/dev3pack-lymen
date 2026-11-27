@@ -14,8 +14,9 @@ export interface StartedApi {
 }
 
 /**
- * Reads API_PORT: unset or empty gives 8787; otherwise it must be the digits of an integer from 1
- * to 65535. The error never echoes the value.
+ * Reads API_PORT: unset or empty (an `API_PORT=` line in .env) gives 8787; anything else, a
+ * value of only spaces included, must be the digits of an integer from 1 to 65535. The error
+ * never echoes the value.
  */
 export function parsePort(value: string | undefined): number {
   if (value === undefined || value === "") return 8787;
@@ -57,7 +58,8 @@ if (isMainModule(import.meta.url)) {
   start().then(
     ({ url }) => console.log(`limen api ${API_VERSION} listening on ${url}`),
     (err: unknown) => {
-      // One readable line and no stack trace. No error here carries an environment value.
+      // One readable line and no stack trace. No key error carries ORGANIZER_KEYPAIR_PATH's
+      // value or key material. Other errors may name the host or port, which are not secret.
       console.error(
         `limen api: ${err instanceof Error ? err.message : String(err)}`,
       );

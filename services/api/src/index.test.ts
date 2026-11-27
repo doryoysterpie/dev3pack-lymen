@@ -1,8 +1,12 @@
 // E-02: start-up. A missing or unreadable organizer key file stops the API with one clear line
-// on stderr and exit code 1, not a stack trace, and no line carries an environment value. A good
-// key file starts it and health answers.
+// on stderr and exit code 1, not a stack trace, and no line carries ORGANIZER_KEYPAIR_PATH's value
+// or key material. A good key file starts it and health answers.
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import {
+  spawn,
+  spawnSync,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
 import {
   chmodSync,
   mkdtempSync,
@@ -156,7 +160,7 @@ test("API_PORT is 8787 when unset or empty, and otherwise an integer from 1 to 6
   }
 });
 
-test("start-up with a blank API_PORT exits 1 with one line, rather than binding a random port", () => {
+test("start-up with an API_PORT of only spaces exits 1 with one line, rather than binding a random port", () => {
   withTempDir((dir) => {
     const keyPath = join(dir, "organizer.json");
     writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
@@ -178,36 +182,77 @@ test("the printed address brackets an IPv6 host, so it parses as a URL", () => {
   assert.equal(listenUrl("localhost", 80), "http://localhost:80");
 });
 
+test("an empty API_PORT= line in .env reaches the API as an empty string, which gives 8787", () => {
+  withTempDir((dir) => {
+    const envFile = join(dir, ".env");
+    writeFileSync(envFile, "API_PORT=\nAPI_HOST=\n");
+    const seen = spawnSync(
+      process.execPath,
+      [
+        `--env-file=${envFile}`,
+        "-e",
+        "process.stdout.write(JSON.stringify(process.env.API_PORT))",
+      ],
+      { env: { PATH: process.env.PATH ?? "" }, encoding: "utf8" },
+    );
+    assert.equal(seen.stdout, '""');
+    assert.equal(parsePort(JSON.parse(seen.stdout) as string), 8787);
+  });
+});
+
+/**
+ * Starts the API on a port that was free a moment ago. If something takes that port first, the
+ * API exits with EADDRINUSE, and the start is tried again on a fresh port, up to five times.
+ */
+async function startOnFreePort(
+  env: Record<string, string>,
+  choosePort: () => Promise<number> = freePort,
+): Promise<{
+  child: ChildProcessWithoutNullStreams;
+  url: string;
+  port: number;
+  attempts: number;
+}> {
+  for (let attempt = 1; ; attempt++) {
+    const port = await choosePort();
+    const child = spawn(process.execPath, [ENTRY], {
+      env: { PATH: process.env.PATH ?? "", ...env, API_PORT: String(port) },
+    });
+    const started = await new Promise<{ url: string } | { exit: string }>(
+      (resolve) => {
+        let out = "";
+        let err = "";
+        child.stdout.setEncoding("utf8");
+        child.stderr.setEncoding("utf8");
+        child.stderr.on("data", (chunk: string) => (err += chunk));
+        child.stdout.on("data", (chunk: string) => {
+          out += chunk;
+          const match =
+            /^limen api 0\.1\.0 listening on (http:\/\/127\.0\.0\.1:\d+)\n/.exec(
+              out,
+            );
+          if (match?.[1]) resolve({ url: match[1] });
+        });
+        child.once("exit", (code) => resolve({ exit: `code ${code}: ${err}` }));
+      },
+    );
+    if ("url" in started)
+      return { child, url: started.url, port, attempts: attempt };
+    if (!started.exit.includes("EADDRINUSE") || attempt === 5) {
+      throw new Error(`API exited early with ${started.exit}`);
+    }
+  }
+}
+
 test("start-up with a good key file serves health with the API version", async () => {
   const dir = mkdtempSync(join(tmpdir(), "limen-start-"));
   const keyPath = join(dir, "organizer.json");
   writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
-  const port = await freePort();
-  const child = spawn(process.execPath, [ENTRY], {
-    env: {
-      PATH: process.env.PATH ?? "",
-      ORGANIZER_KEYPAIR_PATH: keyPath,
-      DATABASE_PATH: join(dir, "limen.db"),
-      API_PORT: String(port),
-    },
-    stdio: ["ignore", "pipe", "pipe"],
+  const { child, url, port } = await startOnFreePort({
+    ORGANIZER_KEYPAIR_PATH: keyPath,
+    DATABASE_PATH: join(dir, "limen.db"),
   });
   try {
-    const url = await new Promise<string>((resolve, reject) => {
-      let out = "";
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (chunk: string) => {
-        out += chunk;
-        const match =
-          /^limen api 0\.1\.0 listening on (http:\/\/127\.0\.0\.1:\d+)\n/.exec(
-            out,
-          );
-        if (match?.[1]) resolve(match[1]);
-      });
-      child.once("exit", (code) =>
-        reject(new Error(`API exited early with code ${code}`)),
-      );
-    });
     assert.equal(url, `http://127.0.0.1:${port}`);
     const res = await fetch(`${url}/health`);
     assert.equal(res.status, 200);
@@ -218,6 +263,29 @@ test("start-up with a good key file serves health with the API version", async (
     });
   } finally {
     child.kill();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a port taken between the probe and the start is retried rather than failing the test", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "limen-start-"));
+  const keyPath = join(dir, "organizer.json");
+  writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
+  // Another listener holds the first port handed out, as a parallel test might.
+  const blocker = createServer();
+  await new Promise<void>((resolve) => blocker.listen(0, "127.0.0.1", resolve));
+  const held = (blocker.address() as AddressInfo).port;
+  const ports = [held];
+  try {
+    const { child, port, attempts } = await startOnFreePort(
+      { ORGANIZER_KEYPAIR_PATH: keyPath, DATABASE_PATH: join(dir, "limen.db") },
+      async () => ports.shift() ?? freePort(),
+    );
+    child.kill();
+    assert.equal(attempts, 2, "the first start hit EADDRINUSE and was retried");
+    assert.notEqual(port, held);
+  } finally {
+    await new Promise<void>((resolve) => blocker.close(() => resolve()));
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -15,6 +15,7 @@ import { test } from "node:test";
 import { inspect } from "node:util";
 
 import {
+  isKeyMaterial,
   loadOrganizerKey,
   OrganizerKeyError,
   type OrganizerKeyErrorCode,
@@ -207,10 +208,14 @@ test("malformed key files fail with the malformed error and never echo their con
   ];
   for (const content of malformed) {
     withKeyFile(content, (path) => {
-      assertKeyError(
+      const err = assertKeyError(
         () => loadOrganizerKey(path),
         "malformed",
-        /is not a Solana keypair: expected a JSON array of 64 integers from 0 to 255\.$/,
+        /^The file ORGANIZER_KEYPAIR_PATH names is not a Solana keypair: expected a JSON array of 64 integers from 0 to 255\.$/,
+      );
+      assert.ok(
+        !err.message.includes(path),
+        "the message names the variable, not the path",
       );
     });
   }
@@ -222,10 +227,53 @@ test("a key file whose public half does not match its secret half fails with the
     ...new Array<number>(32).fill(0),
   ];
   withKeyFile(JSON.stringify(wrongPublic), (path) => {
-    assertKeyError(
+    const err = assertKeyError(
       () => loadOrganizerKey(path),
       "mismatch",
-      /is inconsistent: its public key does not match its secret key\.$/,
+      /^The file ORGANIZER_KEYPAIR_PATH names is inconsistent: its public key does not match its secret key\.$/,
+    );
+    assert.ok(
+      !err.message.includes(path),
+      "the message names the variable, not the path",
     );
   });
+});
+
+test("key material is told from a path by parsing it, so a path that starts with [ still loads", () => {
+  // A real keypair file reached by the relative path "[dev]/organizer.json", which starts with "[".
+  const dir = mkdtempSync(join(tmpdir(), "limen-key-"));
+  const cwd = process.cwd();
+  try {
+    mkdirSync(join(dir, "[dev]"));
+    writeFileSync(
+      join(dir, "[dev]", "organizer.json"),
+      JSON.stringify(rfcKeypairBytes),
+    );
+    process.chdir(dir);
+    assert.equal(
+      Buffer.from(loadOrganizerKey("[dev]/organizer.json").publicKey).toString(
+        "hex",
+      ),
+      RFC_PUBLIC,
+    );
+  } finally {
+    process.chdir(cwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+  for (const value of [
+    "[dev]/organizer.json",
+    "[1,2",
+    '["not", "bytes"]',
+    "{}",
+    '{"a":"b"}',
+  ]) {
+    assert.equal(isKeyMaterial(value), false, value);
+  }
+  for (const value of [
+    JSON.stringify(rfcKeypairBytes),
+    JSON.stringify({ secretKey: rfcKeypairBytes }),
+    " [1, 2, 3] ",
+  ]) {
+    assert.equal(isKeyMaterial(value), true, value);
+  }
 });

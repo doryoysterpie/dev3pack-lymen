@@ -78,6 +78,34 @@ function parseKeypair(text: string): Uint8Array | null {
   return Uint8Array.from(value as number[]);
 }
 
+function isByteArray(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((b) => Number.isInteger(b) && b >= 0 && b <= 255)
+  );
+}
+
+/**
+ * True when the variable's value is key material rather than a path: it parses as JSON and is
+ * an array of byte values, or an object holding one. A path that merely starts with "[" or "{",
+ * such as "[dev]/organizer.json", is not.
+ */
+export function isKeyMaterial(value: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return false;
+  }
+  if (isByteArray(parsed)) return true;
+  return (
+    typeof parsed === "object" &&
+    parsed !== null &&
+    Object.values(parsed).some(isByteArray)
+  );
+}
+
 /**
  * Loads the organizer keypair from `path`. Throws OrganizerKeyError when the path is unset, the
  * file cannot be read, its content is not a 64-byte Solana keypair, or its public half does not
@@ -91,7 +119,7 @@ export function loadOrganizerKey(path: string | undefined): OrganizerKey {
     );
   }
 
-  if (/^\s*[[{]/.test(path)) {
+  if (isKeyMaterial(path)) {
     throw new OrganizerKeyError(
       "not_a_path",
       "ORGANIZER_KEYPAIR_PATH holds what looks like key material, not a file path. Put the keypair in a file outside git and set the variable to that file's path.",
