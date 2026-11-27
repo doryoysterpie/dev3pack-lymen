@@ -1,13 +1,26 @@
 // E-07 done test: the same registration ID cannot bind a second wallet.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { openDatabase } from "./db.ts";
 import {
   bindRegistration,
+  decodeBase58,
+  describeParseFailure,
   importRegistrations,
+  isWalletAddress,
   loadRegistrationSalt,
   registrationForWallet,
   registrationHash,
@@ -20,9 +33,10 @@ const MOCK_LIST = JSON.parse(
     "utf8",
   ),
 ) as string[];
-// Synthetic base58 strings shaped like Solana addresses. Not real keys.
-const WALLET_A = "WaLetA" + "1".repeat(38);
-const WALLET_B = "WaLetB" + "1".repeat(38);
+// Base58 of SHA-256("limen:test-wallet:A") and of "...:B", computed with @solana/web3.js:
+// 32-byte values that are not keys anyone holds.
+const WALLET_A = "6mmVXu9m4A3FQsggw4qxZzyjkA6GX5XKDK1cMUcmTF14";
+const WALLET_B = "Fah9ZWskQePyfjYujnsp1roacZEL2u2QuvU7qgvqXYxW";
 const T = 1_795_000_000;
 
 function listed(): DatabaseSync {
@@ -159,9 +173,11 @@ test("an ID not on the list, a malformed ID and a malformed wallet are refused w
   for (const wallet of [
     "",
     "0".repeat(44),
-    "WaLetA" + "1".repeat(39),
-    "WaLetA1",
-    "WaLetO" + "1".repeat(38),
+    "z".repeat(44), // 33 bytes
+    "WaLetA" + "1".repeat(38), // 33 bytes
+    "1".repeat(31), // 31 bytes
+    WALLET_A.slice(0, -1) + "O", // O is not base58
+    WALLET_A + "1", // 45 characters
   ]) {
     assert.deepEqual(bindRegistration(db, SALT, "LMN-0001", wallet, T), {
       ok: false,
@@ -195,4 +211,133 @@ test("REGISTRATION_SALT must be set to at least 32 characters, and the error nev
     message:
       "REGISTRATION_SALT must be set to at least 32 characters (it is too short). Generate one with: openssl rand -base64 32",
   });
+});
+
+test("a wallet is base58 that decodes to exactly 32 bytes, per an independent decoder", () => {
+  // Expected bytes from @solana/web3.js PublicKey.toBytes().
+  assert.equal(
+    Buffer.from(
+      decodeBase58("11111111111111111111111111111111") ?? [],
+    ).toString("hex"),
+    "00".repeat(32),
+  );
+  assert.equal(
+    Buffer.from(
+      decodeBase58("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA") ?? [],
+    ).toString("hex"),
+    "06ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a9",
+  );
+  assert.equal(
+    Buffer.from(decodeBase58(WALLET_A) ?? []).toString("hex"),
+    "55c24c24872557ffd8028d2ab1ccd9b38095d52e048d2987915cb8ba970fd96b",
+  );
+  const leadingZero = decodeBase58(
+    "14jEAGAcW7fYoc6jz4dPgj9bGr3FvUreydWGvg6eMm5Q",
+  );
+  assert.equal(leadingZero?.length, 32);
+  assert.equal(leadingZero?.[0], 0);
+  for (const ok of [
+    WALLET_A,
+    WALLET_B,
+    "11111111111111111111111111111111",
+    "14jEAGAcW7fYoc6jz4dPgj9bGr3FvUreydWGvg6eMm5Q",
+  ]) {
+    assert.equal(isWalletAddress(ok), true, ok);
+  }
+  for (const bad of [
+    "z".repeat(44),
+    "WaLetA" + "1".repeat(38),
+    "1".repeat(31),
+    "1".repeat(33),
+    "0OIl",
+  ]) {
+    assert.equal(isWalletAddress(bad), false, bad);
+  }
+});
+
+test("an ID with non-ASCII letters is refused, not mapped onto an ASCII ID by upper-casing", () => {
+  const db = listed();
+  importRegistrations(db, SALT, ["LMN-S1", "ST-0001", "STRASSE"]);
+  for (const id of [
+    "lmn-\u017f1",
+    "\ufb06-0001",
+    "stra\u00dfe",
+    "LMN-\uff10\uff10\uff10\uff11",
+  ]) {
+    assert.equal(registrationHash(SALT, id), null, id);
+    assert.deepEqual(
+      bindRegistration(db, SALT, id, WALLET_A, T),
+      { ok: false, reason: "invalid_registration_id" },
+      id,
+    );
+    assert.throws(() => importRegistrations(db, SALT, [id]), {
+      message:
+        "registration 0 is not 1 to 64 characters of [A-Za-z0-9_-] after trimming",
+    });
+  }
+  assert.ok(rows(db).every((r) => r.wallet === null));
+});
+
+test("a list file that is not JSON is described by line and column at most, never quoted", () => {
+  const inputs = [
+    "[LMN-0001, LMN-0002]",
+    "LMN-0001\nLMN-0002\nLMN-0003",
+    '["LMN-0001",\n "LMN-0002",\n]',
+    '["LMN-0001"',
+    "",
+  ];
+  const described = inputs.map((text) => {
+    try {
+      JSON.parse(text);
+    } catch (err) {
+      return describeParseFailure(err);
+    }
+    return "parsed";
+  });
+  for (const d of described) {
+    assert.match(d, /^is not valid JSON( at line \d+, column \d+)?$/);
+    assert.ok(!d.includes("LMN"));
+  }
+  assert.equal(described[3], "is not valid JSON at line 1, column 12");
+});
+
+const IMPORT_TOOL = fileURLToPath(
+  new URL("./registration.ts", import.meta.url),
+);
+
+test("the import tool, run through a symlink, refuses a malformed list without printing its IDs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "limen-reg-"));
+  try {
+    const link = join(dir, "import-registrations.ts");
+    symlinkSync(IMPORT_TOOL, link);
+    const list = join(dir, "list.json");
+    writeFileSync(list, "[LMN-0001, LMN-0002]");
+    const env = {
+      PATH: process.env.PATH ?? "",
+      REGISTRATION_SALT: SALT,
+      DATABASE_PATH: join(dir, "limen.db"),
+    };
+    const usage = spawnSync(process.execPath, [link], {
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(usage.status, 1);
+    assert.equal(
+      usage.stderr,
+      "limen registrations: usage: npm run import-registrations -w @limen/api -- <file>\n",
+    );
+    const bad = spawnSync(process.execPath, [link, list], {
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(bad.status, 1);
+    assert.equal(bad.stdout, "");
+    assert.equal(
+      bad.stderr,
+      `limen registrations: registration file ${list} is not valid JSON\n`,
+    );
+    assert.ok(!bad.stderr.includes("LMN"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

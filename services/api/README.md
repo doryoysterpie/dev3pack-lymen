@@ -24,7 +24,7 @@ Set `REGISTRATION_SALT` in `.env` (at least 32 characters), then import the regi
 npm run import-registrations -w @limen/api -- ../../fixtures/registrations.json
 ```
 
-The database stores only HMAC-SHA256 hashes of the IDs, keyed by the salt. `fixtures/registrations.json` is a mock list of ten IDs. A real import from the organizer's applicant list is H-07.
+The database stores only HMAC-SHA256 hashes of the IDs, keyed by the salt. An ID must be 1 to 64 ASCII letters, digits, `_` or `-` after trimming; it is upper-cased only after that check, so no other letter can map onto it. A wallet must be base58 that decodes to exactly 32 bytes. If the list file is not valid JSON, the tool names the file and, when the parser gives one, the line and column, never the file's content. `fixtures/registrations.json` is a mock list of ten IDs. A real import from the organizer's applicant list is H-07.
 
 ## Test
 
@@ -39,4 +39,4 @@ npm test -w @limen/api
 | `src/organizer-key.test.ts` | The RFC 8032 test vector loads to its owed public key and signature; bad key files fail with clear errors                                                                                                                                                                                                                                                            |
 | `src/index.test.ts`         | Start-up with an unset, missing or unreadable key file, key material as the path, a port of only spaces, or a `.env` line that Node hands over as spaces or as the next line, exits 1 with one line; each `.env` layout tried reaches the API as Node reads it, and only an empty value gives 8787; a symlinked entry path still runs; a good key file serves health |
 | `src/main-module.test.ts`   | The entry check counts a script reached through a symlinked file or directory                                                                                                                                                                                                                                                                                        |
-| `src/registration.test.ts`  | A registration bound to one wallet refuses a second wallet, and nothing changes; hashes match Python's HMAC                                                                                                                                                                                                                                                          |
+| `src/registration.test.ts`  | A registration bound to one wallet refuses a second wallet, and nothing changes; hashes match Python's HMAC; wallets must decode to 32 bytes; non-ASCII IDs are refused; the import tool runs through a symlink and never quotes a malformed list                                                                                                                    |
