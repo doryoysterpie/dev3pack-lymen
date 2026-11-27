@@ -7,12 +7,18 @@ import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
 import { Button, ScrollView, StyleSheet, Text, View } from "react-native";
 
-import { classifyQr, type QrClass } from "./src/qr/classify.ts";
-import { describeQr } from "./src/qr/describe.ts";
+import type { CardText } from "./src/pay/card-text.ts";
+import { loadRecipientLists } from "./src/pay/recipient-lists.ts";
+import recipientListsJson from "./src/pay/recipient-lists.json";
+import { resultCard } from "./src/result-card.ts";
+import { CardView } from "./src/ui/CardView.tsx";
+
+// Loaded once. A list entry that is not a public key fails here, at start-up.
+const RECIPIENT_LISTS = loadRecipientLists(recipientListsJson);
 
 interface Scan {
   readonly text: string;
-  readonly result: QrClass;
+  readonly card: CardText;
 }
 
 export default function App() {
@@ -22,7 +28,10 @@ export default function App() {
   // The scanner can report the same QR several times before the screen
   // changes. Only the first report is kept.
   const onBarcodeScanned = ({ data }: BarcodeScanningResult) => {
-    setScan((current) => current ?? { text: data, result: classifyQr(data) });
+    setScan(
+      (current) =>
+        current ?? { text: data, card: resultCard(data, RECIPIENT_LISTS) },
+    );
   };
 
   if (permission === null) {
@@ -50,11 +59,9 @@ export default function App() {
   }
 
   if (scan !== null) {
-    const summary = describeQr(scan.result);
     return (
       <ScrollView contentContainerStyle={styles.card}>
-        <Text style={styles.title}>{summary.title}</Text>
-        <Text style={styles.body}>{summary.detail}</Text>
+        <CardView card={scan.card} />
         <Text style={styles.label}>Scanned text</Text>
         <Text style={styles.raw} selectable>
           {scan.text}
@@ -88,7 +95,6 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   card: { gap: 12, padding: 24, paddingTop: 64 },
-  title: { fontSize: 22, fontWeight: "600" },
   body: { fontSize: 16, lineHeight: 22 },
   label: { fontSize: 13, fontWeight: "600", marginTop: 12 },
   raw: { fontFamily: "monospace", fontSize: 13 },

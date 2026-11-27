@@ -1,0 +1,166 @@
+{
+  "unit": "E-08",
+  "about": "Solana Pay transfer request URLs and the card result each one owes, checked against the lists below. The public keys here are 32-byte values generated at random for this fixture. mintDecimals, when present, is the SPL mint's decimals passed to the card builder.",
+  "lists": {
+    "organizers": ["3vMQ3uubVTa1BQf9cQE5FETCDhSP5ZbLjfv87zvvMe7p"],
+    "flagged": ["9tvU9qFD4Qiq3DFut32Bq1TgU3nEkrUqZdVy7ELe1uTD"]
+  },
+  "cases": [
+    {
+      "name": "allowlisted recipient shows as organizer",
+      "text": "solana:3vMQ3uubVTa1BQf9cQE5FETCDhSP5ZbLjfv87zvvMe7p?amount=2.5&label=limen%20organizer&message=Build%20station%20fee",
+      "owed": {
+        "ok": true,
+        "card": {
+          "recipient": "3vMQ3uubVTa1BQf9cQE5FETCDhSP5ZbLjfv87zvvMe7p",
+          "recipientStatus": "organizer",
+          "amount": "2.5",
+          "amountCheck": "within-decimals",
+          "token": { "kind": "sol" },
+          "references": [],
+          "label": "limen organizer",
+          "message": "Build station fee",
+          "memo": null
+        }
+      }
+    },
+    {
+      "name": "listed recipient shows as flagged, even with an organizer label",
+      "text": "solana:9tvU9qFD4Qiq3DFut32Bq1TgU3nEkrUqZdVy7ELe1uTD?amount=10&label=limen%20organizer",
+      "owed": {
+        "ok": true,
+        "card": {
+          "recipient": "9tvU9qFD4Qiq3DFut32Bq1TgU3nEkrUqZdVy7ELe1uTD",
+          "recipientStatus": "flagged",
+          "amount": "10",
+          "amountCheck": "within-decimals",
+          "token": { "kind": "sol" },
+          "references": [],
+          "label": "limen organizer",
+          "message": null,
+          "memo": null
+        }
+      }
+    },
+    {
+      "name": "unlisted recipient, SPL token with reference and memo, mint decimals unknown",
+      "text": "solana:GsJrhpq3YeSBYmKAtkbQFjYN9EoLJvVJvfvs9pTQ84Hc?amount=0.01&spl-token=EzamibQgq4KbhJm44Wx8dFP13xmDrXZX5hBLhrVJnYDT&reference=AuR5Jv2HMAafLfnVXnVyRL7dN31uXQXwbSwAmFrBfPLA&memo=Order%2042",
+      "owed": {
+        "ok": true,
+        "card": {
+          "recipient": "GsJrhpq3YeSBYmKAtkbQFjYN9EoLJvVJvfvs9pTQ84Hc",
+          "recipientStatus": "unlisted",
+          "amount": "0.01",
+          "amountCheck": "decimals-not-checked",
+          "token": {
+            "kind": "spl",
+            "mint": "EzamibQgq4KbhJm44Wx8dFP13xmDrXZX5hBLhrVJnYDT"
+          },
+          "references": ["AuR5Jv2HMAafLfnVXnVyRL7dN31uXQXwbSwAmFrBfPLA"],
+          "label": null,
+          "message": null,
+          "memo": "Order 42"
+        }
+      }
+    },
+    {
+      "name": "SPL token amount within the mint's six decimals",
+      "text": "solana:GsJrhpq3YeSBYmKAtkbQFjYN9EoLJvVJvfvs9pTQ84Hc?amount=0.000001&spl-token=EzamibQgq4KbhJm44Wx8dFP13xmDrXZX5hBLhrVJnYDT",
+      "mintDecimals": 6,
+      "owed": {
+        "ok": true,
+        "card": {
+          "recipient": "GsJrhpq3YeSBYmKAtkbQFjYN9EoLJvVJvfvs9pTQ84Hc",
+          "recipientStatus": "unlisted",
+          "amount": "0.000001",
+          "amountCheck": "within-decimals",
+          "token": {
+            "kind": "spl",
+            "mint": "EzamibQgq4KbhJm44Wx8dFP13xmDrXZX5hBLhrVJnYDT"
+          },
+          "references": [],
+          "label": null,
+          "message": null,
+          "memo": null
+        }
+      }
+    },
+    {
+      "name": "no amount, left to the wallet",
+      "text": "solana:3vMQ3uubVTa1BQf9cQE5FETCDhSP5ZbLjfv87zvvMe7p?label=Coffee",
+      "owed": {
+        "ok": true,
+        "card": {
+          "recipient": "3vMQ3uubVTa1BQf9cQE5FETCDhSP5ZbLjfv87zvvMe7p",
+          "recipientStatus": "organizer",
+          "amount": null,
+          "amountCheck": "no-amount",
+          "token": { "kind": "sol" },
+          "references": [],
+          "label": "Coffee",
+          "message": null,
+          "memo": null
+        }
+      }
+    },
+    {
+      "name": "SOL amount with nine decimal places",
+      "text": "solana:GsJrhpq3YeSBYmKAtkbQFjYN9EoLJvVJvfvs9pTQ84Hc?amount=0.000000001",
+      "owed": {
+        "ok": true,
+        "card": {
+          "recipient": "GsJrhpq3YeSBYmKAtkbQFjYN9EoLJvVJvfvs9pTQ84Hc",
+          "recipientStatus": "unlisted",
+          "amount": "0.000000001",
+          "amountCheck": "within-decimals",
+          "token": { "kind": "sol" },
+          "references": [],
+          "label": null,
+          "message": null,
+          "memo": null
+        }
+      }
+    },
+    {
+      "name": "SOL amount with ten decimal places is refused",
+      "text": "solana:GsJrhpq3YeSBYmKAtkbQFjYN9EoLJvVJvfvs9pTQ84Hc?amount=0.0000000001",
+      "owed": { "ok": false, "problem": "amount-too-precise" }
+    },
+    {
+      "name": "SPL amount past the mint's two decimals is refused",
+      "text": "solana:GsJrhpq3YeSBYmKAtkbQFjYN9EoLJvVJvfvs9pTQ84Hc?amount=0.001&spl-token=EzamibQgq4KbhJm44Wx8dFP13xmDrXZX5hBLhrVJnYDT",
+      "mintDecimals": 2,
+      "owed": { "ok": false, "problem": "amount-too-precise" }
+    },
+    {
+      "name": "two amount fields are refused",
+      "text": "solana:3vMQ3uubVTa1BQf9cQE5FETCDhSP5ZbLjfv87zvvMe7p?amount=1&amount=100",
+      "owed": { "ok": false, "problem": "duplicate-field" }
+    },
+    {
+      "name": "scientific notation is refused",
+      "text": "solana:3vMQ3uubVTa1BQf9cQE5FETCDhSP5ZbLjfv87zvvMe7p?amount=1e3",
+      "owed": { "ok": false, "problem": "amount-invalid" }
+    },
+    {
+      "name": "amount below 1 without a leading zero is refused",
+      "text": "solana:3vMQ3uubVTa1BQf9cQE5FETCDhSP5ZbLjfv87zvvMe7p?amount=.5",
+      "owed": { "ok": false, "problem": "amount-invalid" }
+    },
+    {
+      "name": "spl-token that is not a public key is refused",
+      "text": "solana:3vMQ3uubVTa1BQf9cQE5FETCDhSP5ZbLjfv87zvvMe7p?amount=1&spl-token=not-a-mint",
+      "owed": { "ok": false, "problem": "spl-token-invalid" }
+    },
+    {
+      "name": "reference that is not 32 bytes is refused",
+      "text": "solana:3vMQ3uubVTa1BQf9cQE5FETCDhSP5ZbLjfv87zvvMe7p?amount=1&reference=1111",
+      "owed": { "ok": false, "problem": "reference-invalid" }
+    },
+    {
+      "name": "a transaction request is not a transfer request",
+      "text": "solana:https://example.com/solana-pay",
+      "owed": { "ok": false, "problem": "not-a-transfer-request" }
+    }
+  ]
+}

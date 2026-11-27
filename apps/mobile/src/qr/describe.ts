@@ -20,7 +20,7 @@ export function describeQr(result: QrClass): QrSummary {
       return result.request === "transfer"
         ? {
             title: "Solana Pay transfer request",
-            detail: `Asks you to send a payment to ${result.recipient}. limen has not checked this recipient.`,
+            detail: `Asks you to send a payment to ${result.recipient}.`,
           }
         : {
             title: "Solana Pay transaction request",
