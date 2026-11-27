@@ -109,16 +109,10 @@ test("printing or serializing the loaded key shows the public key and never the 
 });
 
 test("an unset ORGANIZER_KEYPAIR_PATH fails with the unset error", () => {
-  assertKeyError(
-    () => loadOrganizerKey(undefined),
-    "unset",
-    /^ORGANIZER_KEYPAIR_PATH is not set\./,
-  );
-  assertKeyError(
-    () => loadOrganizerKey("  "),
-    "unset",
-    /^ORGANIZER_KEYPAIR_PATH is not set\./,
-  );
+  const unset =
+    /^ORGANIZER_KEYPAIR_PATH is not set\. Point it at the organizer keypair file \(see \.env\.example\)\.$/;
+  assertKeyError(() => loadOrganizerKey(undefined), "unset", unset);
+  assertKeyError(() => loadOrganizerKey("  "), "unset", unset);
 });
 
 test("a missing key file fails with the unreadable error, naming the variable and ENOENT but not its value", () => {
@@ -168,11 +162,13 @@ test("a directory in place of the key file fails with the unreadable error and E
   try {
     const sub = join(dir, "organizer.json");
     mkdirSync(sub);
-    assertKeyError(
+    const err = assertKeyError(
       () => loadOrganizerKey(sub),
       "unreadable",
-      /cannot be read \(EISDIR\)\.$/,
+      /^The file ORGANIZER_KEYPAIR_PATH names cannot be read \(EISDIR\)\.$/,
     );
+    for (const shown of [err.message, String(err), inspect(err)])
+      assert.ok(!shown.includes(sub), `the path leaked in: ${shown}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -184,11 +180,13 @@ test(
   () => {
     withKeyFile(JSON.stringify(rfcKeypairBytes), (path) => {
       chmodSync(path, 0o000);
-      assertKeyError(
+      const err = assertKeyError(
         () => loadOrganizerKey(path),
         "unreadable",
-        /cannot be read \(EACCES\)\.$/,
+        /^The file ORGANIZER_KEYPAIR_PATH names cannot be read \(EACCES\)\.$/,
       );
+      for (const shown of [err.message, String(err), inspect(err)])
+        assert.ok(!shown.includes(path), `the path leaked in: ${shown}`);
     });
   },
 );
