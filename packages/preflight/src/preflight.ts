@@ -1,13 +1,15 @@
 // Transaction-request pre-flight (E-09): decode, simulate, and decide whether
 // signing may go ahead. The network is reached only through the Rpc given.
 //
-// Whose wallet: the summary is always written for the transaction's fee
-// payer, its first required signer, read from the bytes: limen pre-flights
-// only transactions the user's wallet pays the fee for. A caller may name the
-// wallet it expects; a different one is refused, never summarized. The summary
-// and the balance changes write the role marker "user" in place of that
-// wallet's address, so the app and a server produce the same report for the
-// same bytes, and a report carries no wallet address.
+// Whose wallet: the caller names the user's wallet, and limen pre-flights
+// only transactions that wallet pays the fee for. With no wallet named, or
+// another wallet as fee payer, the pre-flight stops and yields no summary. The
+// summary and the balance changes write the role marker "user" in place of the
+// wallet's address; a report also writes "user token account N" for the
+// wallet's token accounts and has every address scrubbed from the text the RPC
+// wrote (marker.ts). So the app and a server produce the same report for the
+// same bytes, and a report names neither the wallet nor a token account limen
+// found to be its own.
 //
 // Signing follows the Solana Pay specification (solana-foundation/pay
 // 8e1b87c, "POST Response"). The wallet signs only when its signature is
@@ -25,16 +27,26 @@ import { decodePublicKey } from "./base58.ts";
 import { decodeBase64, encodeBase64 } from "./base64.ts";
 import { drainPattern } from "./drain.ts";
 import { readUnsetFeePayer, withFeePayer } from "./fee-payer.ts";
-import { withMarker } from "./marker.ts";
+import {
+  scrubAddresses,
+  USER_TOKEN_ACCOUNT_MARKER,
+  withMarker,
+  withMarkers,
+} from "./marker.ts";
 import { ADDRESS_LOOKUP_TABLE_PROGRAM } from "./programs.ts";
 import { assertDevnet, RpcError, type Rpc } from "./rpc.ts";
 import {
   balanceChanges,
+  ownedTokenAccounts,
   watchedAddresses,
   type BalanceChange,
 } from "./simulate.ts";
 import { parseLookupTable } from "./state.ts";
-import { summarizeTransaction, type TransactionSummary } from "./summary.ts";
+import {
+  summarizeTransaction,
+  userTokenAccounts,
+  type TransactionSummary,
+} from "./summary.ts";
 import {
   parseTransaction,
   type ParsedTransaction,
@@ -77,8 +89,8 @@ export type Preflight =
     }
   | { readonly kind: "not-devnet" }
   | { readonly kind: "user-not-fee-payer"; readonly feePayer: string }
-  /** The request left the fee payer unset, and no user was given to set. */
-  | { readonly kind: "fee-payer-not-set" }
+  /** No wallet was named, or the one named is not a public key. */
+  | { readonly kind: "user-not-given" }
   | {
       readonly kind: "ready";
       /** The transaction checked, and the one to sign. */
@@ -90,6 +102,13 @@ export type Preflight =
       readonly simulation: SimulationOutcome;
       readonly blocks: readonly SignBlock[];
       readonly simulatedAt: SimulatedAt | null;
+      /**
+       * The wallet's token accounts, in the message's account order: those
+       * the reads before and after the simulation show it owns, and those its
+       * decoded instructions show it owns (summary.ts, userTokenAccounts). A
+       * report writes "user token account N" for the Nth.
+       */
+      readonly userTokenAccounts: readonly string[];
     };
 
 export function signBlocks(
@@ -123,39 +142,46 @@ async function loadTables(
 }
 
 /**
- * Runs the pre-flight for a base64 transaction. user, when given, is the
- * wallet the caller expects; a transaction whose fee payer is another wallet
- * is refused. An unsigned request that leaves the fee payer unset is rebuilt
- * with user as its fee payer, or stopped when no user is given. When the RPC
- * cannot be reached the decode still comes back, with the simulation marked
- * not run. An endpoint that is not devnet stops it.
+ * Runs the pre-flight for a base64 transaction. user is the wallet the caller
+ * pre-flights for; with none, or one that is not a public key, the result is
+ * user-not-given, and a transaction whose fee payer is another wallet is
+ * refused. An unsigned request that leaves the fee payer unset is rebuilt with
+ * user as its fee payer. When the RPC cannot be reached the decode still comes
+ * back, with the simulation marked not run. An endpoint that is not devnet
+ * stops it.
  */
 export async function preflight(
   rpc: Rpc,
   sent: string,
-  user?: string,
+  user: string,
 ): Promise<Preflight> {
+  // A JavaScript caller can leave user out; nothing is summarized then.
+  if (typeof user !== "string" || decodePublicKey(user) === null) {
+    return { kind: "user-not-given" };
+  }
   const received = decodeBase64(sent);
   if (received === null) return { kind: "malformed", problem: "not-base64" };
   const unset = readUnsetFeePayer(received);
-  if (unset !== null && user === undefined) {
-    return { kind: "fee-payer-not-set" };
+  let bytes = received;
+  if (unset !== null) {
+    const rebuilt = withFeePayer(unset, user);
+    if (!rebuilt.ok) return { kind: "malformed", problem: rebuilt.problem };
+    bytes = rebuilt.bytes;
   }
-  const bytes =
-    unset !== null && user !== undefined ? withFeePayer(unset, user) : received;
   const base64 = unset !== null ? encodeBase64(bytes) : sent;
   const parsed = parseTransaction(bytes);
   if (!parsed.ok) return { kind: "malformed", problem: parsed.problem };
   const transaction = parsed.transaction;
   // wire.ts guarantees at least one static key and one required signer.
   const feePayer = transaction.message.staticKeys[0];
-  if (user !== undefined && user !== feePayer) {
+  if (user !== feePayer) {
     return { kind: "user-not-fee-payer", feePayer };
   }
 
   let tables: LookupTables = new Map();
   let simulation: SimulationOutcome;
   let simulatedAt: SimulatedAt | null = null;
+  let owned: string[] = [];
   try {
     await assertDevnet(rpc);
     tables = await loadTables(rpc, transaction);
@@ -164,10 +190,15 @@ export async function preflight(
       messageAccounts(transaction.message, tables),
     );
     const before = await rpc.getAccounts(watched);
+    owned = ownedTokenAccounts(feePayer, watched, before, []);
     const result = await rpc.simulate(base64, watched);
+    const after =
+      result.accounts.length === watched.length ? result.accounts : [];
+    owned = ownedTokenAccounts(feePayer, watched, before, after);
     simulation = {
       status: "ran",
-      err: result.err,
+      // The runtime's error, with any address the RPC wrote into it scrubbed.
+      err: scrubAddresses(result.err),
       // Like the summary, the changes name the user's wallet by its role.
       changes:
         result.accounts.length === watched.length
@@ -182,13 +213,23 @@ export async function preflight(
     if (error instanceof RpcError && error.reason === "not-devnet") {
       return { kind: "not-devnet" };
     }
+    // The reason can quote the RPC's own error text, which can name any
+    // account, so every address in it is scrubbed.
     simulation = {
       status: "not-run",
-      reason: error instanceof Error ? error.message : String(error),
+      reason: scrubAddresses(
+        error instanceof Error ? error.message : String(error),
+      ),
     };
   }
 
   const summary = summarizeTransaction(transaction, tables);
+  const order = messageAccounts(transaction.message, tables).map(
+    (account) => account.address,
+  );
+  const tokenAccounts = [
+    ...new Set([...owned, ...userTokenAccounts(transaction, tables)]),
+  ].sort((a, b) => order.indexOf(a) - order.indexOf(b));
   return {
     kind: "ready",
     base64,
@@ -198,6 +239,7 @@ export async function preflight(
     simulation,
     blocks: signBlocks(summary, simulation),
     simulatedAt,
+    userTokenAccounts: tokenAccounts,
   };
 }
 
@@ -259,18 +301,28 @@ export type PreflightReport =
 export function toReport(result: Preflight): PreflightReport {
   if (result.kind !== "ready") return result;
   const { feePayerSet, summary, simulation, blocks } = result;
-  return { kind: "ready", feePayerSet, summary, simulation, blocks };
+  const markers = new Map(
+    result.userTokenAccounts.map((address, i) => [
+      address,
+      `${USER_TOKEN_ACCOUNT_MARKER} ${i + 1}`,
+    ]),
+  );
+  return withMarkers(
+    { kind: "ready", feePayerSet, summary, simulation, blocks },
+    markers,
+  );
 }
 
 /**
  * For a server holding transaction bytes, such as a stored evidence bundle:
  * simulates on devnet through the Rpc given and decodes the result into the
  * same report the app's card shows, with drainPattern (drain.ts) applied to
- * it, and where the simulation ran. user, when given, must be the fee payer.
+ * it, and where the simulation ran. user is the wallet the report is for: the
+ * transaction's fee payer, or the report is a refusal with no summary.
  */
 export async function preflightTransaction(
   transaction: Uint8Array,
-  options: { readonly rpc: Rpc; readonly user?: string },
+  options: { readonly rpc: Rpc; readonly user: string },
 ): Promise<{
   summary: PreflightReport;
   drainPattern: boolean;

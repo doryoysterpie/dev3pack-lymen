@@ -30,7 +30,11 @@
 
 import { encodeTransaction } from "./encode.ts";
 import { SYSTEM_PROGRAM } from "./programs.ts";
-import { parseTransaction, type ParsedTransaction } from "./wire.ts";
+import {
+  parseTransaction,
+  type ParsedTransaction,
+  type WireProblem,
+} from "./wire.ts";
 
 /** The zero value the specification allows for an unset fee payer. */
 export const UNSET_FEE_PAYER = SYSTEM_PROGRAM;
@@ -61,11 +65,26 @@ interface Entry {
 const group = (entry: Entry): number =>
   (entry.signer ? 0 : 2) + (entry.writable ? 0 : 1);
 
-/** The transaction from readUnsetFeePayer, rebuilt with user as fee payer. */
+/** A message holds at most this many accounts, static and looked up. */
+const MAX_ACCOUNT_KEYS = 256;
+
+/** A header byte counts at most this many required signatures. */
+const MAX_SIGNERS = 255;
+
+export type Rebuilt =
+  | { readonly ok: true; readonly bytes: Uint8Array }
+  | { readonly ok: false; readonly problem: WireProblem };
+
+/**
+ * The transaction from readUnsetFeePayer, rebuilt with user as fee payer.
+ * Adding the wallet can push the message past 256 accounts, or past 255
+ * required signatures; the rebuild then refuses it as malformed, as the
+ * parser would refuse the rebuilt bytes.
+ */
 export function withFeePayer(
   transaction: ParsedTransaction,
   user: string,
-): Uint8Array {
+): Rebuilt {
   if (user === UNSET_FEE_PAYER) {
     throw new Error("withFeePayer: the zero key cannot pay the fee");
   }
@@ -123,8 +142,17 @@ export function withFeePayer(
     return to;
   };
 
+  const lookedUp = message.lookups.reduce(
+    (sum, lookup) =>
+      sum + lookup.writableIndexes.length + lookup.readonlyIndexes.length,
+    0,
+  );
+  if (entries.length + lookedUp > MAX_ACCOUNT_KEYS) {
+    return { ok: false, problem: "too-many-keys" };
+  }
   const signers = entries.filter((entry) => entry.signer);
-  return encodeTransaction(
+  if (signers.length > MAX_SIGNERS) return { ok: false, problem: "bad-header" };
+  const bytes = encodeTransaction(
     signers.map(() => new Uint8Array(64)),
     {
       ...message,
@@ -144,4 +172,5 @@ export function withFeePayer(
       })),
     },
   );
+  return { ok: true, bytes };
 }

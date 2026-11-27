@@ -41,6 +41,8 @@ const fixture = JSON.parse(
 };
 
 const USER = fixture.user;
+// The sponsored fixture's fee payer, the organizer's devnet fixture key.
+const SPONSOR = "E3RFTY1NdeAf1fD4HH8v6SJWCxTH3bkvBKMbapev8HGW";
 const {
   attacker: ATTACKER,
   userTokenAccount: USER_TOKEN_ACCOUNT,
@@ -312,7 +314,7 @@ describe("pre-flight paths", () => {
 
   it("summarizes a sponsored transaction for its fee payer, and blocks the missing signature", async () => {
     const rpc = drainerRpc();
-    const result = ready(await preflight(rpc, sponsored.transaction));
+    const result = ready(await preflight(rpc, sponsored.transaction, SPONSOR));
     // The organizer pays the fee, so the organizer is the wallet summarized
     // for, named by its role.
     assert.equal(result.summary.signers.feePayer, "user");
@@ -371,7 +373,7 @@ describe("signing gate", () => {
 
   it("leaves a signed transaction as it is", async () => {
     const rpc = drainerRpc();
-    const result = ready(await preflight(rpc, sponsored.transaction));
+    const result = ready(await preflight(rpc, sponsored.transaction, SPONSOR));
     assert.equal(
       forSigning(result, "GsJrhpq3YeSBYmKAtkbQFjYN9EoLJvVJvfvs9pTQ84Hc"),
       sponsored.transaction,
