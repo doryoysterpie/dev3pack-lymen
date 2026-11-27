@@ -112,7 +112,7 @@ test("the station display gets a QR for its station in the active session that v
   assert.equal(body.refresh_after_s, 30);
   const result = verifyStationQr(String(body.qr), {
     allowlist: stationAllowlist([SIGNER.publicKey]),
-    now: T + 100,
+    nowMs: (T + 100) * 1000,
   });
   assert.ok(result.ok);
   assert.equal(result.payload.station, "st-front");
@@ -162,6 +162,28 @@ test("the QR endpoint picks the session whose window holds the current time", as
   clock = T - 1;
   const body = (await (await getQr("st-front")).json()) as { session: string };
   assert.equal(body.session, "day-1");
+});
+
+test("a QR issued in a session's last second expires when the session ends", async () => {
+  // day-1 ends at T; the QR is issued at T - 1.
+  clock = T - 1;
+  const body = (await (await getQr("st-front")).json()) as {
+    qr: string;
+    session: string;
+    expires_at: number;
+  };
+  assert.equal(body.session, "day-1");
+  assert.equal(body.expires_at, T);
+  const at = (nowMs: number) => {
+    const r = verifyStationQr(body.qr, {
+      allowlist: stationAllowlist([SIGNER.publicKey]),
+      nowMs,
+    });
+    return r.ok ? "ok" : r.reason;
+  };
+  assert.equal(at(T * 1000), "ok");
+  assert.equal(at(T * 1000 + 1), "expired");
+  assert.equal(at((T + 59) * 1000), "expired");
 });
 
 test("the QR endpoint refuses methods other than GET", async () => {

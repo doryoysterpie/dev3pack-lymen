@@ -15,7 +15,10 @@
 // The signature covers the encoded payload text, so changing any character of it, even one
 // that decodes to the same bytes, breaks the signature. The station page shows a fresh QR
 // every 30 s and each QR lives 60 s, so a participant who scans just before a rotation still
-// has 30 s to finish.
+// has 30 s to finish. A QR issued near the end of a session expires when the session ends.
+//
+// The verifier measures time in milliseconds: a QR is refused at any instant more than 60 s
+// after issued_at, or after expires_at, not only from the next whole second.
 import {
   createPublicKey,
   randomBytes,
@@ -139,13 +142,18 @@ function parsePayload(encoded: string): StationPayload | null {
   };
 }
 
-/** Issues a station QR for `station` in `session` at Unix time `now`, valid for 60 s. */
+/**
+ * Issues a station QR for `station` in `session` at Unix time `now` (whole seconds), valid for
+ * 60 s or until `notAfter`, whichever comes first. Pass the session's end as `notAfter` so no
+ * QR outlives its session.
+ */
 export function issueStationQr(input: {
   station: string;
   session: string;
   now: number;
   signer: StationSigner;
   nonce?: string;
+  notAfter?: number;
 }): { text: string; payload: StationPayload } {
   if (!ID.test(input.station))
     throw new Error("station ID must be 1 to 64 characters of [A-Za-z0-9_-]");
@@ -153,6 +161,9 @@ export function issueStationQr(input: {
     throw new Error("session ID must be 1 to 64 characters of [A-Za-z0-9_-]");
   if (!isUnixSeconds(input.now))
     throw new Error("now must be a Unix time in whole seconds");
+  const notAfter = input.notAfter ?? input.now + STATION_QR_LIFETIME_S;
+  if (!isUnixSeconds(notAfter) || notAfter <= input.now)
+    throw new Error("notAfter must be a Unix time in whole seconds after now");
   const nonce = input.nonce ?? randomBytes(16).toString("base64url");
   if (!NONCE.test(nonce) || !decodeExact(nonce, 16))
     throw new Error("nonce must be 16 bytes in base64url");
@@ -162,7 +173,7 @@ export function issueStationQr(input: {
     session: input.session,
     nonce,
     issued_at: input.now,
-    expires_at: input.now + STATION_QR_LIFETIME_S,
+    expires_at: Math.min(input.now + STATION_QR_LIFETIME_S, notAfter),
   };
   const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString(
     "base64url",
@@ -180,13 +191,13 @@ export function issueStationQr(input: {
 }
 
 /**
- * Verifies a station QR at Unix time `now` against `allowlist`. Checks run in this order and
+ * Verifies a station QR at Unix time `nowMs`, in milliseconds, against `allowlist`. Checks run in this order and
  * the first failure is the reason: prefix, shape, version, signer encoding, allowlist,
  * signature, payload fields and window, then time.
  */
 export function verifyStationQr(
   text: string,
-  options: { allowlist: ReadonlySet<string>; now: number },
+  options: { allowlist: ReadonlySet<string>; nowMs: number },
 ): StationQrResult {
   const reject = (reason: StationQrRejection): StationQrResult => ({
     ok: false,
@@ -232,11 +243,12 @@ export function verifyStationQr(
 
   const parsed = parsePayload(payload);
   if (parsed === null) return reject("invalid_payload");
-  if (options.now < parsed.issued_at - STATION_QR_CLOCK_SKEW_S)
+  const issuedMs = parsed.issued_at * 1000;
+  if (options.nowMs < issuedMs - STATION_QR_CLOCK_SKEW_S * 1000)
     return reject("not_yet_valid");
   if (
-    options.now - parsed.issued_at > STATION_QR_LIFETIME_S ||
-    options.now > parsed.expires_at
+    options.nowMs - issuedMs > STATION_QR_LIFETIME_S * 1000 ||
+    options.nowMs > parsed.expires_at * 1000
   ) {
     return reject("expired");
   }
