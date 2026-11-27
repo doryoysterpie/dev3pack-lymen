@@ -7,6 +7,8 @@
 // bytes the same way. "Yours" means an instruction the user's wallet
 // authorizes: the wallet is the System funding account, the account being
 // assigned, or a signing owner, delegate or authority of a token instruction.
+// The summary writes the role marker "user" (marker.ts) wherever the user's
+// address would appear, so it carries no wallet address.
 
 import {
   messageAccounts,
@@ -19,6 +21,7 @@ import {
   type TokenProgram,
   type UndecodedReason,
 } from "./decode.ts";
+import { withMarker } from "./marker.ts";
 import type { ParsedTransaction } from "./wire.ts";
 
 /** An account in the summary: its address, or where it sits when unknown. */
@@ -103,7 +106,10 @@ export interface Undecoded {
 }
 
 export interface Signers {
-  /** The fee payer, the first required signer: the wallet summarized for. */
+  /**
+   * The fee payer, the first required signer: the wallet summarized for.
+   * Always the role marker "user", never the address.
+   */
   readonly feePayer: string;
   /** Every other required signer, and whether its signature is filled in. */
   readonly others: readonly {
@@ -328,12 +334,16 @@ export function summarizeTransaction(
     unsigned: signatures.every(isZero),
   };
 
-  return {
-    effects,
-    others,
-    undecoded,
-    signers,
-    unresolvedAccounts: accounts.filter((account) => account.address === null)
-      .length,
-  };
+  // The summary names the user's wallet only by its role, never its address.
+  return withMarker(
+    {
+      effects,
+      others,
+      undecoded,
+      signers,
+      unresolvedAccounts: accounts.filter((account) => account.address === null)
+        .length,
+    },
+    user,
+  );
 }

@@ -117,8 +117,8 @@ describe("preflightTransaction, the server entry point", () => {
     assert.equal(result.drainPattern, true);
     assert.equal(result.summary.kind, "ready");
     assert.ok(result.summary.kind === "ready");
-    // The summary is written for the fee payer.
-    assert.equal(result.summary.summary.signers.feePayer, USER);
+    // The summary is written for the fee payer, named by its role.
+    assert.equal(result.summary.summary.signers.feePayer, "user");
     assert.deepEqual(
       result.summary.summary.effects.map((effect) => effect.kind),
       ["sol-out", "delegate-approved"],

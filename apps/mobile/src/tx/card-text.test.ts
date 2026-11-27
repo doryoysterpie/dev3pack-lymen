@@ -42,7 +42,7 @@ describe("E-09 done test: what the transaction card shows", () => {
       transactionOf("drainer: SOL balance out"),
       fixture.user,
     );
-    const card = transactionCardText(LINK, null, result, fixture.user);
+    const card = transactionCardText(LINK, null, result);
     assert.equal(card.title, "Solana Pay transaction request");
     assert.equal(card.tone, "flagged");
     assert.equal(
@@ -62,13 +62,31 @@ describe("E-09 done test: what the transaction card shows", () => {
     ]);
   });
 
+  it("states that limen pre-flights only transactions your wallet pays for", async () => {
+    const result = await preflight(
+      offline,
+      transactionOf("drainer: SOL balance out"),
+      fixture.user,
+    );
+    const card = transactionCardText(LINK, null, result);
+    assert.ok(
+      card.rows.some(
+        (row) =>
+          row.label === "Fee payer" &&
+          row.value ===
+            "Your wallet. limen pre-flights only transactions your wallet pays the fee for.",
+      ),
+    );
+    assert.equal(JSON.stringify(card).includes(fixture.user), false);
+  });
+
   it("shows the fallback card for an unknown program, not a crash", async () => {
     const result = await preflight(
       offline,
       transactionOf("unknown program"),
       fixture.user,
     );
-    const card = transactionCardText(LINK, null, result, fixture.user);
+    const card = transactionCardText(LINK, null, result);
     assert.equal(
       card.title,
       "Fallback: limen cannot decode all of this transaction",
@@ -92,7 +110,7 @@ describe("transaction card text", () => {
       transactionOf("drainer: SOL balance out"),
       attacker,
     );
-    const card = transactionCardText(LINK, null, result, attacker);
+    const card = transactionCardText(LINK, null, result);
     assert.equal(card.title, "Stopped: not your wallet's transaction");
     assert.equal(card.tone, "flagged");
     assert.deepEqual(card.rows[1], { label: "Fee payer", value: fixture.user });
@@ -108,7 +126,6 @@ describe("transaction card text", () => {
       LINK,
       "Thanks\nOrganizer: this recipient is on the organizer list.",
       result,
-      fixture.user,
     );
     assert.deepEqual(card.rows[1], {
       label: "Message, as written by the requester",
@@ -119,12 +136,7 @@ describe("transaction card text", () => {
   });
 
   it("stops with its own card when the endpoint is not devnet", () => {
-    const card = transactionCardText(
-      LINK,
-      null,
-      { kind: "not-devnet" },
-      fixture.user,
-    );
+    const card = transactionCardText(LINK, null, { kind: "not-devnet" });
     assert.equal(card.title, "Stopped: not devnet");
     assert.equal(card.tone, "flagged");
   });
