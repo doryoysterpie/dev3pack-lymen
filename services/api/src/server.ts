@@ -1,5 +1,5 @@
 // HTTP server for the limen API. E-02 adds the health endpoint; E-03 adds the station QR
-// endpoint for the station display. Later units add their routes.
+// endpoint for the station display; E-05 adds POST /checkins. Later units add their routes.
 import { createHash, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
@@ -10,10 +10,16 @@ import {
 } from "node:http";
 import type { DatabaseSync } from "node:sqlite";
 
+import {
+  checkIn,
+  type CheckinRegistrations,
+  type PassMinter,
+} from "./checkin.ts";
 import { routeReports, type ReportOptions } from "./reports.ts";
 import { schemaVersion } from "./db.ts";
 import {
   issueStationQr,
+  stationAllowlist,
   STATION_QR_ROTATION_S,
   type StationSigner,
 } from "./station-qr.ts";
@@ -47,6 +53,77 @@ export interface ApiContext {
    * as a station QR's 60 s window (E-05). Unset: now() * 1000.
    */
   readonly nowMs?: () => number;
+  /**
+   * Check-in dependencies (E-05): registration binding from E-07 and minting from E-06. Unset
+   * until those land and are wired in; POST /checkins then answers 503.
+   */
+  readonly checkin?: {
+    readonly registrations: CheckinRegistrations;
+    readonly minter: PassMinter;
+  };
+}
+
+/** Largest check-in body accepted, in bytes. A check-in is well under 1 KiB. */
+export const MAX_CHECKIN_BODY_BYTES = 8 * 1024;
+
+function readBody(req: IncomingMessage, limit: number): Promise<Buffer | null> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) {
+        resolve(null);
+        req.pause();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+async function postCheckin(
+  ctx: ApiContext,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  if (req.method !== "POST") {
+    sendJson(res, 405, { error: "method_not_allowed" }, { allow: "POST" });
+    return;
+  }
+  if (ctx.checkin === undefined) {
+    sendJson(res, 503, { error: "check_in_unavailable" });
+    return;
+  }
+  if (!/^application\/json(;|$)/i.test(req.headers["content-type"] ?? "")) {
+    sendJson(res, 415, { error: "unsupported_media_type" });
+    return;
+  }
+  const raw = await readBody(req, MAX_CHECKIN_BODY_BYTES);
+  if (raw === null) {
+    sendJson(res, 413, { error: "body_too_large" }, { connection: "close" });
+    return;
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(raw.toString("utf8"));
+  } catch {
+    sendJson(res, 400, { error: "invalid_json" });
+    return;
+  }
+  const outcome = await checkIn(
+    {
+      db: ctx.db,
+      allowlist: stationAllowlist([ctx.stationSigner.publicKey]),
+      registrations: ctx.checkin.registrations,
+      minter: ctx.checkin.minter,
+    },
+    body,
+    ctx.now(),
+  );
+  sendJson(res, outcome.status, outcome.body);
 }
 
 const STATION_QR_PATH = /^\/stations\/([A-Za-z0-9_-]{1,64})\/qr$/;
@@ -159,6 +236,13 @@ export function createApiServer(ctx: ApiContext): Server {
           status: "ok",
           version: ctx.version,
           schema_version: schemaVersion(ctx.db),
+        });
+        return;
+      }
+      if (pathname === "/checkins") {
+        postCheckin(ctx, req, res).catch(() => {
+          if (!res.headersSent) sendJson(res, 500, { error: "internal" });
+          else res.destroy();
         });
         return;
       }
