@@ -65,7 +65,8 @@ export type StationQrRejection =
   | "bad_signature"
   | "invalid_payload"
   | "not_yet_valid"
-  | "expired";
+  | "expired"
+  | "invalid_clock";
 
 export type StationQrResult =
   | {
@@ -191,8 +192,9 @@ export function issueStationQr(input: {
 }
 
 /**
- * Verifies a station QR at Unix time `nowMs`, in milliseconds, against `allowlist`. Checks run in this order and
- * the first failure is the reason: prefix, shape, version, signer encoding, allowlist,
+ * Verifies a station QR at Unix time `nowMs`, in milliseconds, against `allowlist`. Checks run
+ * in this order and the first failure is the reason: a usable clock (a finite `nowMs`; missing,
+ * NaN or infinite gives invalid_clock), prefix, shape, version, signer encoding, allowlist,
  * signature, payload fields and window, then time.
  */
 export function verifyStationQr(
@@ -204,6 +206,8 @@ export function verifyStationQr(
     reason,
   });
 
+  // Fail closed: with no usable clock, no QR can be judged in its window.
+  if (!Number.isFinite(options?.nowMs)) return reject("invalid_clock");
   if (!text.startsWith(STATION_QR_PREFIX)) return reject("not_station_qr");
   if (text.length > MAX_QR_LENGTH) return reject("malformed");
   const parts = text.slice(STATION_QR_PREFIX.length).split(".");

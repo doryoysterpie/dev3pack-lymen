@@ -194,3 +194,30 @@ test("the QR endpoint refuses methods other than GET", async () => {
   assert.equal(res.status, 405);
   assert.equal(res.headers.get("allow"), "GET");
 });
+
+test("between back-to-back sessions the page is told to refresh when the old QR expires, not 30 s later", async () => {
+  // day-1 ends at T and day-2 starts at T.
+  clock = T - 10;
+  const before = (await (await getQr("st-front")).json()) as {
+    session: string;
+    expires_at: number;
+    refresh_after_s: number;
+  };
+  assert.equal(before.session, "day-1");
+  assert.equal(before.expires_at, T);
+  assert.equal(before.refresh_after_s, 10);
+  clock = T - 1;
+  assert.equal(
+    ((await (await getQr("st-front")).json()) as { refresh_after_s: number })
+      .refresh_after_s,
+    1,
+  );
+  // When that refresh comes, the next session's QR is there, with the full 30 s.
+  clock = T;
+  const after = (await (await getQr("st-front")).json()) as {
+    session: string;
+    refresh_after_s: number;
+  };
+  assert.equal(after.session, "day-2");
+  assert.equal(after.refresh_after_s, 30);
+});
