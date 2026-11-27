@@ -2,12 +2,12 @@
 // only its hash and counts distinct IDs as independent devices (D-05). That means distinct
 // install IDs, not distinct phones or people: a reinstall or a second emulator is a new ID.
 //
-// The ID is random, made once, and kept in the device's secure store (expo-secure-store). It is
+// The ID is random, made once, and kept with expo-secure-store, in the device's key storage. It is
 // the only thing this app stores there. When the store cannot be read or written, the ID lasts
 // this launch only. The ID is not a secret, so Math.random is enough to keep two installs from
 // sharing one.
 
-/** The two secure store calls this module uses. expo-secure-store satisfies it. */
+/** The two storage calls this module uses. expo-secure-store satisfies it. */
 export interface IdStore {
   getItemAsync(key: string): Promise<string | null>;
   setItemAsync(key: string, value: string): Promise<void>;
