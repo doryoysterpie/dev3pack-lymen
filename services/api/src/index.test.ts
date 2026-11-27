@@ -289,9 +289,23 @@ test("start-up from a .env line that Node hands over as spaces or as the next li
   });
 });
 
+// The start-up line names the version in package.json, read here rather than written in, so a
+// version change fails the health check below instead of leaving the wait without its line.
+const PACKAGE_VERSION = (
+  JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ) as { version: string }
+).version;
+const LISTENING = new RegExp(
+  `^limen api ${PACKAGE_VERSION.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} listening on (http://127\\.0\\.0\\.1:\\d+)\n`,
+);
+/** How long one start may take before the test stops the API and fails, rather than hang. */
+const START_LIMIT_MS = 15_000;
+
 /**
  * Starts the API on a port that was free a moment ago. If something takes that port first, the
- * API exits with EADDRINUSE, and the start is tried again on a fresh port, up to five times.
+ * API exits with EADDRINUSE, and the start is tried again on a fresh port, up to five times. A
+ * start that prints no start-up line within START_LIMIT_MS is stopped and fails.
  */
 async function startOnFreePort(
   env: Record<string, string>,
@@ -314,21 +328,30 @@ async function startOnFreePort(
         child.stdout.setEncoding("utf8");
         child.stderr.setEncoding("utf8");
         child.stderr.on("data", (chunk: string) => (err += chunk));
+        const timer = setTimeout(() => {
+          child.kill();
+          resolve({
+            exit: `no start-up line within ${START_LIMIT_MS} ms: ${out}${err}`,
+          });
+        }, START_LIMIT_MS);
         child.stdout.on("data", (chunk: string) => {
           out += chunk;
-          const match =
-            /^limen api 0\.1\.0 listening on (http:\/\/127\.0\.0\.1:\d+)\n/.exec(
-              out,
-            );
-          if (match?.[1]) resolve({ url: match[1] });
+          const match = LISTENING.exec(out);
+          if (match?.[1]) {
+            clearTimeout(timer);
+            resolve({ url: match[1] });
+          }
         });
-        child.once("exit", (code) => resolve({ exit: `code ${code}: ${err}` }));
+        child.once("exit", (code) => {
+          clearTimeout(timer);
+          resolve({ exit: `code ${code}: ${err}` });
+        });
       },
     );
     if ("url" in started)
       return { child, url: started.url, port, attempts: attempt };
     if (!started.exit.includes("EADDRINUSE") || attempt === 5) {
-      throw new Error(`API exited early with ${started.exit}`);
+      throw new Error(`API did not start: ${started.exit}`);
     }
   }
 }

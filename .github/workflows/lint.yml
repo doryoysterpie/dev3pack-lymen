@@ -10,6 +10,8 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # A step that hangs fails the job after 15 minutes rather than holding the run open.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
