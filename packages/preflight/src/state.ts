@@ -8,7 +8,7 @@
 //   address-lookup-table-interface/src/state.rs: a u32 ProgramState tag
 //   (1 = LookupTable), addresses from LOOKUP_TABLE_META_SIZE (56) on.
 
-import { encodeBase58 } from "../qr/base58.ts";
+import { encodeBase58 } from "./base58.ts";
 
 export interface TokenAccount {
   readonly mint: string;

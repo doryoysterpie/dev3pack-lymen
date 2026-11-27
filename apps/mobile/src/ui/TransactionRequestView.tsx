@@ -6,18 +6,19 @@ import {
   Text,
   View,
 } from "react-native";
+import {
+  forSigning,
+  jsonRpc,
+  preflight,
+  signingAllowed,
+  type Fetch,
+  type Preflight,
+} from "@limen/preflight";
 
 import { SOLANA_RPC_URL } from "../config.ts";
 import type { CardText } from "../pay/card-text.ts";
 import { transactionCardText } from "../tx/card-text.ts";
-import {
-  forSigning,
-  preflight,
-  signingAllowed,
-  type Preflight,
-} from "../tx/preflight.ts";
 import { requestTransaction } from "../tx/request.ts";
-import { latestBlockhash, type Fetch } from "../tx/rpc.ts";
 import {
   connectWallet,
   signAndSend,
@@ -38,6 +39,7 @@ type Step =
   | { readonly kind: "error"; readonly message: string };
 
 const appFetch: Fetch = (url, init) => fetch(url, init);
+const rpc = jsonRpc(appFetch, SOLANA_RPC_URL);
 
 function hostOf(link: string): string {
   const match = /^https:\/\/([^/?#]+)/.exec(link);
@@ -75,8 +77,7 @@ export function TransactionRequestView({
       );
       setStep({ kind: "working", what: "Decoding and simulating on devnet" });
       const result = await preflight(
-        appFetch,
-        SOLANA_RPC_URL,
+        rpc,
         response.transaction,
         session.address,
       );
@@ -91,7 +92,7 @@ export function TransactionRequestView({
     if (result.kind !== "ready" || !signingAllowed(result, shownFor)) return;
     try {
       setStep({ kind: "working", what: "Waiting for your wallet" });
-      const hash = await latestBlockhash(appFetch, SOLANA_RPC_URL);
+      const hash = await rpc.latestBlockhash();
       const signature = await signAndSend(session, forSigning(result, hash));
       setStep({ kind: "sent", signature });
     } catch (error) {

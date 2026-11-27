@@ -2,10 +2,15 @@
 // rules (rule 9) can be checked in one place.
 
 import type { CardRow, CardText } from "../pay/card-text.ts";
-import type { Decoded, UndecodedReason } from "./decode.ts";
-import type { Preflight, SignBlock } from "./preflight.ts";
-import type { BalanceChange } from "./simulate.ts";
-import type { Effect, Place } from "./summary.ts";
+import type {
+  BalanceChange,
+  Decoded,
+  Effect,
+  Place,
+  Preflight,
+  SignBlock,
+  UndecodedReason,
+} from "@limen/preflight";
 
 const U64_MAX = "18446744073709551615";
 

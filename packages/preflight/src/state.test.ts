@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { decodePublicKey } from "../qr/base58.ts";
+import { decodePublicKey } from "./base58.ts";
 import {
   SYSTEM_PROGRAM,
   TOKEN_2022_PROGRAM,

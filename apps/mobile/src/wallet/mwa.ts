@@ -4,8 +4,7 @@
 import { transact } from "@solana-mobile/mobile-wallet-adapter-protocol";
 
 import { APP_IDENTITY, WALLET_CHAIN } from "../config.ts";
-import { encodeBase58 } from "../qr/base58.ts";
-import { decodeBase64 } from "../tx/base64.ts";
+import { decodeBase64, encodeBase58 } from "@limen/preflight";
 import { walletAddress } from "./address.ts";
 
 export interface WalletSession {

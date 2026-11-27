@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
+import { jsonRpc, preflight, type Fetch } from "@limen/preflight";
+
 import { transactionCardText, withDecimals } from "./card-text.ts";
-import { preflight } from "./preflight.ts";
-import type { Fetch } from "./rpc.ts";
 
 const fixture = JSON.parse(
   readFileSync(
@@ -30,15 +30,15 @@ const LINK = "https://pay.example/solana-pay?order=7";
 const { attacker, userTokenAccount, unknownProgram } = fixture.keys;
 
 // The RPC is unreachable, so these cards come from the decode alone.
-const offline: Fetch = async () => {
+const unreachable: Fetch = async () => {
   throw new Error("offline");
 };
+const offline = jsonRpc(unreachable, "https://devnet.example");
 
 describe("E-09 done test: what the transaction card shows", () => {
   it("shows the drainer's SOL balance out and the delegate approved, flagged", async () => {
     const result = await preflight(
       offline,
-      "https://devnet.example",
       transactionOf("drainer: SOL balance out"),
       fixture.user,
     );
@@ -65,7 +65,6 @@ describe("E-09 done test: what the transaction card shows", () => {
   it("shows the fallback card for an unknown program, not a crash", async () => {
     const result = await preflight(
       offline,
-      "https://devnet.example",
       transactionOf("unknown program"),
       fixture.user,
     );
