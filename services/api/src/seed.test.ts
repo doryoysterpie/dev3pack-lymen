@@ -1,7 +1,17 @@
 // E-03 support: the demo seed gives the station display a station and an active session.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { openDatabase } from "./db.ts";
 import { parseEventSeed, seedEvent } from "./seed.ts";
@@ -105,5 +115,46 @@ test("a seed with a bad field is refused with a message naming the field", () =>
       { message },
       JSON.stringify(value),
     );
+  }
+});
+
+test("the seed tool, run through a symlink, names a malformed file without quoting it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "limen-seed-"));
+  try {
+    const link = join(dir, "seed.ts");
+    symlinkSync(fileURLToPath(new URL("./seed.ts", import.meta.url)), link);
+    const env = {
+      PATH: process.env.PATH ?? "",
+      DATABASE_PATH: join(dir, "limen.db"),
+    };
+    const usage = spawnSync(process.execPath, [link], {
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(usage.status, 1);
+    assert.equal(
+      usage.stderr,
+      "limen seed: usage: npm run seed -w @limen/api -- <seed file>\n",
+    );
+    for (const [content, owed] of [
+      [
+        "{stations: [Front-desk-marker]}",
+        "is not valid JSON at line 1, column 2",
+      ],
+      ["[Front-desk-marker]", "is not valid JSON"],
+      ['{"stations": []', "is not valid JSON at line 1, column 16"],
+    ] as const) {
+      const file = join(dir, "event.json");
+      writeFileSync(file, content);
+      const bad = spawnSync(process.execPath, [link, file], {
+        env,
+        encoding: "utf8",
+      });
+      assert.equal(bad.status, 1);
+      assert.equal(bad.stderr, `limen seed: seed file ${file} ${owed}\n`);
+      assert.ok(!bad.stderr.includes("marker"));
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
