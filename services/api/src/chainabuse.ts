@@ -147,16 +147,20 @@ function summaryLines(summary: unknown): string[] {
   return [`- ${escapeMarkdown(canonicalJson(summary))}`];
 }
 
+/** Why no request was built for a case. Its message names no report data. */
+export class NothingToReport extends Error {}
+
 /**
  * Builds the Chainabuse request for an escalated case from the case and its stored bundles.
- * Throws when the case is not escalated, or has neither a domain nor a recipient to report.
+ * Throws NothingToReport when the case is not escalated, or has neither a domain nor a
+ * recipient to report.
  */
 export function buildChainabuseRequest(
   view: CaseView,
   bundles: readonly StoredBundle[],
 ): ChainabuseRequest {
   if (view.status !== "escalated")
-    throw new Error(`case ${view.id} is ${view.status}, not escalated`);
+    throw new NothingToReport(`it is ${view.status}, not escalated`);
   const addresses: ChainabuseAddress[] = [
     ...(view.domain === null
       ? []
@@ -164,11 +168,13 @@ export function buildChainabuseRequest(
     ...view.recipients.map((address) => ({
       chain: "SOL" as const,
       address,
-      label: "Recipient in the simulated transaction",
+      // The reporter's claim: the API checks only that each is a public key, not that the
+      // transaction pays it.
+      label: "Recipient as reported to limen",
     })),
   ];
   if (addresses.length === 0)
-    throw new Error(`case ${view.id} has no domain or recipient to report`);
+    throw new NothingToReport("it has no domain or recipient to report");
 
   const shown = summaryBundle(bundles);
   // The summary as the body shows it, with every unlisted address left out.
@@ -211,7 +217,7 @@ export function buildChainabuseRequest(
       ? ["- none"]
       : view.programIds.map((p) => `- ${p}`)),
     "",
-    "#### Recipients",
+    "#### Recipients as reported to limen",
     ...(view.recipients.length === 0
       ? ["- none"]
       : view.recipients.map((r) => `- ${r}`)),
@@ -236,7 +242,9 @@ export function buildChainabuseRequest(
 
 /**
  * The hook the report route calls when a case escalates. Off: undefined, so the route calls
- * nothing. Dry run: logs the request line and the exact JSON body that would be sent.
+ * nothing. Dry run: logs the request line and the exact JSON body that would be sent, at most
+ * once per case. When it builds nothing, it logs one line saying why, so no escalation passes
+ * without a line in the log.
  */
 export function chainabuseHook(
   mode: ChainabuseMode,
@@ -245,16 +253,41 @@ export function chainabuseHook(
   log: (line: string) => void,
 ): ((caseId: number) => void) | undefined {
   if (mode === "off") return undefined;
+  // The cases whose request has been logged since the service started. Held in memory, so a
+  // restart forgets them; a live mode would need them stored.
+  const reported = new Set<number>();
   return (caseId) => {
-    const view = loadCase(db, caseId, lists);
-    if (view === null) return;
-    const ids = db
-      .prepare("SELECT id FROM sightings WHERE case_id = ? ORDER BY id")
-      .all(caseId) as { id: number }[];
-    const bundles = ids
-      .map((r) => loadBundle(db, r.id))
-      .filter((b): b is StoredBundle => b !== null);
-    const request = buildChainabuseRequest(view, bundles);
+    const skip = (reason: string) =>
+      log(`chainabuse dry run, nothing built for case ${caseId}: ${reason}`);
+    if (reported.has(caseId)) {
+      skip("its request was already logged once since the service started");
+      return;
+    }
+    let request: ChainabuseRequest;
+    try {
+      const view = loadCase(db, caseId, lists);
+      if (view === null) {
+        skip("there is no such case");
+        return;
+      }
+      const ids = db
+        .prepare("SELECT id FROM sightings WHERE case_id = ? ORDER BY id")
+        .all(caseId) as { id: number }[];
+      const bundles = ids
+        .map((r) => loadBundle(db, r.id))
+        .filter((b): b is StoredBundle => b !== null);
+      request = buildChainabuseRequest(view, bundles);
+    } catch (err) {
+      // A refusal gives its reason. Any other failure is logged without its message, which
+      // could quote report data (a JSON parse error quotes the text it read).
+      skip(
+        err instanceof NothingToReport
+          ? err.message
+          : "the request could not be built",
+      );
+      return;
+    }
+    reported.add(caseId);
     log(
       `chainabuse dry run, not sent: ${request.method} ${request.url}\n${JSON.stringify(request.body)}`,
     );

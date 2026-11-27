@@ -28,6 +28,7 @@ import {
   CHAINABUSE_REPORTS_URL,
   chainabuseHook,
   escapeMarkdown,
+  NothingToReport,
   parseChainabuseMode,
   redactSummary,
   type ChainabuseMode,
@@ -158,7 +159,7 @@ const OWED_BODY = [
       "#### Programs",
       `- ${SYSTEM_PROGRAM}`,
       "",
-      "#### Recipients",
+      "#### Recipients as reported to limen",
       `- ${RECIPIENT}`,
     ].join("\n"),
     addresses: [
@@ -166,7 +167,7 @@ const OWED_BODY = [
       {
         chain: "SOL",
         address: RECIPIENT,
-        label: "Recipient in the simulated transaction",
+        label: "Recipient as reported to limen",
       },
     ],
     evidences: [
@@ -314,13 +315,16 @@ test("only an escalated case with a domain or a recipient builds a request", () 
   };
   const none: StoredBundle[] = [];
   assert.throws(() => buildChainabuseRequest(view, none), {
-    message: "case 9 is held, not escalated",
+    message: "it is held, not escalated",
   });
+  assert.throws(() => buildChainabuseRequest(view, none), NothingToReport);
   assert.throws(
     () => buildChainabuseRequest({ ...view, status: "escalated" }, none),
-    {
-      message: "case 9 has no domain or recipient to report",
-    },
+    NothingToReport,
+  );
+  assert.throws(
+    () => buildChainabuseRequest({ ...view, status: "escalated" }, none),
+    { message: "it has no domain or recipient to report" },
   );
   assert.equal(loadCase(db, 1, bundledLists()), null);
 });
@@ -525,7 +529,7 @@ test("a stored summary whose fee payer is the reporter's wallet gives a body wit
         "#### Programs",
         `- ${SYSTEM_PROGRAM}`,
         "",
-        "#### Recipients",
+        "#### Recipients as reported to limen",
         `- ${RECIPIENT}`,
       ].join("\n"),
       evidences: [
@@ -556,4 +560,51 @@ test("a stored summary whose fee payer is the reporter's wallet gives a body wit
     ])
       assert.ok(!logged[0]!.includes(address), `${address} reached the body`);
   }
+});
+
+test("an escalated case with no domain and no recipient logs why nothing was built", async () => {
+  const reports = [DEVICE_1, DEVICE_2].map((r) => ({
+    ...r,
+    url: null,
+    recipients: [],
+  }));
+  const { logged, outbound, statuses } = await runFlow(
+    "dry-run",
+    false,
+    reports,
+  );
+  assert.deepEqual(
+    statuses.map((s) => (s as { case_status: string }).case_status),
+    ["held", "escalated"],
+  );
+  assert.deepEqual(logged, [
+    "chainabuse dry run, nothing built for case 1: it has no domain or recipient to report",
+  ]);
+  assert.deepEqual(outbound, []);
+});
+
+test("the hook logs one body per case, and a line saying why for every call that builds none", async () => {
+  const { db } = await runFlow("off");
+  const logged: string[] = [];
+  const hook = chainabuseHook("dry-run", db, bundledLists(), (line) =>
+    logged.push(line),
+  )!;
+  hook(1);
+  hook(1);
+  hook(99);
+  assert.equal(logged.length, 3);
+  assert.equal(logged[0]!.split("\n")[1], JSON.stringify(OWED_BODY));
+  assert.deepEqual(logged.slice(1), [
+    "chainabuse dry run, nothing built for case 1: its request was already logged once since the service started",
+    "chainabuse dry run, nothing built for case 99: there is no such case",
+  ]);
+  // A failure that is not a refusal is logged without its message, which could quote the summary.
+  db.prepare(
+    "UPDATE evidence_bundles SET summary_json = ? WHERE sighting_id = 1",
+  ).run(`{"feePayer":"${String(DEVICE_1.wallet)}"`);
+  const fresh: string[] = [];
+  chainabuseHook("dry-run", db, bundledLists(), (line) => fresh.push(line))!(1);
+  assert.deepEqual(fresh, [
+    "chainabuse dry run, nothing built for case 1: the request could not be built",
+  ]);
 });
