@@ -11,5 +11,9 @@
     "verbatimModuleSyntax": true,
     "types": ["node"]
   },
-  "include": ["services/*/src/**/*.ts", "apps/station/src/**/*.ts"]
+  "include": [
+    "services/*/src/**/*.ts",
+    "apps/station/src/**/*.ts",
+    "apps/station/vite.config.ts"
+  ]
 }
