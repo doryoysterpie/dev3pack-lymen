@@ -1,0 +1,23 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+.expo/
+coverage/
+*.log
+
+# Secrets: keypairs, the RPC key and Chainabuse credentials stay out of git (rule 8)
+.env
+.env.*
+!.env.example
+keys/
+*.keypair.json
+id.json
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# OS files
+.DS_Store
