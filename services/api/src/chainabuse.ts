@@ -8,8 +8,11 @@
 // for POST /v0/reports/batch (https://docs.chainabuse.com/reference/createreports, page updated
 // 2025-09-08): an array of reports, each with scamCategory, description and addresses, plus the
 // optional evidences. The body carries the case's domain, program IDs and recipients and the
-// decoded simulation summary. It never carries transaction bytes, the QR text, device hashes or
-// any reporter's wallet, even one the reporter chose to include in their report.
+// decoded simulation summary. The builder never reads a bundle's transaction bytes, QR text,
+// device hash or wallet field. The summary comes from the reporter's app, so redactSummary
+// leaves out every value in it that names an address other than the case's recipients and
+// program IDs, and signers.feePayer unless it is the role marker "user", before any of it goes
+// into the body.
 import type { DatabaseSync } from "node:sqlite";
 
 import { canonicalJson, loadBundle, type StoredBundle } from "./evidence.ts";
@@ -70,8 +73,64 @@ function summaryBundle(
   );
 }
 
-function summaryLines(summaryJson: string): string[] {
-  const summary: unknown = JSON.parse(summaryJson);
+/** A run of base58 characters as long as a Solana address, or longer. */
+const BASE58_RUN = /[1-9A-HJ-NP-Za-km-z]{32,}/g;
+
+function namesUnlisted(text: string, listed: ReadonlySet<string>): boolean {
+  return (text.match(BASE58_RUN) ?? []).some((run) => !listed.has(run));
+}
+
+const LEFT_OUT = Symbol("left out");
+
+/**
+ * The summary as the body may show it. The summary is the reporter's app's, so it is not
+ * trusted to keep the reporter's wallet out. Left out:
+ *   - every string, array item or object entry that names an address other than the listed
+ *     ones (the case's recipients and program IDs). An address is any run of 32 or more base58
+ *     characters, the form a Solana address takes, and a run is kept only when it is exactly a
+ *     listed address. An entry whose key names such an address is left out whole;
+ *   - signers.feePayer, unless it is exactly the role marker "user" that E-09 writes there.
+ * Returns what is kept and how many values were left out.
+ */
+export function redactSummary(
+  summary: unknown,
+  listed: ReadonlySet<string>,
+): { readonly summary: unknown; readonly leftOut: number } {
+  let leftOut = 0;
+  // Where a value sits: the summary itself, its top-level signers object (E-09's, so the only
+  // feePayer that is the fee payer), or anywhere deeper.
+  type Place = "root" | "signers" | "inner";
+  const keep = (value: unknown, place: Place): unknown => {
+    if (typeof value === "string") {
+      if (!namesUnlisted(value, listed)) return value;
+      leftOut++;
+      return LEFT_OUT;
+    }
+    if (Array.isArray(value))
+      return value.map((v) => keep(v, "inner")).filter((v) => v !== LEFT_OUT);
+    if (typeof value !== "object" || value === null) return value;
+    const kept: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(value)) {
+      if (
+        namesUnlisted(key, listed) ||
+        (place === "signers" && key === "feePayer" && v !== "user")
+      ) {
+        leftOut++;
+        continue;
+      }
+      const k = keep(
+        v,
+        place === "root" && key === "signers" ? "signers" : "inner",
+      );
+      if (k !== LEFT_OUT) kept[key] = k;
+    }
+    return kept;
+  };
+  const kept = keep(summary, "root");
+  return { summary: kept === LEFT_OUT ? undefined : kept, leftOut };
+}
+
+function summaryLines(summary: unknown): string[] {
   if (
     typeof summary === "object" &&
     summary !== null &&
@@ -112,6 +171,14 @@ export function buildChainabuseRequest(
     throw new Error(`case ${view.id} has no domain or recipient to report`);
 
   const shown = summaryBundle(bundles);
+  // The summary as the body shows it, with every unlisted address left out.
+  const kept =
+    shown === undefined
+      ? undefined
+      : redactSummary(
+          JSON.parse(shown.summaryJson),
+          new Set([...view.recipients, ...view.programIds]),
+        );
   const reproduced =
     shown?.resimulation?.matches === true && shown.resimulation.drainPattern;
   const yesNo = (b: boolean) => (b ? "yes" : "no");
@@ -126,11 +193,18 @@ export function buildChainabuseRequest(
     `- Domain: ${view.domain === null ? "none" : escapeMarkdown(view.domain)}`,
     `- Domain on the Phantom or PhishDestroy list: ${yesNo(view.inputs.domainListed)}`,
     `- Re-simulation reproduced the reported summary with a drain pattern: ${yesNo(reproduced)}`,
+    ...(kept === undefined || kept.leftOut === 0
+      ? []
+      : [
+          `- Summary values left out, so that no address beyond the recipients and programs below is reported: ${kept.leftOut}`,
+        ]),
     "",
     "#### Simulated transaction summary",
-    ...(shown === undefined
+    ...(kept === undefined
       ? ["- none stored"]
-      : summaryLines(shown.summaryJson)),
+      : kept.summary === undefined
+        ? ["- none"]
+        : summaryLines(kept.summary)),
     "",
     "#### Programs",
     ...(view.programIds.length === 0
@@ -144,11 +218,11 @@ export function buildChainabuseRequest(
   ].join("\n");
 
   const evidences =
-    shown === undefined
+    kept === undefined || kept.summary === undefined
       ? []
       : [
           {
-            source: `limen simulated transaction summary (Solana devnet): ${shown.summaryJson}`,
+            source: `limen simulated transaction summary (Solana devnet): ${canonicalJson(kept.summary)}`,
           },
         ];
 

@@ -29,6 +29,7 @@ import {
   chainabuseHook,
   escapeMarkdown,
   parseChainabuseMode,
+  redactSummary,
   type ChainabuseMode,
 } from "./chainabuse.ts";
 import { openDatabase } from "./db.ts";
@@ -46,12 +47,6 @@ const DEVICE_1 = FIXTURES.drainer_device_1!;
 const DEVICE_2 = FIXTURES.drainer_device_2!;
 const RECIPIENT = "FZegoJg97QC3nCnjTqW473XZK2osgy2xX5vRq8zccu2o";
 const SYSTEM_PROGRAM = "11111111111111111111111111111111";
-
-// The summary each fixture transaction re-simulates to: the one its report carried.
-const SUMMARY_BY_TX = new Map<string, unknown>([
-  [String(DEVICE_1.transaction), DEVICE_1.summary],
-  [String(DEVICE_2.transaction), DEVICE_2.summary],
-]);
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
 
@@ -89,8 +84,18 @@ function watchOutbound(): { outbound: string[]; restore: () => void } {
   };
 }
 
-/** Posts both fixture reports through a real server with the hook in `mode`. */
-async function runFlow(mode: ChainabuseMode, include_wallet = false) {
+/**
+ * Posts the reports (by default the two fixture reports) through a real server with the hook in
+ * `mode`. Each transaction re-simulates to the summary its report carried, with a drain pattern.
+ */
+async function runFlow(
+  mode: ChainabuseMode,
+  include_wallet = false,
+  reports: readonly Record<string, unknown>[] = [DEVICE_1, DEVICE_2],
+) {
+  const summaryByTx = new Map(
+    reports.map((r) => [String(r.transaction), r.summary] as const),
+  );
   const db = openDatabase(":memory:");
   const logged: string[] = [];
   const server: Server = createApiServer({
@@ -99,7 +104,7 @@ async function runFlow(mode: ChainabuseMode, include_wallet = false) {
     reports: {
       now: () => 1_795_000_500,
       resimulator: async (tx) => ({
-        summary: SUMMARY_BY_TX.get(Buffer.from(tx).toString("base64")),
+        summary: summaryByTx.get(Buffer.from(tx).toString("base64")),
         drainPattern: true,
       }),
       onEscalated: chainabuseHook(mode, db, bundledLists(), (line) =>
@@ -112,7 +117,7 @@ async function runFlow(mode: ChainabuseMode, include_wallet = false) {
   const watch = watchOutbound();
   const statuses: unknown[] = [];
   try {
-    for (const report of [DEVICE_1, DEVICE_2]) {
+    for (const report of reports) {
       const res = await fetch(`${base}/reports`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -403,5 +408,152 @@ test("with the flag on and no domain lists, the API still starts, serves /health
   } finally {
     child.kill();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Addresses for a summary in E-09's shape: SHA-256 of a fixed label in base58, as in the E-10
+// fixtures, so none belongs to anyone on any network.
+const TOKEN_ACCOUNT = "DJZWkGHFsPLN9y2i2ajWnyBQhbVqbyq1DE4nQtCQyiAz"; // "limen e13 fixture token account"
+const MINT = "5KnAgeXC6j5jyKEERx9SvMQLsR7rat4KwweTqf1eRA6T"; // "limen e13 fixture mint"
+const CO_SIGNER = "GKykEcgDPAt2kyCnSKReJV5dWwPhgqym3xZfszLEnjxN"; // "limen e13 fixture co-signer"
+
+test("summary values naming an address other than a recipient or program ID are left out, wherever they sit", () => {
+  const listed = new Set([RECIPIENT, SYSTEM_PROGRAM]);
+  assert.deepEqual(
+    redactSummary(
+      {
+        note: `sends to ${RECIPIENT} through ${SYSTEM_PROGRAM}`,
+        joined: `x${RECIPIENT}`,
+        [TOKEN_ACCOUNT]: { lamports: "1" },
+        list: [RECIPIENT, MINT, 7, null],
+        nested: { to: { address: CO_SIGNER }, kind: "sol-out" },
+      },
+      listed,
+    ),
+    {
+      summary: {
+        note: `sends to ${RECIPIENT} through ${SYSTEM_PROGRAM}`,
+        list: [RECIPIENT, 7, null],
+        nested: { to: {}, kind: "sol-out" },
+      },
+      leftOut: 4,
+    },
+  );
+});
+
+test('signers.feePayer is kept only as the role marker "user"', () => {
+  const listed = new Set<string>();
+  assert.deepEqual(
+    redactSummary({ signers: { feePayer: "user", unsigned: true } }, listed),
+    { summary: { signers: { feePayer: "user", unsigned: true } }, leftOut: 0 },
+  );
+  // A shortened address names no full base58 run, so only the fee payer rule leaves it out.
+  assert.deepEqual(
+    redactSummary(
+      { signers: { feePayer: "4FLJ...APRa", unsigned: true } },
+      listed,
+    ),
+    { summary: { signers: { unsigned: true } }, leftOut: 1 },
+  );
+});
+
+/** A summary in E-09's shape (packages/preflight/src/summary.ts) whose fee payer is a wallet, not the role marker. */
+function e09Summary(feePayer: string, lamports: string) {
+  return {
+    effects: [
+      {
+        kind: "sol-out",
+        instruction: 0,
+        to: { address: RECIPIENT },
+        lamports,
+        reason: "transfer",
+      },
+      {
+        kind: "token-out",
+        instruction: 1,
+        program: "token",
+        source: { address: TOKEN_ACCOUNT },
+        destination: { address: RECIPIENT },
+        mint: { address: MINT },
+        amount: "250000000",
+        decimals: 6,
+      },
+    ],
+    others: [],
+    undecoded: [],
+    signers: {
+      feePayer,
+      others: [{ address: CO_SIGNER, signed: false }],
+      unsigned: true,
+    },
+    unresolvedAccounts: 0,
+  };
+}
+
+test("a stored summary whose fee payer is the reporter's wallet gives a body without it, opted in or not", async () => {
+  const reports = [DEVICE_1, DEVICE_2].map((r, i) => ({
+    ...r,
+    summary: e09Summary(String(r.wallet), `150000000${i + 1}`),
+  }));
+  const KEPT =
+    `{"effects":[{"instruction":0,"kind":"sol-out","lamports":"1500000001","reason":"transfer","to":{"address":"${RECIPIENT}"}},` +
+    `{"amount":"250000000","decimals":6,"destination":{"address":"${RECIPIENT}"},"instruction":1,"kind":"token-out","mint":{},"program":"token","source":{}}],` +
+    `"others":[],"signers":{"others":[{"signed":false}],"unsigned":true},"undecoded":[],"unresolvedAccounts":0}`;
+  const owed = [
+    {
+      ...OWED_BODY[0]!,
+      description: [
+        "### limen escalation: simulated drain pattern",
+        "",
+        "A QR reported through limen leads to a transaction whose simulation shows funds leaving the signer's wallet. limen simulates on Solana devnet only.",
+        "",
+        "- Case: 1",
+        "- Decided by: the automatic threshold (drain pattern, and two or more devices or a listed domain)",
+        "- Sightings: 2, from 2 independent devices",
+        "- Domain: claim-pass.example",
+        "- Domain on the Phantom or PhishDestroy list: no",
+        "- Re-simulation reproduced the reported summary with a drain pattern: yes",
+        "- Summary values left out, so that no address beyond the recipients and programs below is reported: 4",
+        "",
+        "#### Simulated transaction summary",
+        `- effects: \\[{"instruction":0,"kind":"sol-out","lamports":"1500000001","reason":"transfer","to":{"address":"${RECIPIENT}"}},{"amount":"250000000","decimals":6,"destination":{"address":"${RECIPIENT}"},"instruction":1,"kind":"token-out","mint":{},"program":"token","source":{}}\\]`,
+        "- others: \\[\\]",
+        '- signers: {"others":\\[{"signed":false}\\],"unsigned":true}',
+        "- undecoded: \\[\\]",
+        "- unresolvedAccounts: 0",
+        "",
+        "#### Programs",
+        `- ${SYSTEM_PROGRAM}`,
+        "",
+        "#### Recipients",
+        `- ${RECIPIENT}`,
+      ].join("\n"),
+      evidences: [
+        {
+          source: `limen simulated transaction summary (Solana devnet): ${KEPT}`,
+        },
+      ],
+    },
+  ];
+  for (const include_wallet of [false, true]) {
+    const { logged, statuses } = await runFlow(
+      "dry-run",
+      include_wallet,
+      reports,
+    );
+    assert.deepEqual(
+      statuses.map((s) => (s as { case_status: string }).case_status),
+      ["held", "escalated"],
+    );
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0]!.split("\n")[1], JSON.stringify(owed));
+    for (const address of [
+      String(DEVICE_1.wallet),
+      String(DEVICE_2.wallet),
+      TOKEN_ACCOUNT,
+      MINT,
+      CO_SIGNER,
+    ])
+      assert.ok(!logged[0]!.includes(address), `${address} reached the body`);
   }
 });
