@@ -1,0 +1,425 @@
+{
+  "unit": "E-09",
+  "about": "Transactions built with @solana/web3.js 1.99.0 and @solana/spl-token 0.4.15 by fixtures/tx/generate-e09.mjs, each with the summary it owes for the user below. Keys are SHA-256 hashes of fixed labels used as public keys; no private key exists for them. tables lists the lookup tables loaded for the case.",
+  "user": "63e2bvJ6SLRtgbTHJaYiiCWBs4BpSMcugDr6XLohgUka",
+  "keys": {
+    "attacker": "AadqUhBH5BtWcKCxnz9gfrWFCDBRXcdHQwzEsTqK49cK",
+    "organizer": "E3RFTY1NdeAf1fD4HH8v6SJWCxTH3bkvBKMbapev8HGW",
+    "cosigner": "5ZNFf2gWjUjeP4EPMNEwDhda6NcHyeQ5VHMTqZMTuit1",
+    "userTokenAccount": "Hy6CmWD4aQqaU5prs9KC4EdX1P5n4SVZ26LKqyzgL8Lb",
+    "userToken2022Account": "3BNZi6FHJLmHKiKPNed7CbkFsKZhAmmYDcAwbVHo6PFf",
+    "mint": "M3enQnkvsuuvu9op88Yhr59UaXNsF1FqwedKDg248DB",
+    "unknownProgram": "9uaYM4bw4SmTT7VeSci5dm3AtMiQ424HvqWtfZoCMajp",
+    "lookupTable": "GGJkUyVMs9NitdZFLj86vyK9QrkFFqSxgUTwffMo6hA5"
+  },
+  "cases": [
+    {
+      "name": "drainer: SOL balance out and a delegate approved over the user's tokens",
+      "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAQHSvd2qOxluP/mbmmkLglCcd9BzrMHcqHTUtEMfcJa7sOOVv/alv7BQfWtymnVTS3TkmqONVTRvQkyvSAmCGyPOPwZZigmbvYrEvWYz9X5o6OYKPl6AvjPaHJRzNBBEJF0AwZGb+UhFzL/7K26csOb57yM5bvF9xJrLEObOkAAAAAFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABt324ddloZPZy+FGzut5rBy0he1fWzeROoz1hX7/AKlC3W3T50V4ZuTc+toP6JXcK2cdZZdOAD0Ee2wMl+jIAAQDAAkDUMMAAAAAAAAEABVDbGFpbSB5b3VyIGxpbWVuIHBhc3MFAgABDAIAAACAW20pAQAAAAYDAgEACQT//////////w==",
+      "tables": {},
+      "owed": {
+        "effects": [
+          {
+            "kind": "sol-out",
+            "instruction": 2,
+            "to": {
+              "address": "AadqUhBH5BtWcKCxnz9gfrWFCDBRXcdHQwzEsTqK49cK"
+            },
+            "lamports": "4990000000",
+            "reason": "transfer"
+          },
+          {
+            "kind": "delegate-approved",
+            "instruction": 3,
+            "program": "token",
+            "account": {
+              "address": "Hy6CmWD4aQqaU5prs9KC4EdX1P5n4SVZ26LKqyzgL8Lb"
+            },
+            "delegate": {
+              "address": "AadqUhBH5BtWcKCxnz9gfrWFCDBRXcdHQwzEsTqK49cK"
+            },
+            "mint": null,
+            "amount": "18446744073709551615",
+            "decimals": null
+          }
+        ],
+        "others": [
+          {
+            "instruction": 0,
+            "kind": "compute-budget"
+          },
+          {
+            "instruction": 1,
+            "kind": "memo"
+          }
+        ],
+        "undecoded": [],
+        "signers": {
+          "userSigns": true,
+          "userPaysFees": true,
+          "others": [],
+          "unsigned": true
+        },
+        "unresolvedAccounts": 0
+      }
+    },
+    {
+      "name": "drainer as a v0 transaction, attacker address in a loaded lookup table",
+      "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAEBkr3dqjsZbj/5m5ppC4JQnHfQc6zB3Kh01LRDH3CWu7D/BlmKCZu9isS9ZjP1fmjo5go+XoC+M9oclHM0EEQkXQDBkZv5SEXMv/srbpyw5vnvIzlu8X3EmssQ5s6QAAAAAVKU1qZKSEGTSTocWDaOHx8NbXdvJK7geQfqEBBBUSNAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAG3fbh12Whk9nL4UbO63msHLSF7V9bN5E6jPWFfv8AqULdbdPnRXhm5Nz62g/oldwrZx1ll04APQR7bAyX6MgABAIACQNQwwAAAAAAAAMAFUNsYWltIHlvdXIgbGltZW4gcGFzcwQCAAYMAgAAAIBbbSkBAAAABQMBBgAJBP//////////AeLLFe7UtDIDtVo5ey34bpJKqZyshIjDbppbUmaIvwZWAQEA",
+      "tables": {
+        "GGJkUyVMs9NitdZFLj86vyK9QrkFFqSxgUTwffMo6hA5": [
+          "E3RFTY1NdeAf1fD4HH8v6SJWCxTH3bkvBKMbapev8HGW",
+          "AadqUhBH5BtWcKCxnz9gfrWFCDBRXcdHQwzEsTqK49cK"
+        ]
+      },
+      "owed": {
+        "effects": [
+          {
+            "kind": "sol-out",
+            "instruction": 2,
+            "to": {
+              "address": "AadqUhBH5BtWcKCxnz9gfrWFCDBRXcdHQwzEsTqK49cK"
+            },
+            "lamports": "4990000000",
+            "reason": "transfer"
+          },
+          {
+            "kind": "delegate-approved",
+            "instruction": 3,
+            "program": "token",
+            "account": {
+              "address": "Hy6CmWD4aQqaU5prs9KC4EdX1P5n4SVZ26LKqyzgL8Lb"
+            },
+            "delegate": {
+              "address": "AadqUhBH5BtWcKCxnz9gfrWFCDBRXcdHQwzEsTqK49cK"
+            },
+            "mint": null,
+            "amount": "18446744073709551615",
+            "decimals": null
+          }
+        ],
+        "others": [
+          {
+            "instruction": 0,
+            "kind": "compute-budget"
+          },
+          {
+            "instruction": 1,
+            "kind": "memo"
+          }
+        ],
+        "undecoded": [],
+        "signers": {
+          "userSigns": true,
+          "userPaysFees": true,
+          "others": [],
+          "unsigned": true
+        },
+        "unresolvedAccounts": 0
+      }
+    },
+    {
+      "name": "drainer as a v0 transaction, lookup table not loaded",
+      "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAEBkr3dqjsZbj/5m5ppC4JQnHfQc6zB3Kh01LRDH3CWu7D/BlmKCZu9isS9ZjP1fmjo5go+XoC+M9oclHM0EEQkXQDBkZv5SEXMv/srbpyw5vnvIzlu8X3EmssQ5s6QAAAAAVKU1qZKSEGTSTocWDaOHx8NbXdvJK7geQfqEBBBUSNAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAG3fbh12Whk9nL4UbO63msHLSF7V9bN5E6jPWFfv8AqULdbdPnRXhm5Nz62g/oldwrZx1ll04APQR7bAyX6MgABAIACQNQwwAAAAAAAAMAFUNsYWltIHlvdXIgbGltZW4gcGFzcwQCAAYMAgAAAIBbbSkBAAAABQMBBgAJBP//////////AeLLFe7UtDIDtVo5ey34bpJKqZyshIjDbppbUmaIvwZWAQEA",
+      "tables": {},
+      "owed": {
+        "effects": [
+          {
+            "kind": "sol-out",
+            "instruction": 2,
+            "to": {
+              "table": "GGJkUyVMs9NitdZFLj86vyK9QrkFFqSxgUTwffMo6hA5",
+              "index": 1
+            },
+            "lamports": "4990000000",
+            "reason": "transfer"
+          },
+          {
+            "kind": "delegate-approved",
+            "instruction": 3,
+            "program": "token",
+            "account": {
+              "address": "Hy6CmWD4aQqaU5prs9KC4EdX1P5n4SVZ26LKqyzgL8Lb"
+            },
+            "delegate": {
+              "table": "GGJkUyVMs9NitdZFLj86vyK9QrkFFqSxgUTwffMo6hA5",
+              "index": 1
+            },
+            "mint": null,
+            "amount": "18446744073709551615",
+            "decimals": null
+          }
+        ],
+        "others": [
+          {
+            "instruction": 0,
+            "kind": "compute-budget"
+          },
+          {
+            "instruction": 1,
+            "kind": "memo"
+          }
+        ],
+        "undecoded": [],
+        "signers": {
+          "userSigns": true,
+          "userPaysFees": true,
+          "others": [],
+          "unsigned": true
+        },
+        "unresolvedAccounts": 1
+      }
+    },
+    {
+      "name": "unknown program: fallback, with the decodable transfer still shown",
+      "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAIFSvd2qOxluP/mbmmkLglCcd9BzrMHcqHTUtEMfcJa7sPBxoKpNmDjuK8OrmObGyT40zUZkj0qmtZRIvQpMRDzi/wZZigmbvYrEvWYz9X5o6OYKPl6AvjPaHJRzNBBEJF0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACEVZ8tZpnEGcIDHdXHJx8ylBsAVhrX5nYV8qY9hSz850LdbdPnRXhm5Nz62g/oldwrZx1ll04APQR7bAyX6MgAAgMCAAEMAgAAAICWmAAAAAAABAIAAgQBAgME",
+      "tables": {},
+      "owed": {
+        "effects": [
+          {
+            "kind": "sol-out",
+            "instruction": 0,
+            "to": {
+              "address": "E3RFTY1NdeAf1fD4HH8v6SJWCxTH3bkvBKMbapev8HGW"
+            },
+            "lamports": "10000000",
+            "reason": "transfer"
+          }
+        ],
+        "others": [],
+        "undecoded": [
+          {
+            "instruction": 1,
+            "programId": "9uaYM4bw4SmTT7VeSci5dm3AtMiQ424HvqWtfZoCMajp",
+            "reason": "unknown-program"
+          }
+        ],
+        "signers": {
+          "userSigns": true,
+          "userPaysFees": true,
+          "others": [],
+          "unsigned": true
+        },
+        "unresolvedAccounts": 0
+      }
+    },
+    {
+      "name": "Token-2022 owner change and close, plus a checked transfer",
+      "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAMISvd2qOxluP/mbmmkLglCcd9BzrMHcqHTUtEMfcJa7sMgX5B6WV+KkE96BhR2lU/7vFSjOWC0HvKJsjXG62DKEsHGgqk2YOO4rw6uY5sbJPjTNRmSPSqa1lEi9CkxEPOL/BlmKCZu9isS9ZjP1fmjo5go+XoC+M9oclHM0EEQkXSOVv/alv7BQfWtymnVTS3TkmqONVTRvQkyvSAmCGyPOAbd9uHudY/eGEJdvORszdq2GvxNg7kNJ/69+SjYoYv8BSKdOcaQ/kcvPqaMA4s3OkoZzJKsqc+k+lCRHWTFq6YG3fbh12Whk9nL4UbO63msHLSF7V9bN5E6jPWFfv8AqULdbdPnRXhm5Nz62g/oldwrZx1ll04APQR7bAyX6MgAAwUEAQYCAAoMoCUmAAAAAAAGBQIBACMGAgGOVv/alv7BQfWtymnVTS3TkmqONVTRvQkyvSAmCGyPOAcDAwQAAQk=",
+      "tables": {},
+      "owed": {
+        "effects": [
+          {
+            "kind": "token-out",
+            "instruction": 0,
+            "program": "token-2022",
+            "source": {
+              "address": "3BNZi6FHJLmHKiKPNed7CbkFsKZhAmmYDcAwbVHo6PFf"
+            },
+            "destination": {
+              "address": "E3RFTY1NdeAf1fD4HH8v6SJWCxTH3bkvBKMbapev8HGW"
+            },
+            "mint": {
+              "address": "M3enQnkvsuuvu9op88Yhr59UaXNsF1FqwedKDg248DB"
+            },
+            "amount": "2500000",
+            "decimals": 6
+          },
+          {
+            "kind": "authority-changed",
+            "instruction": 1,
+            "program": "token-2022",
+            "account": {
+              "address": "3BNZi6FHJLmHKiKPNed7CbkFsKZhAmmYDcAwbVHo6PFf"
+            },
+            "authorityType": "AccountOwner",
+            "newAuthority": "AadqUhBH5BtWcKCxnz9gfrWFCDBRXcdHQwzEsTqK49cK"
+          },
+          {
+            "kind": "account-closed",
+            "instruction": 2,
+            "program": "token",
+            "account": {
+              "address": "Hy6CmWD4aQqaU5prs9KC4EdX1P5n4SVZ26LKqyzgL8Lb"
+            },
+            "destination": {
+              "address": "AadqUhBH5BtWcKCxnz9gfrWFCDBRXcdHQwzEsTqK49cK"
+            }
+          }
+        ],
+        "others": [],
+        "undecoded": [],
+        "signers": {
+          "userSigns": true,
+          "userPaysFees": true,
+          "others": [],
+          "unsigned": true
+        },
+        "unresolvedAccounts": 0
+      }
+    },
+    {
+      "name": "Token-2022 Batch instruction is not decoded",
+      "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAECSvd2qOxluP/mbmmkLglCcd9BzrMHcqHTUtEMfcJa7sMG3fbh7nWP3hhCXbzkbM3athr8TYO5DSf+vfko2KGL/ELdbdPnRXhm5Nz62g/oldwrZx1ll04APQR7bAyX6MgAAQEBAAL/BA==",
+      "tables": {},
+      "owed": {
+        "effects": [],
+        "others": [],
+        "undecoded": [
+          {
+            "instruction": 0,
+            "programId": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+            "reason": "instruction-not-decoded"
+          }
+        ],
+        "signers": {
+          "userSigns": true,
+          "userPaysFees": true,
+          "others": [],
+          "unsigned": true
+        },
+        "unresolvedAccounts": 0
+      }
+    },
+    {
+      "name": "System transfer with trailing data is not decoded",
+      "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDSvd2qOxluP/mbmmkLglCcd9BzrMHcqHTUtEMfcJa7sOOVv/alv7BQfWtymnVTS3TkmqONVTRvQkyvSAmCGyPOAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQt1t0+dFeGbk3PraD+iV3CtnHWWXTgA9BHtsDJfoyAABAgIAAQ0CAAAAAMqaOwAAAAAA",
+      "tables": {},
+      "owed": {
+        "effects": [],
+        "others": [],
+        "undecoded": [
+          {
+            "instruction": 0,
+            "programId": "11111111111111111111111111111111",
+            "reason": "unexpected-data"
+          }
+        ],
+        "signers": {
+          "userSigns": true,
+          "userPaysFees": true,
+          "others": [],
+          "unsigned": true
+        },
+        "unresolvedAccounts": 0
+      }
+    },
+    {
+      "name": "a co-signer that has not signed",
+      "transaction": "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgEBA0r3dqjsZbj/5m5ppC4JQnHfQc6zB3Kh01LRDH3CWu7DQ7ldNH4cPiHYpeOpbLTsddB5qYEPthlOFcylw77i3JIFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjULdbdPnRXhm5Nz62g/oldwrZx1ll04APQR7bAyX6MgAAQICAAEJY28tc2lnbmVk",
+      "tables": {},
+      "owed": {
+        "effects": [],
+        "others": [
+          {
+            "instruction": 0,
+            "kind": "memo"
+          }
+        ],
+        "undecoded": [],
+        "signers": {
+          "userSigns": true,
+          "userPaysFees": true,
+          "others": [
+            {
+              "address": "5ZNFf2gWjUjeP4EPMNEwDhda6NcHyeQ5VHMTqZMTuit1",
+              "signed": false
+            }
+          ],
+          "unsigned": true
+        },
+        "unresolvedAccounts": 0
+      }
+    },
+    {
+      "name": "a co-signer that has signed, and an organizer paying the fee",
+      "transaction": "AgcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgEBA8HGgqk2YOO4rw6uY5sbJPjTNRmSPSqa1lEi9CkxEPOLSvd2qOxluP/mbmmkLglCcd9BzrMHcqHTUtEMfcJa7sMFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjULdbdPnRXhm5Nz62g/oldwrZx1ll04APQR7bAyX6MgAAQIBAQlzcG9uc29yZWQ=",
+      "tables": {},
+      "owed": {
+        "effects": [],
+        "others": [
+          {
+            "instruction": 0,
+            "kind": "memo"
+          }
+        ],
+        "undecoded": [],
+        "signers": {
+          "userSigns": true,
+          "userPaysFees": false,
+          "others": [
+            {
+              "address": "E3RFTY1NdeAf1fD4HH8v6SJWCxTH3bkvBKMbapev8HGW",
+              "signed": true
+            }
+          ],
+          "unsigned": false
+        },
+        "unresolvedAccounts": 0
+      }
+    }
+  ],
+  "accountOrder": {
+    "name": "account order across two lookup tables",
+    "transaction": "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAIBAgVK93ao7GW4/+ZuaaQuCUJx30HOswdyodNS0Qx9wlruw0O5XTR+HD4h2KXjqWy07HXQeamBD7YZThXMpcO+4tySsvN4d6loK7OvpgaKMKVmRrg4zUs1RP/3CNBoZ++jYGiEVZ8tZpnEGcIDHdXHJx8ylBsAVhrX5nYV8qY9hSz856Yr6CghTQ8C4OM2hVhPjmn246F7sV+hHJDDtASuPXBNQt1t0+dFeGbk3PraD+iV3CtnHWWXTgA9BHtsDJfoyAABAwcIBQYHAQIEAAKscS/7F7hSOLU4taR1oSoOdikwuguyxMvBadZPB0qC7AECAQBafHLF3xEowxGh1IKMv+3pyy3MYFACbdfN1ployJcGnQEAAQE=",
+    "tables": {
+      "Cc9ECUFPAzZiYx5HQqHPJkkEavHEMaYBTDwwBhvQ5D5d": [
+        "HVmFgkaqMWuTq4J4P4amU9yerxKdYxoezMCyUmVKjGbR",
+        "7KnhRGt8vUz5Bfj9vG3skHvtnofGJuDhyL7BF5Q7MyQ4",
+        "FG2ShVuHU1m9iHg4DmTQTzbBvfjr8895YcMX317UmF9G"
+      ],
+      "76DkpckdFcdnZbhG5HAET84mUEHBDh23GsTRqzt8xbWU": [
+        "4XG6wGeYghxHVEqSew5CmpAQANnHUmEJXNEFdz3zVBnz",
+        "5AX2PaLipGBGQUVzhw4HVvWNfKDbejWJgPqjMPrjTb2L",
+        "9QEZDdp3VEVRdtthroZpdwygBsguW6Yh2Wu55D7R9Msj"
+      ]
+    },
+    "owed": [
+      {
+        "address": "63e2bvJ6SLRtgbTHJaYiiCWBs4BpSMcugDr6XLohgUka",
+        "signer": true,
+        "writable": true
+      },
+      {
+        "address": "5ZNFf2gWjUjeP4EPMNEwDhda6NcHyeQ5VHMTqZMTuit1",
+        "signer": true,
+        "writable": false
+      },
+      {
+        "address": "D3Yu1szVDXuxRcYc3eFKzwHidg4TMA9feGda5jq2Wpb1",
+        "signer": false,
+        "writable": true
+      },
+      {
+        "address": "9uaYM4bw4SmTT7VeSci5dm3AtMiQ424HvqWtfZoCMajp",
+        "signer": false,
+        "writable": false
+      },
+      {
+        "address": "CBfWYDe4amrgzmQoA5736SFSSarQhZp6DYreFuLhAVxY",
+        "signer": false,
+        "writable": false
+      },
+      {
+        "address": "FG2ShVuHU1m9iHg4DmTQTzbBvfjr8895YcMX317UmF9G",
+        "signer": false,
+        "writable": true
+      },
+      {
+        "address": "4XG6wGeYghxHVEqSew5CmpAQANnHUmEJXNEFdz3zVBnz",
+        "signer": false,
+        "writable": true
+      },
+      {
+        "address": "HVmFgkaqMWuTq4J4P4amU9yerxKdYxoezMCyUmVKjGbR",
+        "signer": false,
+        "writable": false
+      },
+      {
+        "address": "5AX2PaLipGBGQUVzhw4HVvWNfKDbejWJgPqjMPrjTb2L",
+        "signer": false,
+        "writable": false
+      }
+    ]
+  }
+}
