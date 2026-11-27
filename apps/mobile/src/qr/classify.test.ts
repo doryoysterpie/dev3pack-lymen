@@ -139,6 +139,20 @@ describe("classifyQr edge cases", () => {
       transfer(R, { label: "Build Station", memo: "Order 42" }),
     ],
     [`solana:${R}?label=&message=Hi&memo=`, transfer(R, { message: "Hi" })],
+    // Fields are decoded with decodeURIComponent, as SPEC.md links: a "+"
+    // stays a "+" (form decoding would make it a space), escapes decode, and a
+    // field that is not valid percent-encoding is refused.
+    [
+      `solana:${R}?memo=A+B&label=C%2BD`,
+      transfer(R, { memo: "A+B", label: "C+D" }),
+    ],
+    [
+      `solana:${R}?label=Coffee%0A%0AOrganizer%3A%20x`,
+      transfer(R, { label: "Coffee\n\nOrganizer: x" }),
+    ],
+    [`solana:${R}?label=caf%C3%A9%20bar`, transfer(R, { label: "café bar" })],
+    [`solana:${R}?label=a%ZZ`, malformed("query-invalid")],
+    [`solana:${R}?memo=%E0%A4%A`, malformed("query-invalid")],
     // The reference parseURL refuses a URL string past 2048 characters.
     [
       ofLength(2048),

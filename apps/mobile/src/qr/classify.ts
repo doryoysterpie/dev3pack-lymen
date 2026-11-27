@@ -9,7 +9,7 @@
 // place that parses a Solana Pay URL; the transfer card (E-08) reads the
 // fields it returns.
 
-import { URL, type URLSearchParams } from "whatwg-url-minimum";
+import { URL } from "whatwg-url-minimum";
 
 import { decodePublicKey } from "./base58.ts";
 
@@ -25,6 +25,7 @@ export const SOL_DECIMALS = 9;
 /** Why a solana: URL is malformed. */
 export type SolanaPayProblem =
   | "too-long"
+  | "query-invalid"
   | "no-pathname"
   | "link-invalid"
   | "recipient-invalid"
@@ -88,6 +89,41 @@ const SINGLE_FIELDS = ["amount", "spl-token", "label", "message", "memo"];
 // reference parseURL.
 const AMOUNT = /^\d+(\.\d+)?$/;
 
+interface Query {
+  get(name: string): string | null;
+  getAll(name: string): string[];
+}
+
+/**
+ * Reads the query as the spec decodes its fields: split on "&" and on the
+ * first "=", then decodeURIComponent, the function SPEC.md links for label,
+ * message and memo. Unlike form decoding (URLSearchParams), it keeps a "+" as
+ * a "+", so the memo shown is the memo a spec-following wallet writes on chain.
+ * The reference parseURL uses URLSearchParams and would read a space. Returns
+ * null when a field is not valid percent-encoding.
+ */
+function readQuery(search: string): Query | null {
+  const fields = new Map<string, string[]>();
+  const query = search.startsWith("?") ? search.slice(1) : search;
+  for (const part of query.split("&")) {
+    if (part === "") continue;
+    const equals = part.indexOf("=");
+    let name: string;
+    let value: string;
+    try {
+      name = decodeURIComponent(equals === -1 ? part : part.slice(0, equals));
+      value = equals === -1 ? "" : decodeURIComponent(part.slice(equals + 1));
+    } catch {
+      return null;
+    }
+    fields.set(name, [...(fields.get(name) ?? []), value]);
+  }
+  return {
+    get: (name) => fields.get(name)?.[0] ?? null,
+    getAll: (name) => fields.get(name) ?? [],
+  };
+}
+
 function decimalPlaces(amount: string): number {
   const point = amount.indexOf(".");
   return point === -1 ? 0 : amount.length - point - 1;
@@ -95,12 +131,15 @@ function decimalPlaces(amount: string): number {
 
 /**
  * Reads a transfer request's query. Checks run in this order and the first
- * failure is reported: a repeated single-value field, the amount, the
+ * failure is reported: a field that is not valid percent-encoding, a repeated
+ * single-value field, the amount, the
  * spl-token, then each reference. A SOL amount with more than 9 decimal
  * places is refused here; an SPL token amount is checked against its mint's
  * decimals by the transfer card, which knows them.
  */
-function readTransfer(recipient: string, params: URLSearchParams): QrClass {
+function readTransfer(recipient: string, search: string): QrClass {
+  const params = readQuery(search);
+  if (params === null) return malformed("query-invalid");
   for (const field of SINGLE_FIELDS) {
     if (params.getAll(field).length > 1) return malformed("duplicate-field");
   }
@@ -169,7 +208,7 @@ function classifySolanaPay(url: URL): QrClass {
 
   // The spec: the recipient must be a base58-encoded public key.
   if (decodePublicKey(pathname) === null) return malformed("recipient-invalid");
-  return readTransfer(pathname, url.searchParams);
+  return readTransfer(pathname, url.search);
 }
 
 /**
