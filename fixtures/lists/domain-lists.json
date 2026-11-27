@@ -1,0 +1,5 @@
+{
+  "about": "FIXTURE LIST, not a copy of any real list. It stands in for the Phantom blocklist and the PhishDestroy list so the E-11 threshold can be tested. Every domain uses the reserved .example or .test top-level domains (RFC 2606), so none resolves. Snapshotting the real lists is a decision held for the owner.",
+  "phantom": ["listed-on-phantom.example", "wallet-drain.test"],
+  "phishdestroy": ["listed-on-phishdestroy.example"]
+}

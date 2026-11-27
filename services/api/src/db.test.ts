@@ -1,4 +1,4 @@
-// E-02 done test, part 1: the schema migrates from empty. E-10 adds migration 2.
+// E-02 done test, part 1: the schema migrates from empty. E-10 adds migration 2, E-11 migration 3.
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,10 +8,20 @@ import { test } from "node:test";
 
 import { MIGRATIONS, migrate, openDatabase, schemaVersion } from "./db.ts";
 
-// The schema owed after every migration: E-02's six tables and E-10's evidence_bundles, with
-// their columns in declaration order.
+// The schema owed after every migration: E-02's six tables (cases as E-11 rebuilt it) and
+// E-10's evidence_bundles, with their columns in declaration order.
 const OWED_SCHEMA: Record<string, string[]> = {
-  cases: ["id", "status", "created_at", "updated_at"],
+  cases: [
+    "id",
+    "dedup_hash",
+    "domain",
+    "program_ids_json",
+    "recipients_json",
+    "status",
+    "decided_by",
+    "created_at",
+    "updated_at",
+  ],
   checkins: [
     "id",
     "session_id",
@@ -70,14 +80,14 @@ function withTempDir(fn: (dir: string) => void): void {
   }
 }
 
-test("an empty database migrates to schema version 2 with exactly the seven owed tables", () => {
+test("an empty database migrates to schema version 3 with exactly the seven owed tables", () => {
   const db = new DatabaseSync(":memory:");
   assert.equal(schemaVersion(db), 0);
   assert.deepEqual(tables(db), []);
 
-  assert.equal(migrate(db), 2);
-  assert.equal(schemaVersion(db), 2);
-  assert.equal(MIGRATIONS.length, 2);
+  assert.equal(migrate(db), 3);
+  assert.equal(schemaVersion(db), 3);
+  assert.equal(MIGRATIONS.length, 3);
   assert.deepEqual(tables(db), Object.keys(OWED_SCHEMA).sort());
   for (const [table, owed] of Object.entries(OWED_SCHEMA)) {
     assert.deepEqual(columns(db, table), owed, `columns of ${table}`);
@@ -88,14 +98,14 @@ test("an empty database file on disk migrates, and reopening it does not migrate
   withTempDir((dir) => {
     const path = join(dir, "limen.db");
     const first = openDatabase(path);
-    assert.equal(schemaVersion(first), 2);
+    assert.equal(schemaVersion(first), 3);
     first
       .prepare("INSERT INTO stations (id, name, created_at) VALUES (?, ?, ?)")
       .run("st-1", "Front desk", 1_700_000_000);
     first.close();
 
     const second = openDatabase(path);
-    assert.equal(schemaVersion(second), 2);
+    assert.equal(schemaVersion(second), 3);
     const row = second
       .prepare("SELECT name FROM stations WHERE id = ?")
       .get("st-1") as {
@@ -111,7 +121,7 @@ test("a database from a newer build is refused, not run against", () => {
   db.exec("PRAGMA user_version = 99");
   assert.throws(
     () => migrate(db),
-    /schema version 99 is newer than this build supports \(2\)/,
+    /schema version 99 is newer than this build supports \(3\)/,
   );
 });
 
@@ -153,7 +163,7 @@ test("the schema enforces foreign keys and a wallet bound to at most one registr
   );
 });
 
-test("a version 1 database migrates to version 2 and keeps its rows", () => {
+test("a version 1 database migrates to the latest version and keeps its rows", () => {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("BEGIN");
@@ -163,7 +173,7 @@ test("a version 1 database migrates to version 2 and keeps its rows", () => {
   db.exec(
     "INSERT INTO sightings (device_hash, qr_text, created_at) VALUES ('d-1', 'qr', 1)",
   );
-  assert.equal(migrate(db), 2);
+  assert.equal(migrate(db), 3);
   const row = db.prepare("SELECT qr_text FROM sightings").get() as {
     qr_text: string;
   };
@@ -208,4 +218,90 @@ test("an evidence bundle cannot record a failed re-simulation without transactio
   );
   assert.throws(() => insert.run(1, null), /CHECK constraint failed/);
   insert.run(2, "AA==");
+});
+
+function atVersion(version: number): DatabaseSync {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
+  for (let v = 0; v < version; v++) db.exec(MIGRATIONS[v]);
+  db.exec(`PRAGMA user_version = ${version}`);
+  return db;
+}
+
+test("migration 3 keeps an E-02 case row and the sightings foreign key to cases", () => {
+  const db = atVersion(2);
+  db.exec(
+    "INSERT INTO cases (id, status, created_at, updated_at) VALUES (7, 'escalated', 1, 2)",
+  );
+  assert.equal(migrate(db), 3);
+  const row = db.prepare("SELECT * FROM cases").get() as Record<
+    string,
+    unknown
+  >;
+  assert.deepEqual(
+    { ...row },
+    {
+      id: 7,
+      dedup_hash: "e02-case:7",
+      domain: null,
+      program_ids_json: "[]",
+      recipients_json: "[]",
+      status: "escalated",
+      decided_by: "threshold",
+      created_at: 1,
+      updated_at: 2,
+    },
+  );
+  db.exec(
+    "INSERT INTO sightings (case_id, device_hash, qr_text, created_at) VALUES (7, 'd', 'q', 3)",
+  );
+  assert.throws(
+    () =>
+      db.exec(
+        "INSERT INTO sightings (case_id, device_hash, qr_text, created_at) VALUES (8, 'd', 'q', 3)",
+      ),
+    /FOREIGN KEY constraint failed/,
+  );
+});
+
+test("migration 3 rolls back, rather than orphan a sighting, when a sighting already names a case", () => {
+  const db = atVersion(2);
+  db.exec(`
+    INSERT INTO cases (id, status, created_at, updated_at) VALUES (1, 'held', 1, 1);
+    INSERT INTO sightings (case_id, device_hash, qr_text, created_at) VALUES (1, 'd', 'q', 1);
+  `);
+  assert.throws(() => migrate(db), /FOREIGN KEY constraint failed/);
+  assert.equal(schemaVersion(db), 2);
+  assert.deepEqual(columns(db, "cases"), [
+    "id",
+    "status",
+    "created_at",
+    "updated_at",
+  ]);
+});
+
+test("a case is held with no decider, or escalated or dismissed with one, and its dedup hash is unique", () => {
+  const db = openDatabase(":memory:");
+  const insert = db.prepare(
+    `INSERT INTO cases (dedup_hash, program_ids_json, recipients_json, status, decided_by,
+       created_at, updated_at) VALUES (?, '[]', '[]', ?, ?, 1, 1)`,
+  );
+  insert.run("h-1", "held", null);
+  insert.run("h-2", "dismissed", "human");
+  assert.throws(
+    () => insert.run("h-3", "held", "human"),
+    /CHECK constraint failed/,
+  );
+  assert.throws(
+    () => insert.run("h-4", "escalated", null),
+    /CHECK constraint failed/,
+  );
+  assert.throws(
+    () => insert.run("h-5", "closed", "human"),
+    /CHECK constraint failed/,
+  );
+  assert.throws(
+    () => insert.run("h-1", "held", null),
+    /UNIQUE constraint failed: cases.dedup_hash/,
+  );
 });

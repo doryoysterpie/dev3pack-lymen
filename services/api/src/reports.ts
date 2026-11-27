@@ -1,5 +1,5 @@
-// Report routes (E-10): POST /reports takes an evidence bundle from the app and stores it as
-// a sighting. Later triage units add their routes here.
+// Report routes (E-10, E-11): POST /reports takes an evidence bundle from the app, stores it as
+// a sighting, and triages it into a case. Later triage units add their routes here.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -9,6 +9,7 @@ import {
   storeReport,
   type Resimulator,
 } from "./evidence.ts";
+import { bundledLists, triageSighting, type DomainLists } from "./triage.ts";
 
 /** Largest report body accepted, in bytes. A full bundle is a few kilobytes. */
 export const MAX_REPORT_BODY_BYTES = 64 * 1024;
@@ -20,6 +21,8 @@ export interface ReportOptions {
   readonly resimulator?: Resimulator;
   /** How long a re-simulation may take before it counts as failed. Defaults to 15 s. */
   readonly resimulationTimeoutMs?: number;
+  /** The domain lists the D-05 threshold reads. Defaults to the bundled fixture lists. */
+  readonly lists?: DomainLists;
 }
 
 function sendJson(
@@ -107,7 +110,18 @@ async function postReport(
           : "differs"
         : outcome.status;
   }
-  sendJson(res, 201, { sighting_id: sightingId, resimulation });
+  const triage = triageSighting(
+    db,
+    sightingId,
+    options.lists ?? bundledLists(),
+    now(),
+  );
+  sendJson(res, 201, {
+    sighting_id: sightingId,
+    resimulation,
+    case_id: triage.case.id,
+    case_status: triage.case.status,
+  });
 }
 
 /**

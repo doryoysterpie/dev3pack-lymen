@@ -1,4 +1,5 @@
-// E-10: the POST /reports route stores a fixture bundle and refuses malformed requests.
+// E-10 and E-11: the POST /reports route stores a fixture bundle, triages it into a case, and
+// refuses malformed requests. Includes the first half of the E-11 done test, end to end.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { Server } from "node:http";
@@ -94,12 +95,14 @@ const post = (
     body,
   });
 
-test("POST /reports stores the fixture bundle as sighting 1 with no case and no re-simulation", async () => {
+test("POST /reports stores the fixture bundle as sighting 1 in a new held case 1, with no re-simulation", async () => {
   const res = await post(base, JSON.stringify(FIXTURES.drainer_device_1));
   assert.equal(res.status, 201);
   assert.deepEqual(await res.json(), {
     sighting_id: 1,
     resimulation: "not_run",
+    case_id: 1,
+    case_status: "held",
   });
   const row = db
     .prepare("SELECT case_id, created_at FROM sightings WHERE id = 1")
@@ -107,7 +110,7 @@ test("POST /reports stores the fixture bundle as sighting 1 with no case and no 
     case_id: number | null;
     created_at: number;
   };
-  assert.deepEqual({ ...row }, { case_id: null, created_at: 1_795_000_500 });
+  assert.deepEqual({ ...row }, { case_id: 1, created_at: 1_795_000_500 });
   const bundle = loadBundle(db, 1);
   assert.equal(bundle?.url, "https://claim-pass.example/api/tx");
   assert.equal(bundle?.wallet, null);
@@ -125,6 +128,8 @@ test("with a re-simulator set, the response says whether the stored bytes re-sim
   assert.deepEqual(await res.json(), {
     sighting_id: 1,
     resimulation: "differs",
+    case_id: 1,
+    case_status: "held",
   });
 });
 
@@ -143,9 +148,12 @@ test("a failing re-simulator still answers 201 once and stores one sighting, so 
   const url = await listen(failing);
   const res = await post(url, JSON.stringify(FIXTURES.drainer_device_1));
   assert.equal(res.status, 201);
+  // The report is stored once and still triaged: its sighting sits in a held case.
   assert.deepEqual(await res.json(), {
     sighting_id: 1,
     resimulation: "failed",
+    case_id: 1,
+    case_status: "held",
   });
   const rows = failingDb
     .prepare("SELECT resimulation_failed_at FROM evidence_bundles")
@@ -173,6 +181,8 @@ test("a re-simulator that never answers still gets 201 once, after the time limi
   assert.deepEqual(await res.json(), {
     sighting_id: 1,
     resimulation: "failed",
+    case_id: 1,
+    case_status: "held",
   });
   const { n } = hangingDb
     .prepare("SELECT count(*) AS n FROM sightings")
@@ -195,6 +205,8 @@ test("a report with no transaction answers resimulation no_transaction when a re
   assert.deepEqual(await res.json(), {
     sighting_id: 2,
     resimulation: "no_transaction",
+    case_id: 1,
+    case_status: "held",
   });
 });
 
@@ -208,6 +220,24 @@ test("a timestamp more than 300 s ahead of the server's clock is refused", async
     error: "invalid_report",
     field: "timestamp",
   });
+});
+
+test("E-11 done test, end to end: a second bundle for the same drainer from another device joins case 1 as its second sighting", async () => {
+  const res = await post(base, JSON.stringify(FIXTURES.drainer_device_2));
+  assert.equal(res.status, 201);
+  assert.deepEqual(await res.json(), {
+    sighting_id: 2,
+    resimulation: "not_run",
+    case_id: 1,
+    // No re-simulation ran, so no drain pattern is shown and the case holds for a human.
+    case_status: "held",
+  });
+  const counts = db
+    .prepare(
+      "SELECT (SELECT count(*) FROM cases) AS cases, count(*) AS sightings, count(DISTINCT device_hash) AS devices FROM sightings WHERE case_id = 1",
+    )
+    .get() as Record<string, number>;
+  assert.deepEqual({ ...counts }, { cases: 1, sightings: 2, devices: 2 });
 });
 
 test("a malformed report is refused with 400 naming the field, and nothing is stored", async () => {
