@@ -269,6 +269,7 @@ describe("drainPattern on decoded effects", () => {
   const report = (effects: unknown[]): PreflightReport =>
     ({
       kind: "ready",
+      feePayerSet: false,
       summary: {
         effects,
         others: [],

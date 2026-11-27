@@ -13,14 +13,18 @@
 // 8e1b87c, "POST Response"). The wallet signs only when its signature is
 // expected, which holds for the fee payer. It rejects the transaction when
 // another signer's signature is missing; limen also blocks signing until a
-// simulation has run on devnet without an error. For a
-// transaction with no signatures it sets the fee payer to its account, which
-// it already is, and the recent blockhash to the latest, which forSigning does.
+// simulation has run on devnet without an error. For a transaction with no
+// signatures the wallet sets the fee payer to its account and the recent
+// blockhash to the latest. When such a request leaves the fee payer unset
+// (the zero value), limen sets the user's wallet before anything else
+// (fee-payer.ts), so the card, the simulation and the signature all cover the
+// rebuilt transaction. forSigning sets the blockhash.
 
 import { messageAccounts, type LookupTables } from "./accounts.ts";
 import { decodePublicKey } from "./base58.ts";
 import { decodeBase64, encodeBase64 } from "./base64.ts";
 import { drainPattern } from "./drain.ts";
+import { readUnsetFeePayer, withFeePayer } from "./fee-payer.ts";
 import { withMarker } from "./marker.ts";
 import { ADDRESS_LOOKUP_TABLE_PROGRAM } from "./programs.ts";
 import { assertDevnet, RpcError, type Rpc } from "./rpc.ts";
@@ -73,10 +77,15 @@ export type Preflight =
     }
   | { readonly kind: "not-devnet" }
   | { readonly kind: "user-not-fee-payer"; readonly feePayer: string }
+  /** The request left the fee payer unset, and no user was given to set. */
+  | { readonly kind: "fee-payer-not-set" }
   | {
       readonly kind: "ready";
+      /** The transaction checked, and the one to sign. */
       readonly base64: string;
       readonly transaction: ParsedTransaction;
+      /** True when the request left the fee payer unset and limen set the user. */
+      readonly feePayerSet: boolean;
       readonly summary: TransactionSummary;
       readonly simulation: SimulationOutcome;
       readonly blocks: readonly SignBlock[];
@@ -116,16 +125,25 @@ async function loadTables(
 /**
  * Runs the pre-flight for a base64 transaction. user, when given, is the
  * wallet the caller expects; a transaction whose fee payer is another wallet
- * is refused. When the RPC cannot be reached the decode still comes back, with
- * the simulation marked not run. An endpoint that is not devnet stops it.
+ * is refused. An unsigned request that leaves the fee payer unset is rebuilt
+ * with user as its fee payer, or stopped when no user is given. When the RPC
+ * cannot be reached the decode still comes back, with the simulation marked
+ * not run. An endpoint that is not devnet stops it.
  */
 export async function preflight(
   rpc: Rpc,
-  base64: string,
+  sent: string,
   user?: string,
 ): Promise<Preflight> {
-  const bytes = decodeBase64(base64);
-  if (bytes === null) return { kind: "malformed", problem: "not-base64" };
+  const received = decodeBase64(sent);
+  if (received === null) return { kind: "malformed", problem: "not-base64" };
+  const unset = readUnsetFeePayer(received);
+  if (unset !== null && user === undefined) {
+    return { kind: "fee-payer-not-set" };
+  }
+  const bytes =
+    unset !== null && user !== undefined ? withFeePayer(unset, user) : received;
+  const base64 = unset !== null ? encodeBase64(bytes) : sent;
   const parsed = parseTransaction(bytes);
   if (!parsed.ok) return { kind: "malformed", problem: parsed.problem };
   const transaction = parsed.transaction;
@@ -175,6 +193,7 @@ export async function preflight(
     kind: "ready",
     base64,
     transaction,
+    feePayerSet: unset !== null,
     summary,
     simulation,
     blocks: signBlocks(summary, simulation),
@@ -231,6 +250,7 @@ export type PreflightReport =
   | Exclude<Preflight, { kind: "ready" }>
   | {
       readonly kind: "ready";
+      readonly feePayerSet: boolean;
       readonly summary: TransactionSummary;
       readonly simulation: SimulationOutcome;
       readonly blocks: readonly SignBlock[];
@@ -238,8 +258,8 @@ export type PreflightReport =
 
 export function toReport(result: Preflight): PreflightReport {
   if (result.kind !== "ready") return result;
-  const { summary, simulation, blocks } = result;
-  return { kind: "ready", summary, simulation, blocks };
+  const { feePayerSet, summary, simulation, blocks } = result;
+  return { kind: "ready", feePayerSet, summary, simulation, blocks };
 }
 
 /**

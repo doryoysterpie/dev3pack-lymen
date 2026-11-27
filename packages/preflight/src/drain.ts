@@ -22,9 +22,11 @@
 //    token account the wallet owned, left with less than a tenth of what it
 //    held, closing included.
 //
-// A malformed transaction, a stop at a non-devnet endpoint, another wallet's
-// transaction, and a payment that leaves each account a tenth or more show no
-// drain pattern.
+// A request whose fee payer is unset is checked as rebuilt with the user's
+// wallet as fee payer (fee-payer.ts). A malformed transaction, a stop at a
+// non-devnet endpoint, another wallet's transaction, a request whose fee payer
+// is unset when no wallet is given, and a payment that leaves each account a
+// tenth or more show no drain pattern.
 
 import { USER_MARKER } from "./marker.ts";
 import type { PreflightReport } from "./preflight.ts";
