@@ -46,7 +46,7 @@ const reasonAt = (
 ) => {
   const r = verifyStationQrOnDevice(text, {
     allowlist,
-    now,
+    nowMs: Math.round(now * 1000),
     verify: nodeVerify,
   });
   return r.ok ? "ok" : r.reason;
@@ -56,7 +56,7 @@ test("the valid fixture QR verifies to exactly the payload E-03 issued", () => {
   assert.deepEqual(
     verifyStationQrOnDevice(FIXTURE.valid, {
       allowlist: ALLOWLIST,
-      now: T + 30,
+      nowMs: (T + 30) * 1000,
       verify: nodeVerify,
     }),
     {
@@ -77,6 +77,9 @@ test("an expired QR is refused: ok at 60 s, expired at 61 s", () => {
   assert.equal(reasonAt(FIXTURE.valid, T), "ok");
   assert.equal(reasonAt(FIXTURE.valid, T + 60), "ok");
   assert.equal(reasonAt(FIXTURE.valid, T + 61), "expired");
+  // Measured in milliseconds, as E-03 measures it.
+  assert.equal(reasonAt(FIXTURE.valid, T + 60.001), "expired");
+  assert.equal(reasonAt(FIXTURE.valid, T + 60.999), "expired");
   assert.equal(reasonAt(FIXTURE.valid, T - 6), "not_yet_valid");
 });
 
@@ -119,7 +122,7 @@ test("other text, a throwing verifier and wrong shapes are refused with the owed
   );
   const throwing = verifyStationQrOnDevice(FIXTURE.valid, {
     allowlist: ALLOWLIST,
-    now: T,
+    nowMs: T * 1000,
     verify: () => {
       throw new Error("library failure");
     },

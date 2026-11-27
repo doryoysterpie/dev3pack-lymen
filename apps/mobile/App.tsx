@@ -7,9 +7,11 @@ import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
 import { Button, ScrollView, StyleSheet, Text, View } from "react-native";
 
+import { CheckinPanel } from "./src/checkin/CheckinPanel.tsx";
 import type { CardText } from "./src/pay/card-text.ts";
 import { loadRecipientLists } from "./src/pay/recipient-lists.ts";
 import recipientListsJson from "./src/pay/recipient-lists.json";
+import { classifyQr } from "./src/qr/classify.ts";
 import { resultCard } from "./src/result-card.ts";
 import { CardView } from "./src/ui/CardView.tsx";
 import { LogoHeader } from "./src/ui/LogoHeader.tsx";
@@ -71,6 +73,9 @@ export default function App() {
           <Text style={styles.raw} selectable>
             {scan.text}
           </Text>
+          {classifyQr(scan.text).type === "station" ? (
+            <CheckinPanel qr={scan.text} />
+          ) : null}
           <Button title="Scan another QR" onPress={() => setScan(null)} />
           <StatusBar style="dark" />
         </ScrollView>

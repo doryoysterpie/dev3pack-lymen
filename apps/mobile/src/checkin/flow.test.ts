@@ -117,7 +117,7 @@ function deps(
   return {
     apiBase: "http://10.0.2.2:8787",
     allowlist: new Set([FIXTURE.organizer_signer_id]),
-    now: () => now,
+    nowMs: () => now * 1000,
     verify: nodeVerify,
     signer: wallet.signer,
     fetchFn: server.fn,

@@ -17,7 +17,8 @@ export interface CheckinFlowDeps {
   /** The API base URL, or null when this build has none. */
   readonly apiBase: string | null;
   readonly allowlist: ReadonlySet<string>;
-  readonly now: () => number;
+  /** The current Unix time in milliseconds (Date.now in the app). */
+  readonly nowMs: () => number;
   readonly verify: Ed25519Verify;
   readonly signer: WalletSigner;
   readonly fetchFn: typeof fetch;
@@ -48,7 +49,7 @@ export async function runCheckin(
 
   const qr = verifyStationQrOnDevice(input.qr, {
     allowlist: deps.allowlist,
-    now: deps.now(),
+    nowMs: deps.nowMs(),
     verify: deps.verify,
   });
   if (!qr.ok) {

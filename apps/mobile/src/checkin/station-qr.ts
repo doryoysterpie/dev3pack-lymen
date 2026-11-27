@@ -5,8 +5,9 @@
 //
 // prefix, shape, version, canonical base64url signer, signer on the allowlist, canonical
 // signature, Ed25519 over the ASCII text "limen:station:v1.<payload>", exactly the five payload
-// fields, a window of at most 60 s, issued no more than 5 s ahead of the device clock, at most
-// 60 s old and not past expires_at. Ed25519 itself is passed in, so this module stays pure.
+// fields, a window of at most 60 s, issued no more than 5 s ahead of the device clock, no more
+// than 60 s after issued_at and not past expires_at, measured in milliseconds. Ed25519 itself is
+// passed in, so this module stays pure.
 
 import { decodeBase64Url } from "./base64.ts";
 
@@ -109,12 +110,12 @@ function parsePayload(encoded: string): StationPayload | null {
   };
 }
 
-/** Verifies a station QR on the device at Unix time `now`. The first failing check is the reason. */
+/** Verifies a station QR at Unix time `nowMs`, in milliseconds. The first failing check is the reason. */
 export function verifyStationQrOnDevice(
   text: string,
   options: {
     allowlist: ReadonlySet<string>;
-    now: number;
+    nowMs: number;
     verify: Ed25519Verify;
   },
 ): StationQrResult {
@@ -155,11 +156,12 @@ export function verifyStationQrOnDevice(
 
   const parsed = parsePayload(payload);
   if (parsed === null) return reject("invalid_payload");
-  if (options.now < parsed.issued_at - CLOCK_SKEW_S)
+  const issuedMs = parsed.issued_at * 1000;
+  if (options.nowMs < issuedMs - CLOCK_SKEW_S * 1000)
     return reject("not_yet_valid");
   if (
-    options.now - parsed.issued_at > LIFETIME_S ||
-    options.now > parsed.expires_at
+    options.nowMs - issuedMs > LIFETIME_S * 1000 ||
+    options.nowMs > parsed.expires_at * 1000
   ) {
     return reject("expired");
   }
