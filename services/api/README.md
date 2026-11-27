@@ -59,6 +59,18 @@ The domain lists load once at start-up. If they cannot load, the API still start
 
 Under the owner's ruling 6a, manual escalation is part of E-13: a human's escalation on the dashboard (`POST /cases/:id/escalate`) also builds and logs the dry-run body, and when no re-simulation reproduced a drain pattern, the body's opening says so instead of describing one. The body follows Chainabuse's published OpenAPI definition (https://docs.chainabuse.com/reference/createreports). It carries the case's domain, its recipients as reported to limen (the API checks only that each is a public key, not that the transaction pays it), its program IDs and the decoded simulation summary. The builder never reads a report's transaction bytes, QR text, device ID or wallet field. The summary comes from the reporter's app, so before it goes into the body, every value in it that names an address other than the case's recipients and program IDs is left out, and so is every `feePayer` value, at any depth, other than the role marker `user`. E-09 writes the fee payer at `signers.feePayer` in its summary and at `summary.signers.feePayer` in its full report. Here an address is any run of 32 or more base58 characters. The tests check this with a summary in E-09's shape whose fee payer is the reporter's wallet, and with E-09's full report whose nested fee payer is a shortened form of the wallet. An address written another way, such as in base64, may not be recognized, so the checks run do not show that no summary can carry a wallet.
 
+## Pass mint (E-06)
+
+`src/pass-mint.ts` mints each check-in pass as its own Token-2022 mint (D-01): decimals 0, one token, the NonTransferable extension, the organizer key as permanent delegate, and a metadata pointer to TokenMetadata on the mint itself carrying the station, session and check-in time. The organizer key is the mint authority and pays. `revokePass` burns the holder's token as permanent delegate. Every connection is refused unless the cluster's genesis hash is devnet's (D-03).
+
+The on-chain checks spend devnet SOL from the organizer key, so they run by hand, not in CI:
+
+```bash
+npm run check:devnet -w @limen/api
+```
+
+They mint a pass and check its extensions and metadata, send a transfer from the holder with preflight skipped and check that it fails on chain with Token-2022 error 37 ("Transfer is disabled for this mint"), then burn the pass as permanent delegate and check the supply is 0. With `HOLDER_ADDRESS` set, they also mint a pass to that wallet and leave it there.
+
 ## Test
 
 ```bash
@@ -80,3 +92,4 @@ npm test -w @limen/api
 | `src/dashboard.test.ts`     | E-12 done test end to end, with a control that escalates without the dismissal; the token is required; the evidence view shows each bundle as stored; without the domain lists, /health still answers and the triage routes answer 503; the page shows a time it cannot format as its number                                                                                                                                                                                                            |
 | `src/start-lists.test.ts`   | Without the domain list file the real entry point still starts and serves `/health`, and `POST /reports` and `/cases` answer 503 `triage_lists_unavailable`                                                                                                                                                                                                                                                                                                                                             |
 | `src/chainabuse.test.ts`    | E-13 done test: flag off, an escalation sends and logs nothing; flag on, the dry run logs the exact owed body and sends nothing; the body keeps to the published schema and leaves out bytes, wallets and device IDs; summary values naming an unlisted address, and a `feePayer` other than `user` at any depth, are left out; with the flag on and no domain lists the API still starts and the triage routes answer 503; one body per case, and a logged reason for each escalation that builds none |
+| `src/pass-mint.test.ts`     | The mint and revoke transactions carry the owed extensions, authorities, amount and account size; non-devnet clusters are refused                                                                                                                                                                                                                                                                                                                                                                       |
