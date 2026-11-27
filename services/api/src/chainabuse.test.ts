@@ -133,6 +133,15 @@ async function runFlow(
   return { db, logged, outbound: watch.outbound, statuses };
 }
 
+// The opening when the drain pattern may come from the decoded instructions or from a simulation
+// that ran without an error, and the threshold line, as the body owes them.
+const BOTH_SOURCES =
+  "A QR reported through limen leads to a transaction with a drain pattern: its decoded instructions, or a simulation that ran without an error, show control of the signer's wallet or its token accounts handed over, or the wallet swept. limen simulates on Solana devnet only.";
+const DECODED_ONLY =
+  "A QR reported through limen leads to a transaction whose decoded instructions hand over control of the signer's wallet or its token accounts. Its simulation did not run without an error, so no simulated movement of funds is claimed. limen simulates on Solana devnet only.";
+const THRESHOLD_LINE =
+  "- Decided by: the automatic threshold (drain pattern, and two or more distinct reported install IDs or a domain on the bundled fixture list)";
+
 // The body owed for the fixture case, written out from the inputs: case 1, escalated by the
 // threshold on two devices and a reproduced drain; the domain of the reported URL; the one
 // recipient; the System Program; the first device's summary, shown with its markers escaped.
@@ -141,15 +150,15 @@ const OWED_BODY = [
   {
     scamCategory: "PHISHING",
     description: [
-      "### limen escalation: simulated drain pattern",
+      "### limen escalation: drain pattern",
       "",
-      "A QR reported through limen leads to a transaction whose simulation shows funds leaving the signer's wallet. limen simulates on Solana devnet only.",
+      BOTH_SOURCES,
       "",
       "- Case: 1",
-      "- Decided by: the automatic threshold (drain pattern, and two or more devices or a listed domain)",
-      "- Sightings: 2, from 2 independent devices",
+      THRESHOLD_LINE,
+      "- Sightings: 2, from 2 distinct reported install IDs",
       "- Domain: claim-pass.example",
-      "- Domain on the Phantom or PhishDestroy list: no",
+      "- Domain on the bundled fixture list: no",
       "- Re-simulation reproduced the reported summary with a drain pattern: yes",
       "",
       "#### Simulated transaction summary",
@@ -507,15 +516,15 @@ test("a stored summary whose fee payer is the reporter's wallet gives a body wit
     {
       ...OWED_BODY[0]!,
       description: [
-        "### limen escalation: simulated drain pattern",
+        "### limen escalation: drain pattern",
         "",
-        "A QR reported through limen leads to a transaction whose simulation shows funds leaving the signer's wallet. limen simulates on Solana devnet only.",
+        BOTH_SOURCES,
         "",
         "- Case: 1",
-        "- Decided by: the automatic threshold (drain pattern, and two or more devices or a listed domain)",
-        "- Sightings: 2, from 2 independent devices",
+        THRESHOLD_LINE,
+        "- Sightings: 2, from 2 distinct reported install IDs",
         "- Domain: claim-pass.example",
-        "- Domain on the Phantom or PhishDestroy list: no",
+        "- Domain on the bundled fixture list: no",
         "- Re-simulation reproduced the reported summary with a drain pattern: yes",
         "- Summary values left out, so that no address beyond the recipients and programs below is reported: 4",
         "",
@@ -606,5 +615,83 @@ test("the hook logs one body per case, and a line saying why for every call that
   chainabuseHook("dry-run", db, bundledLists(), (line) => fresh.push(line))!(1);
   assert.deepEqual(fresh, [
     "chainabuse dry run, nothing built for case 1: the request could not be built",
+  ]);
+});
+
+/** The opening sentence of the one body logged for `reports`, with each re-simulated as reported. */
+async function openingFor(reports: readonly Record<string, unknown>[]) {
+  const { logged, statuses } = await runFlow("dry-run", false, reports);
+  assert.deepEqual(
+    statuses.map((s) => (s as { case_status: string }).case_status),
+    ["held", "escalated"],
+  );
+  assert.equal(logged.length, 1);
+  const body = JSON.parse(logged[0]!.split("\n")[1]!) as {
+    description: string;
+  }[];
+  return body[0]!.description.split("\n")[2];
+}
+
+test("the opening names the decoded instructions alone when the report's simulation did not run without an error", async () => {
+  const withSimulation = (simulation: unknown) =>
+    [DEVICE_1, DEVICE_2].map((r) => ({
+      ...r,
+      summary: { ...(r.summary as object), simulation },
+    }));
+  // As in the review's C1: an approval whose recorded simulation failed.
+  assert.equal(
+    await openingFor(
+      withSimulation({
+        status: "ran",
+        err: { InstructionError: [0, "InvalidAccountData"] },
+        changes: [],
+      }),
+    ),
+    DECODED_ONLY,
+  );
+  assert.equal(
+    await openingFor(
+      withSimulation({ status: "not-run", reason: "rpc_unreachable" }),
+    ),
+    DECODED_ONLY,
+  );
+  assert.equal(
+    await openingFor(withSimulation({ status: "ran", err: null, changes: [] })),
+    BOTH_SOURCES,
+  );
+  // The fixture report records no simulation, so either source may have fired.
+  assert.equal(await openingFor([DEVICE_1, DEVICE_2]), BOTH_SOURCES);
+});
+
+test("the body counts reported install IDs and names the list it checked, not more", async () => {
+  // As in the review's C2: one client posts the same report under two invented install IDs.
+  const { logged } = await runFlow("dry-run", false, [
+    { ...DEVICE_1, device_id: "invented-install-id-0001" },
+    { ...DEVICE_1, device_id: "invented-install-id-0002" },
+  ]);
+  const text = logged.join("\n");
+  assert.match(text, /- Sightings: 2, from 2 distinct reported install IDs/);
+  assert.ok(!/independent|devices?\b/.test(text));
+  assert.ok(!/Phantom|PhishDestroy/.test(text));
+});
+
+test("a domain on the bundled fixture list is described as on that list, not on Phantom's or PhishDestroy's", async () => {
+  // As in the review's C3: one device, a drain pattern, and a URL on a fixture-list domain.
+  const { logged, statuses } = await runFlow("dry-run", false, [
+    { ...DEVICE_1, url: "https://listed-on-phantom.example/api/tx" },
+  ]);
+  assert.deepEqual(
+    statuses.map((s) => (s as { case_status: string }).case_status),
+    ["escalated"],
+  );
+  const description = (
+    JSON.parse(logged[0]!.split("\n")[1]!) as { description: string }[]
+  )[0]!.description.split("\n");
+  assert.deepEqual(description.slice(4, 9), [
+    "- Case: 1",
+    THRESHOLD_LINE,
+    "- Sightings: 1, from 1 distinct reported install ID",
+    "- Domain: listed-on-phantom.example",
+    "- Domain on the bundled fixture list: yes",
   ]);
 });

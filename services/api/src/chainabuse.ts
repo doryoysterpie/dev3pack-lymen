@@ -151,6 +151,23 @@ function summaryLines(summary: unknown): string[] {
 export class NothingToReport extends Error {}
 
 /**
+ * Whether the simulation recorded in a stored report ran without an error: "clean", "not
+ * clean" when it failed or did not run, or null when the report records none. E-09 writes it
+ * as the report's top-level `simulation`, { status: "ran", err, changes } or { status:
+ * "not-run", reason }, and counts a simulation toward a drain pattern only when it ran with err
+ * null (packages/preflight/src/drain.ts).
+ */
+function simulationOutcome(summary: unknown): "clean" | "not clean" | null {
+  if (typeof summary !== "object" || summary === null) return null;
+  const sim = (summary as Record<string, unknown>).simulation;
+  if (typeof sim !== "object" || sim === null) return null;
+  const { status, err } = sim as Record<string, unknown>;
+  if (status === "ran") return err === null ? "clean" : "not clean";
+  if (status === "not-run") return "not clean";
+  return null;
+}
+
+/**
  * Builds the Chainabuse request for an escalated case from the case and its stored bundles.
  * Throws NothingToReport when the case is not escalated, or has neither a domain nor a
  * recipient to report.
@@ -188,16 +205,28 @@ export function buildChainabuseRequest(
   const reproduced =
     shown?.resimulation?.matches === true && shown.resimulation.drainPattern;
   const yesNo = (b: boolean) => (b ? "yes" : "no");
+  // The drain pattern comes from the decoded instructions, or from a simulation that ran without
+  // an error. The stored record says only that it fired, so the opening names the decoded
+  // instructions alone when the reproduced report's simulation did not run cleanly, and both
+  // otherwise.
+  const fromDecodedOnly =
+    shown !== undefined &&
+    simulationOutcome(JSON.parse(shown.summaryJson)) === "not clean";
+  const devices = view.inputs.independentDevices;
   const description = [
-    "### limen escalation: simulated drain pattern",
+    "### limen escalation: drain pattern",
     "",
-    "A QR reported through limen leads to a transaction whose simulation shows funds leaving the signer's wallet. limen simulates on Solana devnet only.",
+    fromDecodedOnly
+      ? "A QR reported through limen leads to a transaction whose decoded instructions hand over control of the signer's wallet or its token accounts. Its simulation did not run without an error, so no simulated movement of funds is claimed. limen simulates on Solana devnet only."
+      : "A QR reported through limen leads to a transaction with a drain pattern: its decoded instructions, or a simulation that ran without an error, show control of the signer's wallet or its token accounts handed over, or the wallet swept. limen simulates on Solana devnet only.",
     "",
     `- Case: ${view.id}`,
-    `- Decided by: ${view.decidedBy === "human" ? "human review" : "the automatic threshold (drain pattern, and two or more devices or a listed domain)"}`,
-    `- Sightings: ${view.sightings}, from ${view.inputs.independentDevices} independent ${view.inputs.independentDevices === 1 ? "device" : "devices"}`,
+    // Install IDs are what clients report about themselves, and the domain lists are the bundled
+    // fixture lists until the owner rules on DECIDE 2, so the lines say no more than that.
+    `- Decided by: ${view.decidedBy === "human" ? "human review" : "the automatic threshold (drain pattern, and two or more distinct reported install IDs or a domain on the bundled fixture list)"}`,
+    `- Sightings: ${view.sightings}, from ${devices} distinct reported install ${devices === 1 ? "ID" : "IDs"}`,
     `- Domain: ${view.domain === null ? "none" : escapeMarkdown(view.domain)}`,
-    `- Domain on the Phantom or PhishDestroy list: ${yesNo(view.inputs.domainListed)}`,
+    `- Domain on the bundled fixture list: ${yesNo(view.inputs.domainListed)}`,
     `- Re-simulation reproduced the reported summary with a drain pattern: ${yesNo(reproduced)}`,
     ...(kept === undefined || kept.leftOut === 0
       ? []
