@@ -10,6 +10,7 @@ import {
 import {
   chmodSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -182,21 +183,109 @@ test("the printed address brackets an IPv6 host, so it parses as a URL", () => {
   assert.equal(listenUrl("localhost", 80), "http://localhost:80");
 });
 
-test("an empty API_PORT= line in .env reaches the API as an empty string, which gives 8787", () => {
-  withTempDir((dir) => {
+/** What Node hands a program for API_PORT and API_HOST when it loads `text` as a .env file. */
+function envFileValues(text: string): {
+  API_PORT: string | null;
+  API_HOST: string | null;
+} {
+  return withTempDir((dir) => {
     const envFile = join(dir, ".env");
-    writeFileSync(envFile, "API_PORT=\nAPI_HOST=\n");
+    writeFileSync(envFile, text);
     const seen = spawnSync(
       process.execPath,
       [
         `--env-file=${envFile}`,
         "-e",
-        "process.stdout.write(JSON.stringify(process.env.API_PORT))",
+        "process.stdout.write(JSON.stringify({ API_PORT: process.env.API_PORT ?? null, API_HOST: process.env.API_HOST ?? null }))",
       ],
       { env: { PATH: process.env.PATH ?? "" }, encoding: "utf8" },
     );
-    assert.equal(seen.stdout, '""');
-    assert.equal(parsePort(JSON.parse(seen.stdout) as string), 8787);
+    return JSON.parse(seen.stdout) as {
+      API_PORT: string | null;
+      API_HOST: string | null;
+    };
+  });
+}
+
+test("an API_PORT line in .env reaches the API as Node reads it, and gives 8787 only when that is empty", () => {
+  const example = readFileSync(
+    new URL("../../../.env.example", import.meta.url),
+    "utf8",
+  );
+  assert.equal(example.split("\nAPI_PORT=\n").length, 2);
+  const cases: [string, string, string | null, string | null][] = [
+    ["empty, as .env.example ships it", "API_PORT=\nAPI_HOST=\n", "", ""],
+    ["spaces on the last line", "API_PORT=   \n", "", null],
+    ["a space, then blank lines", "API_PORT= \n\n\n", "", null],
+    [
+      "spaces in .env.example, where a comment follows",
+      example.replace("\nAPI_PORT=\n", "\nAPI_PORT=   \n"),
+      "",
+      "",
+    ],
+    ["spaces in double quotes", 'API_PORT="   "\nAPI_HOST=\n', "   ", ""],
+    ["a space in single quotes", "API_PORT=' '\nAPI_HOST=\n", " ", ""],
+    [
+      "spaces, then a setting",
+      "API_PORT=   \nAPI_HOST=127.0.0.1\n",
+      "API_HOST=127.0.0.1",
+      null,
+    ],
+    [
+      "a space, a blank line, then a setting",
+      "API_PORT= \n\nAPI_HOST=\n",
+      "API_HOST=",
+      null,
+    ],
+  ];
+  for (const [name, text, port, host] of cases) {
+    assert.deepEqual(
+      envFileValues(text),
+      { API_PORT: port, API_HOST: host },
+      name,
+    );
+    if (port === "") assert.equal(parsePort(port), 8787, name);
+    else
+      assert.throws(
+        () => parsePort(port ?? undefined),
+        { message: "API_PORT must be an integer from 1 to 65535." },
+        name,
+      );
+  }
+});
+
+test("start-up from a .env line that Node hands over as spaces or as the next line exits 1 with one line", () => {
+  withTempDir((dir) => {
+    const keyPath = join(dir, "organizer.json");
+    writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
+    for (const line of [
+      'API_PORT="   "\n',
+      "API_PORT=   \nAPI_HOST=127.0.0.1\n",
+    ]) {
+      const envFile = join(dir, ".env");
+      writeFileSync(envFile, line);
+      const result = spawnSync(
+        process.execPath,
+        [`--env-file=${envFile}`, ENTRY],
+        {
+          env: {
+            PATH: process.env.PATH ?? "",
+            ORGANIZER_KEYPAIR_PATH: keyPath,
+          },
+          encoding: "utf8",
+          timeout: 10_000,
+        },
+      );
+      assert.deepEqual(
+        { status: result.status, stdout: result.stdout, stderr: result.stderr },
+        {
+          status: 1,
+          stdout: "",
+          stderr: "limen api: API_PORT must be an integer from 1 to 65535.\n",
+        },
+        JSON.stringify(line),
+      );
+    }
   });
 });
 
