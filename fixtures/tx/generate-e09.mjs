@@ -6,9 +6,10 @@
 // Run from the repository root:  node fixtures/tx/generate-e09.mjs
 // Then:                          npx prettier --write fixtures/tx/e09-transactions.json
 //
-// Every key is the SHA-256 of a fixed label, used as a public key. No private
-// key exists for any of them, so nothing here can sign. Signatures in the
-// "partly signed" cases are fixed filler bytes, not real signatures.
+// Every key is the SHA-256 of a fixed label, used as a public key. None was
+// made from a keypair, so none was built to sign. Signatures in the "partly
+// signed" cases are fixed filler bytes, not real signatures. Each summary is
+// written for the transaction's fee payer, as the decoder writes it.
 
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -82,8 +83,7 @@ function build(
 const at = (publicKey) => ({ address: publicKey.toBase58() });
 const lamports = (sol) => String(Math.round(sol * 1e9));
 const userSigner = (others = [], unsigned = true) => ({
-  userSigns: true,
-  userPaysFees: true,
+  feePayer: user.toBase58(),
   others,
   unsigned,
 });
@@ -380,7 +380,7 @@ const cases = [
     },
   },
   {
-    name: "a co-signer that has signed, and an organizer paying the fee",
+    name: "a sponsored transaction, summarized for its fee payer, the organizer",
     transaction: build(
       [
         new TransactionInstruction({
@@ -400,9 +400,8 @@ const cases = [
       others: [{ instruction: 0, kind: "memo" }],
       undecoded: [],
       signers: {
-        userSigns: true,
-        userPaysFees: false,
-        others: [{ address: organizer.toBase58(), signed: true }],
+        feePayer: organizer.toBase58(),
+        others: [{ address: user.toBase58(), signed: false }],
         unsigned: false,
       },
       unresolvedAccounts: 0,
@@ -469,7 +468,7 @@ const accountOrder = {
 const fixture = {
   unit: "E-09",
   about:
-    "Transactions built with @solana/web3.js 1.99.0 and @solana/spl-token 0.4.15 by fixtures/tx/generate-e09.mjs, each with the summary it owes for the user below. Keys are SHA-256 hashes of fixed labels used as public keys; no private key exists for them. tables lists the lookup tables loaded for the case.",
+    "Transactions built with @solana/web3.js 1.99.0 and @solana/spl-token 0.4.15 by fixtures/tx/generate-e09.mjs, each with the summary it owes, written for the transaction's fee payer; user is the fee payer of every case but the sponsored one. Keys are SHA-256 hashes of fixed labels used as public keys, none made from a keypair. tables lists the lookup tables loaded for the case.",
   user: user.toBase58(),
   keys: Object.fromEntries(
     Object.entries({

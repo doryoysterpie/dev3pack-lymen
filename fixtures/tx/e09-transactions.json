@@ -1,6 +1,6 @@
 {
   "unit": "E-09",
-  "about": "Transactions built with @solana/web3.js 1.99.0 and @solana/spl-token 0.4.15 by fixtures/tx/generate-e09.mjs, each with the summary it owes for the user below. Keys are SHA-256 hashes of fixed labels used as public keys; no private key exists for them. tables lists the lookup tables loaded for the case.",
+  "about": "Transactions built with @solana/web3.js 1.99.0 and @solana/spl-token 0.4.15 by fixtures/tx/generate-e09.mjs, each with the summary it owes, written for the transaction's fee payer; user is the fee payer of every case but the sponsored one. Keys are SHA-256 hashes of fixed labels used as public keys, none made from a keypair. tables lists the lookup tables loaded for the case.",
   "user": "63e2bvJ6SLRtgbTHJaYiiCWBs4BpSMcugDr6XLohgUka",
   "keys": {
     "attacker": "AadqUhBH5BtWcKCxnz9gfrWFCDBRXcdHQwzEsTqK49cK",
@@ -55,8 +55,7 @@
         ],
         "undecoded": [],
         "signers": {
-          "userSigns": true,
-          "userPaysFees": true,
+          "feePayer": "63e2bvJ6SLRtgbTHJaYiiCWBs4BpSMcugDr6XLohgUka",
           "others": [],
           "unsigned": true
         },
@@ -110,8 +109,7 @@
         ],
         "undecoded": [],
         "signers": {
-          "userSigns": true,
-          "userPaysFees": true,
+          "feePayer": "63e2bvJ6SLRtgbTHJaYiiCWBs4BpSMcugDr6XLohgUka",
           "others": [],
           "unsigned": true
         },
@@ -162,8 +160,7 @@
         ],
         "undecoded": [],
         "signers": {
-          "userSigns": true,
-          "userPaysFees": true,
+          "feePayer": "63e2bvJ6SLRtgbTHJaYiiCWBs4BpSMcugDr6XLohgUka",
           "others": [],
           "unsigned": true
         },
@@ -195,8 +192,7 @@
           }
         ],
         "signers": {
-          "userSigns": true,
-          "userPaysFees": true,
+          "feePayer": "63e2bvJ6SLRtgbTHJaYiiCWBs4BpSMcugDr6XLohgUka",
           "others": [],
           "unsigned": true
         },
@@ -250,8 +246,7 @@
         "others": [],
         "undecoded": [],
         "signers": {
-          "userSigns": true,
-          "userPaysFees": true,
+          "feePayer": "63e2bvJ6SLRtgbTHJaYiiCWBs4BpSMcugDr6XLohgUka",
           "others": [],
           "unsigned": true
         },
@@ -273,8 +268,7 @@
           }
         ],
         "signers": {
-          "userSigns": true,
-          "userPaysFees": true,
+          "feePayer": "63e2bvJ6SLRtgbTHJaYiiCWBs4BpSMcugDr6XLohgUka",
           "others": [],
           "unsigned": true
         },
@@ -296,8 +290,7 @@
           }
         ],
         "signers": {
-          "userSigns": true,
-          "userPaysFees": true,
+          "feePayer": "63e2bvJ6SLRtgbTHJaYiiCWBs4BpSMcugDr6XLohgUka",
           "others": [],
           "unsigned": true
         },
@@ -318,8 +311,7 @@
         ],
         "undecoded": [],
         "signers": {
-          "userSigns": true,
-          "userPaysFees": true,
+          "feePayer": "63e2bvJ6SLRtgbTHJaYiiCWBs4BpSMcugDr6XLohgUka",
           "others": [
             {
               "address": "5ZNFf2gWjUjeP4EPMNEwDhda6NcHyeQ5VHMTqZMTuit1",
@@ -332,7 +324,7 @@
       }
     },
     {
-      "name": "a co-signer that has signed, and an organizer paying the fee",
+      "name": "a sponsored transaction, summarized for its fee payer, the organizer",
       "transaction": "AgcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgEBA8HGgqk2YOO4rw6uY5sbJPjTNRmSPSqa1lEi9CkxEPOLSvd2qOxluP/mbmmkLglCcd9BzrMHcqHTUtEMfcJa7sMFSlNamSkhBk0k6HFg2jh8fDW13bySu4HkH6hAQQVEjULdbdPnRXhm5Nz62g/oldwrZx1ll04APQR7bAyX6MgAAQIBAQlzcG9uc29yZWQ=",
       "tables": {},
       "owed": {
@@ -345,12 +337,11 @@
         ],
         "undecoded": [],
         "signers": {
-          "userSigns": true,
-          "userPaysFees": false,
+          "feePayer": "E3RFTY1NdeAf1fD4HH8v6SJWCxTH3bkvBKMbapev8HGW",
           "others": [
             {
-              "address": "E3RFTY1NdeAf1fD4HH8v6SJWCxTH3bkvBKMbapev8HGW",
-              "signed": true
+              "address": "63e2bvJ6SLRtgbTHJaYiiCWBs4BpSMcugDr6XLohgUka",
+              "signed": false
             }
           ],
           "unsigned": false

@@ -2,8 +2,8 @@
 // threshold. This function is the one definition; E-11's threshold and E-15's
 // claims table read it, and the package README states it in words.
 //
-// A ready pre-flight shows a drain pattern when, for the user's wallet, any of
-// these holds:
+// A ready pre-flight shows a drain pattern when, for the user's wallet (the
+// transaction's fee payer), any of these holds:
 //
 // 1. Control handed over, in the decoded instructions: a delegate approved
 //    over one of the wallet's token accounts; the wallet account assigned to
@@ -47,7 +47,8 @@ function handsOver(effect: Effect, user: string): boolean {
 
 export function drainPattern(report: PreflightReport): boolean {
   if (report.kind !== "ready") return false;
-  const { user, summary, simulation } = report;
+  const { summary, simulation } = report;
+  const user = summary.signers.feePayer;
 
   if (summary.effects.some((effect) => handsOver(effect, user))) return true;
 

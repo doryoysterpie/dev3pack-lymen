@@ -72,6 +72,7 @@ export {
   type Preflight,
   type PreflightReport,
   type SignBlock,
+  type SimulatedAt,
   type SimulationOutcome,
 } from "./preflight.ts";
 export { drainPattern, SWEEP_DIVISOR } from "./drain.ts";

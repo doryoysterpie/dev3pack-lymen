@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import { decodeBase64 } from "./base64.ts";
-import { summarizeTransaction, type TransactionSummary } from "./summary.ts";
+import { summarizeTransaction } from "./summary.ts";
 import { parseTransaction, type ParsedTransaction } from "./wire.ts";
 
 interface FixtureCase {
@@ -28,17 +28,6 @@ function parsed(base64: string): ParsedTransaction {
   return result.transaction;
 }
 
-/** The summary with each "other" instruction cut to its index and kind. */
-function comparable(summary: TransactionSummary): unknown {
-  return {
-    ...summary,
-    others: summary.others.map(({ instruction, decoded }) => ({
-      instruction,
-      kind: decoded.kind,
-    })),
-  };
-}
-
 function caseNamed(start: string): FixtureCase {
   const found = fixture.cases.find((c) => c.name.startsWith(start));
   assert.ok(found, `no fixture case starts with ${start}`);
@@ -49,22 +38,14 @@ describe("E-09 done test: fixture transactions yield the owed summary", () => {
   for (const c of fixture.cases) {
     it(c.name, () => {
       const tables = new Map(Object.entries(c.tables));
-      const summary = summarizeTransaction(
-        parsed(c.transaction),
-        fixture.user,
-        tables,
-      );
-      assert.deepEqual(comparable(summary), c.owed);
+      const summary = summarizeTransaction(parsed(c.transaction), tables);
+      assert.deepEqual(summary, c.owed);
     });
   }
 
   it("the drainer shows balance out and a delegate approved", () => {
     const c = caseNamed("drainer: SOL balance out");
-    const summary = summarizeTransaction(
-      parsed(c.transaction),
-      fixture.user,
-      new Map(),
-    );
+    const summary = summarizeTransaction(parsed(c.transaction), new Map());
     assert.deepEqual(
       summary.effects.map((effect) => effect.kind),
       ["sol-out", "delegate-approved"],
@@ -74,11 +55,7 @@ describe("E-09 done test: fixture transactions yield the owed summary", () => {
 
   it("an unknown program is listed as undecoded, not a crash", () => {
     const c = caseNamed("unknown program");
-    const summary = summarizeTransaction(
-      parsed(c.transaction),
-      fixture.user,
-      new Map(),
-    );
+    const summary = summarizeTransaction(parsed(c.transaction), new Map());
     assert.deepEqual(
       summary.undecoded.map((entry) => entry.reason),
       ["unknown-program"],
@@ -124,7 +101,6 @@ describe("no crash on damaged transactions", () => {
         parsedCount += 1;
         summarizeTransaction(
           result.transaction,
-          fixture.user,
           new Map(Object.entries(c.tables)),
         );
       } else {

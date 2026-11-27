@@ -9,17 +9,18 @@
 ```ts
 import { jsonRpc, preflightTransaction } from "@limen/preflight";
 
-const { summary, drainPattern } = await preflightTransaction(transactionBytes, {
-  rpc: jsonRpc(fetch, "https://api.devnet.solana.com"),
-  user, // optional: the wallet the summary is written for
-});
+const { summary, drainPattern, simulatedAt } = await preflightTransaction(
+  transactionBytes,
+  { rpc: jsonRpc(fetch, "https://api.devnet.solana.com") },
+);
 ```
 
 - `transactionBytes` is a serialized transaction, legacy or v0.
-- It checks that the endpoint is devnet (by its genesis hash), loads any lookup tables, reads the wallet and the transaction's writable accounts, simulates without signature checks and with the blockhash replaced, and decodes the result into the summary the app's card shows.
-- `user` defaults to the fee payer, which is the account a Solana Pay transaction request is built for when the application sets the fee payer as the specification asks.
-- `summary` is a `PreflightReport`: `{ kind: "malformed", problem }`, `{ kind: "not-devnet" }`, or `{ kind: "ready", user, summary, simulation, blocks }`.
+- It checks that the endpoint is devnet (by its genesis hash), loads any lookup tables, reads the fee payer's wallet and the transaction's writable accounts, simulates without signature checks and with the blockhash replaced, and decodes the result into the summary the app's card shows.
+- Whose wallet: the summary is always written for the transaction's fee payer, its first required signer, read from the bytes, so the app and a server summarize the same bytes the same way. An optional `user` names the wallet the caller expects; any other wallet is refused with `{ kind: "user-not-fee-payer", feePayer }`, never summarized. Leaving `user` out and giving the fee payer return the same result; `src/drain.test.ts` checks that.
+- `summary` is a `PreflightReport`: `{ kind: "malformed", problem }`, `{ kind: "not-devnet" }`, `{ kind: "user-not-fee-payer", feePayer }`, or `{ kind: "ready", summary, simulation, blocks }`. In a ready report, `summary` is `{ effects, others, undecoded, signers, unresolvedAccounts }`: each instruction the wallet does not authorize appears in `others` as its index and kind only, and `signers` is `{ feePayer, others, unsigned }`. It is the form the E-09 fixtures' owed summaries take. `simulation` is `{ status: "ran", err, changes }` or `{ status: "not-run", reason }`.
 - `drainPattern` is `drainPattern(summary)`, defined below.
+- `simulatedAt` is `{ slot, blockhash }`, the slot from the `simulateTransaction` response context and the blockhash simulated against in place of the transaction's own, or `null` when no simulation ran. It sits outside the summary because a later simulation of the same bytes runs at another slot.
 
 The report is plain JSON: strings, numbers, booleans, null, arrays and objects. Every amount is a decimal string; there is no `bigint` and no typed array, so it can be compared as canonical JSON. `src/drain.test.ts` checks that a report survives a JSON round trip unchanged.
 
@@ -50,14 +51,14 @@ const rpc = recordedRpc({
 const result = await preflightTransaction(drainerBytes, { rpc });
 ```
 
-`recordedRpc` answers from recorded data, by address, through the same JSON-RPC parsing as `jsonRpc`. The accounts take the shape `getMultipleAccounts` and `simulateTransaction` return with base64 encoding. `genesisHash` defaults to devnet's.
+`recordedRpc` answers from recorded data, by address, through the same JSON-RPC parsing as `jsonRpc`. The accounts take the shape `getMultipleAccounts` and `simulateTransaction` return with base64 encoding. `genesisHash` defaults to devnet's; `simulation.slot` and `simulation.replacementBlockhash` are optional and come back as `simulatedAt`.
 
 ### For the app
 
-- `preflight(rpc, base64, user)` returns a `Preflight`, which also keeps the parsed transaction and its base64 for signing.
+- `preflight(rpc, base64, user?)` returns a `Preflight`, which also keeps the parsed transaction, its base64 and `simulatedAt`. The app passes the connected wallet as `user`, so another wallet's transaction is refused.
 - `signingAllowed(result, shownFor)` allows signing only for a ready pre-flight with no signing blocks, once the card for that transaction is on screen.
 - `forSigning(result, latestBlockhash)` replaces only the recent blockhash of a transaction with no signatures.
-- `toReport(result, user)` turns a `Preflight` into a `PreflightReport`.
+- `toReport(result)` turns a `Preflight` into a `PreflightReport`.
 
 ### Lower level
 
@@ -65,7 +66,7 @@ const result = await preflightTransaction(drainerBytes, { rpc });
 
 ## The drain pattern
 
-`drainPattern(report)` in `src/drain.ts` is the one definition of the drain pattern, the first condition of D-05's auto-escalation threshold. E-11's threshold and E-15's claims table read it. A ready report shows a drain pattern when, for the user's wallet, any of these holds:
+`drainPattern(report)` in `src/drain.ts` is the one definition of the drain pattern, the first condition of D-05's auto-escalation threshold. E-11's threshold and E-15's claims table read it. A ready report shows a drain pattern when, for the fee payer's wallet, any of these holds:
 
 1. **Control handed over, in the decoded instructions:** a delegate approved over one of the wallet's token accounts; the wallet account assigned to another program; a token account or mint authority moved to an address other than the wallet; or a token account closed with its SOL sent to an address other than the wallet.
 2. **Control handed over, in a simulation that ran without an error:** a token account the wallet owned has a new delegate other than the wallet, or a new owner other than the wallet.

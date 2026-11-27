@@ -29,6 +29,10 @@ export interface Recording {
     readonly logs?: readonly string[];
     readonly unitsConsumed?: number;
     readonly accounts: Readonly<Record<string, RecordedAccount | null>>;
+    /** The response context's slot. */
+    readonly slot?: number;
+    /** The blockhash the simulation used in place of the transaction's own. */
+    readonly replacementBlockhash?: string;
   };
   /** getLatestBlockhash's blockhash. */
   readonly latestBlockhash?: string;
@@ -64,9 +68,14 @@ export function recordedRpc(recording: Recording): Rpc {
         const options = request.params[1] as {
           accounts: { addresses: string[] };
         };
+        const { slot, replacementBlockhash } = recording.simulation;
         result = {
-          context: { slot: 0 },
+          context: { slot: slot ?? 0 },
           value: {
+            replacementBlockhash:
+              replacementBlockhash === undefined
+                ? null
+                : { blockhash: replacementBlockhash, lastValidBlockHeight: 0 },
             err: recording.simulation.err,
             logs: recording.simulation.logs ?? [],
             unitsConsumed: recording.simulation.unitsConsumed ?? 0,
