@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { DatabaseSync } from "node:sqlite";
 
+import { routeReports, type ReportOptions } from "./reports.ts";
 import { schemaVersion } from "./db.ts";
 
 /** The API version, read from services/api/package.json. */
@@ -15,6 +16,8 @@ export const API_VERSION: string = (
 ).version;
 
 export interface ApiContext {
+  /** Report triage settings (E-10 on). Unset means the system clock and no re-simulation. */
+  readonly reports?: ReportOptions;
   readonly db: DatabaseSync;
   readonly version: string;
 }
@@ -38,6 +41,7 @@ export function createApiServer(ctx: ApiContext): Server {
   return createServer((req, res) => {
     try {
       const { pathname } = new URL(req.url ?? "/", "http://localhost");
+      if (routeReports(ctx.db, ctx.reports ?? {}, req, res, pathname)) return;
       if (pathname === "/health") {
         if (req.method !== "GET") {
           sendJson(res, 405, { error: "method_not_allowed" }, { allow: "GET" });
