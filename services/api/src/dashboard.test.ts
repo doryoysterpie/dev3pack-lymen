@@ -320,4 +320,20 @@ test("the page shows a time it cannot format as its number, and never calls a mi
     true,
   );
   assert.equal(source.includes("(left out)"), false);
+  // The bytes sentence appears only for a bundle that has transaction bytes.
+  assert.equal(
+    runInContext('walletText({ wallet: null, transaction: "AQ==" })', page),
+    "Not sent. The transaction bytes still name the signing wallet.",
+  );
+  assert.equal(
+    runInContext("walletText({ wallet: null, transaction: null })", page),
+    "Not sent.",
+  );
+  assert.equal(
+    runInContext(
+      'walletText({ wallet: "4FLJyfdzkWbs2yhhpymoZkudtsuJ3S8A8ft81gTWAPRa", transaction: "AQ==" })',
+      page,
+    ),
+    "4FLJyfdzkWbs2yhhpymoZkudtsuJ3S8A8ft81gTWAPRa",
+  );
 });

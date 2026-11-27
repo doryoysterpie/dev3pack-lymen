@@ -33,6 +33,15 @@ async function api(path, method = "GET") {
   return body;
 }
 
+// What the evidence view says about a bundle's wallet field. The bytes sentence appears only
+// when the bundle has transaction bytes, since only then do they name the signing wallet.
+function walletText(e) {
+  if (e.wallet) return e.wallet;
+  return e.transaction
+    ? "Not sent. The transaction bytes still name the signing wallet."
+    : "Not sent.";
+}
+
 // A time the page cannot show as a date is shown as its number, so one bad value never stops the
 // case view from opening.
 function time(seconds) {
@@ -127,12 +136,7 @@ async function showCase(id) {
     field(dl, "Re-simulation", resimulationText(e.resimulation));
     field(dl, "Transaction (base64)", e.transaction ?? "(none)");
     field(dl, "Reported", `${time(e.reported_at)}, app ${e.app_version}`);
-    field(
-      dl,
-      "Wallet field",
-      e.wallet ??
-        "Not sent. The transaction bytes still name the signing wallet.",
-    );
+    field(dl, "Wallet field", walletText(e));
     item.append(dl);
     list.append(item);
   }
