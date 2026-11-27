@@ -7,7 +7,8 @@
 // endpoint's genesis hash and stops on anything but devnet (D-03).
 
 export const SOLANA_RPC_URL =
-  process.env.EXPO_PUBLIC_SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
+  // An unset or empty variable falls back to the public devnet endpoint.
+  process.env.EXPO_PUBLIC_SOLANA_RPC_URL || "https://api.devnet.solana.com";
 
 /** What the wallet shows the user when limen asks to connect. */
 export const APP_IDENTITY = { name: "limen" } as const;

@@ -1,16 +1,17 @@
 // Transaction-request card text (E-09). App strings live here so the copy
 // rules (rule 9) can be checked in one place.
 
-import type { CardRow, CardText } from "../pay/card-text.ts";
 import type {
   BalanceChange,
-  Decoded,
   Effect,
   Place,
   Preflight,
   SignBlock,
+  TransactionSummary,
   UndecodedReason,
 } from "@limen/preflight";
+
+import { asWritten, type CardRow, type CardText } from "../pay/card-text.ts";
 
 const U64_MAX = "18446744073709551615";
 
@@ -126,16 +127,16 @@ const UNDECODED: Readonly<Record<UndecodedReason, string>> = {
   "missing-accounts": "fewer accounts than the instruction needs",
 };
 
-function otherText(decoded: Decoded): string {
-  switch (decoded.kind) {
+// The summary keeps each instruction the wallet does not authorize as its index
+// and kind only, so the card names the kind and shows no text from it.
+function otherText(kind: TransactionSummary["others"][number]["kind"]): string {
+  switch (kind) {
     case "compute-budget":
-      return `Compute budget: ${decoded.name} ${decoded.value}.`;
+      return "A compute budget instruction.";
     case "memo":
-      return decoded.text === null
-        ? `Memo of ${decoded.length} bytes that are not plain text.`
-        : `Memo, as written in the transaction: ${decoded.text}`;
+      return "A memo. The card does not show its text.";
     case "token-other":
-      return `Token program instruction ${decoded.name}. Details are not shown.`;
+      return "A token program instruction whose details are not shown.";
     case "advance-nonce":
       return "Advances a durable nonce.";
     default:
@@ -172,12 +173,8 @@ function changeRow(change: BalanceChange, user: string): CardRow {
 }
 
 const BLOCK: Readonly<Record<SignBlock, string>> = {
-  "user-not-a-signer":
-    "the transaction does not ask for your wallet's signature.",
   "cosigner-missing":
     "it needs another signature that is missing. The Solana Pay format has wallets refuse such a transaction.",
-  "fee-payer-not-user":
-    "it has no signatures and its fee payer is not your wallet. limen does not rebuild a transaction.",
 };
 
 /** The card for a transaction request, from its link and pre-flight. */
@@ -202,6 +199,15 @@ export function transactionCardText(
       rows: [from],
     };
   }
+  if (result.kind === "user-not-fee-payer") {
+    return {
+      title: "Stopped: not your wallet's transaction",
+      tone: "flagged",
+      status:
+        "limen holds this transaction: its fee payer is another wallet, and limen checks a transaction only for its fee payer.",
+      rows: [from, { label: "Fee payer", value: result.feePayer }],
+    };
+  }
   if (result.kind === "malformed") {
     return {
       title: "Malformed transaction",
@@ -221,7 +227,8 @@ export function transactionCardText(
   if (message !== null) {
     rows.push({
       label: "Message, as written by the requester",
-      value: message,
+      value: asWritten(message),
+      quoted: true,
     });
   }
   rows.push(...summary.effects.map(effectRow));
@@ -234,7 +241,7 @@ export function transactionCardText(
   for (const other of summary.others) {
     rows.push({
       label: "Also in the transaction",
-      value: otherText(other.decoded),
+      value: otherText(other.kind),
     });
   }
   if (summary.unresolvedAccounts > 0) {
@@ -262,9 +269,7 @@ export function transactionCardText(
 
   rows.push({
     label: "Fee payer",
-    value: summary.signers.userPaysFees
-      ? "Your wallet."
-      : (summary.signers.others[0]?.address ?? "Not your wallet."),
+    value: "Your wallet.",
   });
   for (const block of blocks) {
     rows.push({ label: "limen holds this transaction", value: BLOCK[block] });

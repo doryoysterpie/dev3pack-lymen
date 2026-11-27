@@ -2,9 +2,11 @@
 // audited). Pure module: it reads the decoded instructions only. Simulated
 // balance changes come from simulate.ts.
 //
-// "Yours" means an instruction the user's wallet authorizes: the wallet is the
-// System funding account, the account being assigned, or a signing owner,
-// delegate or authority of a token instruction.
+// The user is the transaction's fee payer, its first required signer, read
+// from the transaction itself, so the app and a server summarize the same
+// bytes the same way. "Yours" means an instruction the user's wallet
+// authorizes: the wallet is the System funding account, the account being
+// assigned, or a signing owner, delegate or authority of a token instruction.
 
 import {
   messageAccounts,
@@ -101,10 +103,8 @@ export interface Undecoded {
 }
 
 export interface Signers {
-  /** The user's wallet is one of the required signers. */
-  readonly userSigns: boolean;
-  /** The user's wallet is the fee payer, the first account. */
-  readonly userPaysFees: boolean;
+  /** The fee payer, the first required signer: the wallet summarized for. */
+  readonly feePayer: string;
   /** Every other required signer, and whether its signature is filled in. */
   readonly others: readonly {
     readonly address: string;
@@ -116,10 +116,13 @@ export interface Signers {
 
 export interface TransactionSummary {
   readonly effects: readonly Effect[];
-  /** Decoded instructions that the user's wallet does not authorize. */
+  /**
+   * Decoded instructions that the user's wallet does not authorize, each cut
+   * to its index and kind.
+   */
   readonly others: readonly {
     readonly instruction: number;
-    readonly decoded: Decoded;
+    readonly kind: Exclude<Decoded["kind"], "undecoded">;
   }[];
   /** Instructions the decoder could not decode. Any entry means the fallback card. */
   readonly undecoded: readonly Undecoded[];
@@ -280,20 +283,20 @@ function isZero(signature: Uint8Array): boolean {
 }
 
 /**
- * Summarizes a parsed transaction for the user's wallet. tables holds the
- * lookup tables read from the chain; an empty map leaves their addresses
- * unresolved.
+ * Summarizes a parsed transaction for its fee payer. tables holds the lookup
+ * tables read from the chain; an empty map leaves their addresses unresolved.
  */
 export function summarizeTransaction(
   transaction: ParsedTransaction,
-  user: string,
   tables: LookupTables,
 ): TransactionSummary {
   const { message, signatures } = transaction;
   const accounts = messageAccounts(message, tables);
+  // wire.ts guarantees at least one static key and one required signer.
+  const user = message.staticKeys[0];
 
   const effects: Effect[] = [];
-  const others: { instruction: number; decoded: Decoded }[] = [];
+  const others: TransactionSummary["others"][number][] = [];
   const undecoded: Undecoded[] = [];
   message.instructions.forEach((compiled, instruction) => {
     const decoded = decodeInstruction(compiled, accounts);
@@ -306,7 +309,7 @@ export function summarizeTransaction(
       return;
     }
     const effect = effectOf(decoded, instruction, user);
-    if (effect === null) others.push({ instruction, decoded });
+    if (effect === null) others.push({ instruction, kind: decoded.kind });
     else effects.push(effect);
   });
 
@@ -315,8 +318,7 @@ export function summarizeTransaction(
     message.header.numRequiredSignatures,
   );
   const signers: Signers = {
-    userSigns: required.includes(user),
-    userPaysFees: message.staticKeys[0] === user,
+    feePayer: user,
     others: required
       .map((address, index) => ({
         address,

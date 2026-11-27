@@ -36,6 +36,10 @@ export interface Simulation {
   /** Post-simulation state of the requested accounts; null when absent. */
   readonly accounts: readonly (AccountState | null)[];
   readonly unitsConsumed: number | null;
+  /** The slot the simulation ran at, from the response context. */
+  readonly slot: number | null;
+  /** The blockhash the simulation used in place of the transaction's own. */
+  readonly replacementBlockhash: string | null;
 }
 
 export class RpcError extends Error {
@@ -176,6 +180,14 @@ async function fetchSimulation(
   const value = valueOf(result, "simulateTransaction");
   if (!isRecord(value))
     throw new RpcError("shape", "simulateTransaction: value");
+  const context = isRecord(result) ? result.context : undefined;
+  const slot =
+    isRecord(context) && typeof context.slot === "number" ? context.slot : null;
+  const replacement = value.replacementBlockhash;
+  const replacementBlockhash =
+    isRecord(replacement) && typeof replacement.blockhash === "string"
+      ? replacement.blockhash
+      : null;
   const accounts = value.accounts;
   if (accounts !== null && accounts !== undefined) {
     if (!Array.isArray(accounts) || accounts.length !== addresses.length) {
@@ -191,6 +203,8 @@ async function fetchSimulation(
     accounts: Array.isArray(accounts) ? accounts.map(accountState) : [],
     unitsConsumed:
       typeof value.unitsConsumed === "number" ? value.unitsConsumed : null,
+    slot,
+    replacementBlockhash,
   };
 }
 

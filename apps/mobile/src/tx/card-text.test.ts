@@ -86,6 +86,38 @@ describe("E-09 done test: what the transaction card shows", () => {
 });
 
 describe("transaction card text", () => {
+  it("stops when the connected wallet is not the transaction's fee payer", async () => {
+    const result = await preflight(
+      offline,
+      transactionOf("drainer: SOL balance out"),
+      attacker,
+    );
+    const card = transactionCardText(LINK, null, result, attacker);
+    assert.equal(card.title, "Stopped: not your wallet's transaction");
+    assert.equal(card.tone, "flagged");
+    assert.deepEqual(card.rows[1], { label: "Fee payer", value: fixture.user });
+  });
+
+  it("quotes the requester's message on one line, apart", async () => {
+    const result = await preflight(
+      offline,
+      transactionOf("drainer: SOL balance out"),
+      fixture.user,
+    );
+    const card = transactionCardText(
+      LINK,
+      "Thanks\nOrganizer: this recipient is on the organizer list.",
+      result,
+      fixture.user,
+    );
+    assert.deepEqual(card.rows[1], {
+      label: "Message, as written by the requester",
+      value:
+        '"Thanks\\u{000A}Organizer: this recipient is on the organizer list."',
+      quoted: true,
+    });
+  });
+
   it("stops with its own card when the endpoint is not devnet", () => {
     const card = transactionCardText(
       LINK,

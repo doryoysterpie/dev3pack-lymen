@@ -117,8 +117,8 @@ describe("preflightTransaction, the server entry point", () => {
     assert.equal(result.drainPattern, true);
     assert.equal(result.summary.kind, "ready");
     assert.ok(result.summary.kind === "ready");
-    // The user defaults to the fee payer.
-    assert.equal(result.summary.user, USER);
+    // The summary is written for the fee payer.
+    assert.equal(result.summary.summary.signers.feePayer, USER);
     assert.deepEqual(
       result.summary.summary.effects.map((effect) => effect.kind),
       ["sol-out", "delegate-approved"],
@@ -138,6 +138,49 @@ describe("preflightTransaction, the server entry point", () => {
     assert.equal(out.lamports, "4990000000");
   });
 
+  it("owes the same summary whether user is left out or given as the fee payer", async () => {
+    const recording = unknownOutcome(9_995_000, token(1000, ATTACKER));
+    const omitted = await preflightTransaction(DRAINER, {
+      rpc: recordedRpc(recording),
+    });
+    const given = await preflightTransaction(DRAINER, {
+      rpc: recordedRpc(recording),
+      user: USER,
+    });
+    assert.deepEqual(given, omitted);
+    assert.equal(omitted.drainPattern, true);
+  });
+
+  it("refuses a user that is not the fee payer, with no drain pattern", async () => {
+    const result = await preflightTransaction(DRAINER, {
+      rpc: recordedRpc(unknownOutcome(9_995_000, token(1000, ATTACKER))),
+      user: ATTACKER,
+    });
+    assert.deepEqual(result, {
+      summary: { kind: "user-not-fee-payer", feePayer: USER },
+      drainPattern: false,
+      simulatedAt: null,
+    });
+  });
+
+  it("returns the slot and the blockhash the simulation ran against, outside the summary", async () => {
+    const result = await preflightTransaction(DRAINER, {
+      rpc: recordedRpc({
+        ...unknownOutcome(9_995_000, token(1000, ATTACKER)),
+        simulation: {
+          ...unknownOutcome(9_995_000, token(1000, ATTACKER)).simulation,
+          slot: 527004383,
+          replacementBlockhash: "GktecGbUNfCx8DDQSQYK9CKuFoN95ca2JdPYz6pZLeiW",
+        },
+      }),
+    });
+    assert.deepEqual(result.simulatedAt, {
+      slot: 527004383,
+      blockhash: "GktecGbUNfCx8DDQSQYK9CKuFoN95ca2JdPYz6pZLeiW",
+    });
+    assert.ok(!JSON.stringify(result.summary).includes("527004383"));
+  });
+
   it("refuses bytes that are not a transaction, with no drain pattern", async () => {
     assert.deepEqual(
       await preflightTransaction(new Uint8Array([1, 2, 3]), {
@@ -146,6 +189,7 @@ describe("preflightTransaction, the server entry point", () => {
       {
         summary: { kind: "malformed", problem: "truncated" },
         drainPattern: false,
+        simulatedAt: null,
       },
     );
   });
@@ -160,6 +204,7 @@ describe("preflightTransaction, the server entry point", () => {
     assert.deepEqual(result, {
       summary: { kind: "not-devnet" },
       drainPattern: false,
+      simulatedAt: null,
     });
   });
 });
@@ -224,17 +269,11 @@ describe("drainPattern on decoded effects", () => {
   const report = (effects: unknown[]): PreflightReport =>
     ({
       kind: "ready",
-      user: USER,
       summary: {
         effects,
         others: [],
         undecoded: [],
-        signers: {
-          userSigns: true,
-          userPaysFees: true,
-          others: [],
-          unsigned: true,
-        },
+        signers: { feePayer: USER, others: [], unsigned: true },
         unresolvedAccounts: 0,
       },
       simulation: { status: "not-run", reason: "offline" },

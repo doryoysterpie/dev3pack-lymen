@@ -52,6 +52,7 @@ const caseNamed = (start: string): FixtureCase => {
   return found;
 };
 const drainer = caseNamed("drainer: SOL balance out");
+const sponsored = caseNamed("a sponsored transaction");
 const drainerV0 = caseNamed(
   "drainer as a v0 transaction, lookup table not loaded",
 );
@@ -136,6 +137,8 @@ const drainerRecording: Recording = {
     err: null,
     logs: ["Program log: fake"],
     unitsConsumed: 1234,
+    slot: 527004383,
+    replacementBlockhash: "GktecGbUNfCx8DDQSQYK9CKuFoN95ca2JdPYz6pZLeiW",
     accounts: {
       [USER]: account(9_995_000, SYSTEM_PROGRAM, ""),
       [USER_TOKEN_ACCOUNT]: account(
@@ -196,10 +199,13 @@ describe("E-09 done test: the drainer pre-flight", () => {
       result.summary.effects.map((effect) => effect.kind),
       ["sol-out", "delegate-approved"],
     );
+    assert.deepEqual(result.simulatedAt, {
+      slot: 527004383,
+      blockhash: "GktecGbUNfCx8DDQSQYK9CKuFoN95ca2JdPYz6pZLeiW",
+    });
     assert.deepEqual(result.simulation, {
       status: "ran",
       err: null,
-      logs: ["Program log: fake"],
       changes: [
         { kind: "sol", account: USER, before: "5000000000", after: "9995000" },
         {
@@ -275,29 +281,28 @@ describe("pre-flight paths", () => {
     assert.deepEqual(result.blocks, ["cosigner-missing"]);
   });
 
-  it("allows a sponsored transaction whose fee payer has signed", async () => {
-    const rpc = drainerRpc();
-    const result = ready(
-      await preflight(
-        rpc,
-        caseNamed("a co-signer that has signed").transaction,
-        USER,
-      ),
-    );
-    assert.deepEqual(result.blocks, []);
-  });
-
-  it("blocks signing for a wallet the transaction does not ask to sign", async () => {
+  it("refuses a wallet that is not the fee payer", async () => {
     const rpc = drainerRpc();
     const other = "GsJrhpq3YeSBYmKAtkbQFjYN9EoLJvVJvfvs9pTQ84Hc";
-    const result = ready(await preflight(rpc, drainer.transaction, other));
-    // To this wallet, the fixture user is another required signer with no
-    // signature, which the specification also has wallets reject.
-    assert.deepEqual(result.blocks, [
-      "user-not-a-signer",
-      "cosigner-missing",
-      "fee-payer-not-user",
-    ]);
+    assert.deepEqual(await preflight(rpc, drainer.transaction, other), {
+      kind: "user-not-fee-payer",
+      feePayer: USER,
+    });
+    // The sponsored transaction's fee payer is the organizer, not the user.
+    assert.deepEqual(await preflight(rpc, sponsored.transaction, USER), {
+      kind: "user-not-fee-payer",
+      feePayer: "E3RFTY1NdeAf1fD4HH8v6SJWCxTH3bkvBKMbapev8HGW",
+    });
+  });
+
+  it("summarizes a sponsored transaction for its fee payer, and blocks the missing signature", async () => {
+    const rpc = drainerRpc();
+    const result = ready(await preflight(rpc, sponsored.transaction));
+    assert.equal(
+      result.summary.signers.feePayer,
+      "E3RFTY1NdeAf1fD4HH8v6SJWCxTH3bkvBKMbapev8HGW",
+    );
+    assert.deepEqual(result.blocks, ["cosigner-missing"]);
   });
 
   it("refuses text that is not base64 and a truncated transaction", async () => {
@@ -352,11 +357,10 @@ describe("signing gate", () => {
 
   it("leaves a signed transaction as it is", async () => {
     const rpc = drainerRpc();
-    const c = caseNamed("a co-signer that has signed");
-    const result = ready(await preflight(rpc, c.transaction, USER));
+    const result = ready(await preflight(rpc, sponsored.transaction));
     assert.equal(
       forSigning(result, "GsJrhpq3YeSBYmKAtkbQFjYN9EoLJvVJvfvs9pTQ84Hc"),
-      c.transaction,
+      sponsored.transaction,
     );
   });
 });
