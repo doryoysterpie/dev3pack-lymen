@@ -34,6 +34,14 @@ function render(view: StationView): void {
     showProblem(view.message);
     return;
   }
+  if (view.kind === "refreshing") {
+    // The last QR has outlived its lifetime and no new one has arrived yet.
+    canvas.hidden = true;
+    delete canvas.dataset.qr;
+    problem.hidden = true;
+    caption.textContent = "Refreshing the QR. Please wait.";
+    return;
+  }
   QRCode.toCanvas(canvas, view.qr, {
     width: 480,
     margin: 2,
@@ -57,7 +65,8 @@ if ("error" in config) {
   url.hash = "";
   window.history.replaceState(null, "", url);
   startRotation({
-    fetchQr: () => fetchStationQr(window.fetch.bind(window), "/api", config),
+    fetchQr: (signal) =>
+      fetchStationQr(window.fetch.bind(window), "/api", config, signal),
     render,
     setTimeout: (fn, ms) => window.setTimeout(fn, ms),
     clearTimeout: (handle) => window.clearTimeout(handle as number),

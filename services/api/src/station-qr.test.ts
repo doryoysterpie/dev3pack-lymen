@@ -62,8 +62,12 @@ function craft(
   return `${message}.${signerId(claimedSigner.publicKey)}.${signature.toString("base64url")}`;
 }
 
+/** The verdict at Unix time `now`, in seconds; fractions are kept, as milliseconds. */
 function reasonOf(text: string, now = T): string {
-  const result = verifyStationQr(text, { allowlist: ALLOWLIST, now });
+  const result = verifyStationQr(text, {
+    allowlist: ALLOWLIST,
+    nowMs: Math.round(now * 1000),
+  });
   return result.ok ? "ok" : result.reason;
 }
 
@@ -94,17 +98,20 @@ test("an issued QR has the documented format and verifies to exactly the payload
     ),
   );
 
-  assert.deepEqual(verifyStationQr(text, { allowlist: ALLOWLIST, now: T }), {
-    ok: true,
-    payload: {
-      station: "st-front",
-      session: "day-2",
-      nonce: NONCE,
-      issued_at: T,
-      expires_at: T + 60,
+  assert.deepEqual(
+    verifyStationQr(text, { allowlist: ALLOWLIST, nowMs: T * 1000 }),
+    {
+      ok: true,
+      payload: {
+        station: "st-front",
+        session: "day-2",
+        nonce: NONCE,
+        issued_at: T,
+        expires_at: T + 60,
+      },
+      signer: Buffer.from(ORGANIZER.publicKey).toString("base64url"),
     },
-    signer: Buffer.from(ORGANIZER.publicKey).toString("base64url"),
-  });
+  );
 });
 
 test("done test 1: a QR older than 60 s is rejected as expired", () => {
@@ -113,6 +120,53 @@ test("done test 1: a QR older than 60 s is rejected as expired", () => {
   assert.equal(reasonOf(text, T + 60), "ok");
   assert.equal(reasonOf(text, T + 61), "expired");
   assert.equal(reasonOf(text, T + 3600), "expired");
+});
+
+test("done test 1: the 60 s limit is measured in milliseconds, so 60.001 s and 60.999 s are rejected", () => {
+  const text = issue();
+  assert.equal(reasonOf(text, T + 60), "ok");
+  assert.equal(reasonOf(text, T + 60.001), "expired");
+  assert.equal(reasonOf(text, T + 60.999), "expired");
+  assert.equal(reasonOf(text, T - 5), "ok");
+  assert.equal(reasonOf(text, T - 5.001), "not_yet_valid");
+});
+
+test("a QR issued near the end of its session expires when the session ends", () => {
+  const sessionEnd = T + 1;
+  const { text, payload } = issueStationQr({
+    station: "st-front",
+    session: "day-2",
+    now: T,
+    signer: ORGANIZER,
+    nonce: NONCE,
+    notAfter: sessionEnd,
+  });
+  assert.equal(payload.expires_at, sessionEnd);
+  assert.equal(reasonOf(text, sessionEnd), "ok");
+  assert.equal(reasonOf(text, sessionEnd + 0.001), "expired");
+  assert.equal(reasonOf(text, T + 59), "expired");
+  // Without a cap, or with one past 60 s, the QR keeps its full 60 s.
+  assert.equal(
+    issueStationQr({
+      station: "st-front",
+      session: "day-2",
+      now: T,
+      signer: ORGANIZER,
+      notAfter: T + 3600,
+    }).payload.expires_at,
+    T + 60,
+  );
+  assert.throws(
+    () =>
+      issueStationQr({
+        station: "st-front",
+        session: "day-2",
+        now: T,
+        signer: ORGANIZER,
+        notAfter: T,
+      }),
+    /notAfter must be a Unix time in whole seconds after now/,
+  );
 });
 
 test("done test 1: a signed QR with a window over 60 s or an old issue time is still rejected", () => {
@@ -186,12 +240,15 @@ test("done test 3: a payload signed by a non-allowlisted key is rejected", () =>
   assert.equal(
     verifyStationQr(issue(STRANGER), {
       allowlist: stationAllowlist([STRANGER.publicKey]),
-      now: T,
+      nowMs: T * 1000,
     }).ok,
     true,
   );
   assert.equal(
-    verifyStationQr(issue(), { allowlist: stationAllowlist([]), now: T }).ok,
+    verifyStationQr(issue(), {
+      allowlist: stationAllowlist([]),
+      nowMs: T * 1000,
+    }).ok,
     false,
   );
 });
