@@ -189,6 +189,9 @@ test("each failed fetch becomes the owed message for the screen", async () => {
     [answering(404), "The API does not know this station."],
     [answering(409), "No session is open right now."],
     [answering(500), "The API answered with status 500."],
+    [answering(502), "The API cannot be reached."],
+    [answering(503), "The API cannot be reached."],
+    [answering(504), "The API cannot be reached."],
     [
       answering(200, { qr: "https://example.com/" }),
       "The API answered with something that is not a station QR.",
