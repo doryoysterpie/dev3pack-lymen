@@ -7,7 +7,8 @@
     "start": "node --env-file-if-exists=../../.env src/index.ts",
     "import-registrations": "node --env-file-if-exists=../../.env src/registration.ts",
     "test": "node --test \"src/**/*.test.ts\"",
-    "check:devnet": "node --env-file-if-exists=../../.env --test --test-concurrency=1 \"src/devnet/*.check.ts\""
+    "check:devnet": "node --env-file-if-exists=../../.env --test --test-concurrency=1 \"src/devnet/*.check.ts\"",
+    "seed": "node --env-file-if-exists=../../.env src/seed.ts"
   },
   "dependencies": {
     "@solana/spl-token": "0.4.15",

@@ -1,0 +1,11 @@
+{
+  "stations": [{ "id": "st-front", "name": "Front desk" }],
+  "sessions": [
+    {
+      "id": "build-window",
+      "name": "Build window",
+      "starts_at": "2026-11-26T07:02:00Z",
+      "ends_at": "2027-01-01T00:00:00Z"
+    }
+  ]
+}
