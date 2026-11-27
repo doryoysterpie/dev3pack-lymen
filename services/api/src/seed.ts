@@ -7,9 +7,9 @@
 // "ends_at" }] }, with times as UTC timestamps of the form 2026-11-26T07:02:00Z.
 import { readFileSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 
 import { openDatabase } from "./db.ts";
+import { isMainModule } from "./main-module.ts";
 
 export interface EventSeed {
   readonly stations: readonly { id: string; name: string }[];
@@ -125,23 +125,37 @@ export function seedEvent(
   return { stations: seed.stations.length, sessions: seed.sessions.length };
 }
 
-const invokedDirectly =
-  process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(process.argv[1]).href;
+/** Why a seed file did not parse, by line and column when the parser gives them, without quoting it. */
+export function describeSeedParseFailure(err: unknown): string {
+  const at = /\(line (\d+) column (\d+)\)/.exec(
+    err instanceof Error ? err.message : "",
+  );
+  return at
+    ? `is not valid JSON at line ${at[1]}, column ${at[2]}`
+    : "is not valid JSON";
+}
 
-if (invokedDirectly) {
+if (isMainModule(import.meta.url)) {
   try {
     const file = process.argv[2];
     if (file === undefined)
       throw new Error("usage: npm run seed -w @limen/api -- <seed file>");
+    let text: string;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch (err) {
+      const reason = (err as NodeJS.ErrnoException).code ?? "unknown error";
+      throw new Error(`cannot read seed file ${file} (${reason})`, {
+        cause: err,
+      });
+    }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(readFileSync(file, "utf8"));
+      parsed = JSON.parse(text);
     } catch (err) {
-      throw new Error(
-        `cannot read seed file ${file}: ${(err as Error).message}`,
-        { cause: err },
-      );
+      // No cause attached: the parser's error quotes the file's content.
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error(`seed file ${file} ${describeSeedParseFailure(err)}`);
     }
     const seed = parseEventSeed(parsed);
     const db = openDatabase(process.env.DATABASE_PATH || "limen.db");
