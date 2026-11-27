@@ -1,4 +1,5 @@
-// Organizer allowlist and known-scam list for payment recipients (E-08).
+// Organizer allowlist and flagged list for payment recipients (E-08). Flagged
+// means only that an address is on the bundled devnet list.
 // Pure module: the lists are passed in, so the source of the lists can change
 // without touching the checks.
 
@@ -42,7 +43,7 @@ export function loadRecipientLists(json: unknown): RecipientLists {
 }
 
 /**
- * A recipient on the known-scam list is flagged even when it is also on the
+ * A recipient on the flagged list is flagged even when it is also on the
  * organizer list: the warning wins over the reassurance.
  */
 export function recipientStatus(

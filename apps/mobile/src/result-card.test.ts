@@ -119,6 +119,27 @@ describe("E-08 done test: what the transfer card shows", () => {
     );
   });
 
+  it("titles a request over 2048 characters by its kind", () => {
+    const status =
+      "limen flags this QR: it is longer than the 2048 characters the Solana Pay reference parser accepts.";
+    // The PM's review: a transaction request link with 2100 letters after it.
+    const link = `solana:https%3A%2F%2Fexample.com%2Fpay%3Fq%3D${"a".repeat(2100)}`;
+    assert.equal(link.length, 2145);
+    assert.deepEqual(resultCard(link, lists), {
+      title: "Malformed Solana Pay transaction request",
+      tone: "malformed",
+      status,
+      rows: [],
+    });
+    const transfer = `solana:${ORGANIZER}?label=${"a".repeat(2100)}`;
+    assert.deepEqual(resultCard(transfer, lists), {
+      title: "Malformed Solana Pay transfer request",
+      tone: "malformed",
+      status,
+      rows: [],
+    });
+  });
+
   it("leaves other QR types to the E-04 summary", () => {
     assert.deepEqual(resultCard("https://example.org/schedule", lists), {
       title: "Web link",

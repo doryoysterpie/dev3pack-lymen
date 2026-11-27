@@ -54,12 +54,15 @@ const PROBLEM: Readonly<Record<TransferProblem, string>> = {
 };
 
 // Characters that would break the text across lines or reorder it on screen:
-// C0 and C1 controls (line breaks among them), zero-width and directional
-// marks, the line and paragraph separators, and the byte order mark.
+// C0 and C1 controls (line breaks among them), zero-width marks, every
+// Bidi_Control character in Unicode 18.0.0's PropList.txt (U+061C, U+200E and
+// U+200F, U+202A to U+202E, U+2066 to U+2069), the line and paragraph
+// separators, and the byte order mark.
 function hidden(code: number): boolean {
   return (
     code <= 0x1f ||
     (code >= 0x7f && code <= 0x9f) ||
+    code === 0x061c ||
     (code >= 0x200b && code <= 0x200f) ||
     (code >= 0x2028 && code <= 0x202e) ||
     (code >= 0x2060 && code <= 0x2069) ||
@@ -70,15 +73,22 @@ function hidden(code: number): boolean {
 /**
  * Text from the QR, shown on one line between quotation marks, with each
  * character that would break or reorder the line written as its code point,
- * such as \u{000A} for a line break.
+ * such as \u{000A} for a line break. A backslash is written \\ and a
+ * quotation mark \", so the text cannot close its own quotes, and the shown
+ * text reads back to exactly one input: every backslash in it starts one of
+ * those three escapes.
  */
 export function asWritten(text: string): string {
   let shown = "";
   for (const character of text) {
     const code = character.codePointAt(0) ?? 0;
-    shown += hidden(code)
-      ? `\\u{${code.toString(16).toUpperCase().padStart(4, "0")}}`
-      : character;
+    if (character === "\\" || character === '"') {
+      shown += `\\${character}`;
+    } else if (hidden(code)) {
+      shown += `\\u{${code.toString(16).toUpperCase().padStart(4, "0")}}`;
+    } else {
+      shown += character;
+    }
   }
   return `"${shown}"`;
 }
@@ -133,6 +143,19 @@ export function transferCardText(card: TransferCard): CardText {
       card.recipientStatus === "unlisted" ? "neutral" : card.recipientStatus,
     status: STATUS[card.recipientStatus],
     rows,
+  };
+}
+
+/**
+ * A transaction request link over the length limit. The classifier refuses it
+ * before it tells the kinds apart; requestKind (transfer.ts) names the kind.
+ */
+export function longTransactionRequestText(): CardText {
+  return {
+    title: "Malformed Solana Pay transaction request",
+    tone: "malformed",
+    status: `limen flags this QR: ${PROBLEM["too-long"]}`,
+    rows: [],
   };
 }
 

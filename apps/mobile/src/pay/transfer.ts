@@ -75,6 +75,23 @@ function decimalPlaces(amount: string): number {
 }
 
 /**
+ * Which kind of Solana Pay request a solana: URL is, by its pathname alone, by
+ * the rule the classifier (classify.ts, classifySolanaPay) and the reference
+ * parseURL apply: a pathname that holds ":" or "%" is a transaction request
+ * link, anything else a transfer request. The classifier refuses a URL over
+ * 2048 characters before it tells the two apart, so the card asks here.
+ */
+export function requestKind(text: string): "transfer" | "transaction" {
+  let pathname: string;
+  try {
+    pathname = new URL(text).pathname;
+  } catch {
+    return "transfer";
+  }
+  return /[:%]/.test(pathname) ? "transaction" : "transfer";
+}
+
+/**
  * Builds the transfer card for the text of a scanned QR. mintDecimals is the
  * SPL mint's decimals when the caller knows them, or null. The spec has the
  * wallet reject an amount with more decimal places than the token supports;
@@ -87,6 +104,10 @@ export function transferCard(
 ): TransferCardResult {
   const qr = classifyQr(text);
   if (qr.type === "other" && qr.reason === "malformed-solana-pay") {
+    // A long transaction request is not a transfer request.
+    if (qr.problem === "too-long" && requestKind(text) === "transaction") {
+      return refuse("not-a-transfer-request");
+    }
     return TRANSFER_PROBLEMS.has(qr.problem)
       ? refuse(qr.problem as TransferProblem)
       : refuse("not-a-transfer-request");
