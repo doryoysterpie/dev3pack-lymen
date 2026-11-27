@@ -695,3 +695,113 @@ test("a domain on the bundled fixture list is described as on that list, not on 
     "- Domain on the bundled fixture list: yes",
   ]);
 });
+
+test("a feePayer at any depth is kept only as the role marker, so E-09's full report is covered too", () => {
+  const listed = new Set([RECIPIENT, SYSTEM_PROGRAM]);
+  assert.deepEqual(
+    redactSummary(
+      {
+        kind: "ready",
+        feePayerSet: true,
+        summary: { signers: { feePayer: "4FLJ...APRa", unsigned: true } },
+        blocks: [{ feePayer: "user" }, { feePayer: "wallet-4FLJ" }],
+      },
+      listed,
+    ),
+    {
+      summary: {
+        kind: "ready",
+        feePayerSet: true,
+        summary: { signers: { unsigned: true } },
+        blocks: [{ feePayer: "user" }, {}],
+      },
+      leftOut: 2,
+    },
+  );
+});
+
+test("a stored full report in E-09's shape gives a body without the fee payer or the wallet's simulated account", async () => {
+  // E-09's PreflightReport (packages/preflight/src/preflight.ts): the summary nested under
+  // `summary`, with the fee payer at summary.signers.feePayer, here in a shortened form no
+  // base58 rule can see, and the wallet as the account of a simulated SOL change.
+  const shortened = (w: string) => `${w.slice(0, 4)}...${w.slice(-4)}`;
+  const reports = [DEVICE_1, DEVICE_2].map((r, i) => ({
+    ...r,
+    summary: {
+      kind: "ready",
+      feePayerSet: false,
+      summary: e09Summary(shortened(String(r.wallet)), `150000000${i + 1}`),
+      simulation: {
+        status: "ran",
+        err: null,
+        changes: [
+          {
+            kind: "sol",
+            account: String(r.wallet),
+            before: "2000000000",
+            after: "499999999",
+            ownerBefore: SYSTEM_PROGRAM,
+            ownerAfter: SYSTEM_PROGRAM,
+            dataLengthBefore: 0,
+            dataLengthAfter: 0,
+          },
+        ],
+      },
+      blocks: [],
+    },
+  }));
+  const SIMULATION = `{"changes":[{"after":"499999999","before":"2000000000","dataLengthAfter":0,"dataLengthBefore":0,"kind":"sol","ownerAfter":"${SYSTEM_PROGRAM}","ownerBefore":"${SYSTEM_PROGRAM}"}],"err":null,"status":"ran"}`;
+  const SUMMARY =
+    `{"effects":[{"instruction":0,"kind":"sol-out","lamports":"1500000001","reason":"transfer","to":{"address":"${RECIPIENT}"}},` +
+    `{"amount":"250000000","decimals":6,"destination":{"address":"${RECIPIENT}"},"instruction":1,"kind":"token-out","mint":{},"program":"token","source":{}}],` +
+    `"others":[],"signers":{"others":[{"signed":false}],"unsigned":true},"undecoded":[],"unresolvedAccounts":0}`;
+  const escaped = (json: string) => json.replace(/[[\]]/g, (c) => `\\${c}`);
+  const owed = [
+    {
+      ...OWED_BODY[0]!,
+      description: [
+        "### limen escalation: drain pattern",
+        "",
+        BOTH_SOURCES,
+        "",
+        "- Case: 1",
+        THRESHOLD_LINE,
+        "- Sightings: 2, from 2 distinct reported install IDs",
+        "- Domain: claim-pass.example",
+        "- Domain on the bundled fixture list: no",
+        "- Re-simulation reproduced the reported summary with a drain pattern: yes",
+        "- Summary values left out, so that no address beyond the recipients and programs below is reported: 5",
+        "",
+        "#### Simulated transaction summary",
+        "- blocks: \\[\\]",
+        "- feePayerSet: false",
+        "- kind: ready",
+        `- simulation: ${escaped(SIMULATION)}`,
+        `- summary: ${escaped(SUMMARY)}`,
+        "",
+        "#### Programs",
+        `- ${SYSTEM_PROGRAM}`,
+        "",
+        "#### Recipients as reported to limen",
+        `- ${RECIPIENT}`,
+      ].join("\n"),
+      evidences: [
+        {
+          source: `limen simulated transaction summary (Solana devnet): {"blocks":[],"feePayerSet":false,"kind":"ready","simulation":${SIMULATION},"summary":${SUMMARY}}`,
+        },
+      ],
+    },
+  ];
+  const { logged, statuses } = await runFlow("dry-run", false, reports);
+  assert.deepEqual(
+    statuses.map((s) => (s as { case_status: string }).case_status),
+    ["held", "escalated"],
+  );
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0]!.split("\n")[1], JSON.stringify(owed));
+  for (const r of [DEVICE_1, DEVICE_2]) {
+    const w = String(r.wallet);
+    for (const form of [w, shortened(w)])
+      assert.ok(!logged[0]!.includes(form), `${form} reached the body`);
+  }
+});

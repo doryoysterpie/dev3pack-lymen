@@ -11,8 +11,8 @@
 // decoded simulation summary. The builder never reads a bundle's transaction bytes, QR text,
 // device hash or wallet field. The summary comes from the reporter's app, so redactSummary
 // leaves out every value in it that names an address other than the case's recipients and
-// program IDs, and signers.feePayer unless it is the role marker "user", before any of it goes
-// into the body.
+// program IDs, and every feePayer, at any depth, that is not the role marker "user", before any
+// of it goes into the body.
 import type { DatabaseSync } from "node:sqlite";
 
 import { canonicalJson, loadBundle, type StoredBundle } from "./evidence.ts";
@@ -89,7 +89,9 @@ const LEFT_OUT = Symbol("left out");
  *     ones (the case's recipients and program IDs). An address is any run of 32 or more base58
  *     characters, the form a Solana address takes, and a run is kept only when it is exactly a
  *     listed address. An entry whose key names such an address is left out whole;
- *   - signers.feePayer, unless it is exactly the role marker "user" that E-09 writes there.
+ *   - every entry named feePayer, at any depth, unless it is exactly the role marker "user" that
+ *     E-09 writes there. E-09's summary has it at signers.feePayer, and its full report at
+ *     summary.signers.feePayer; a feePayer anywhere else is left out on the same terms.
  * Returns what is kept and how many values were left out.
  */
 export function redactSummary(
@@ -97,36 +99,27 @@ export function redactSummary(
   listed: ReadonlySet<string>,
 ): { readonly summary: unknown; readonly leftOut: number } {
   let leftOut = 0;
-  // Where a value sits: the summary itself, its top-level signers object (E-09's, so the only
-  // feePayer that is the fee payer), or anywhere deeper.
-  type Place = "root" | "signers" | "inner";
-  const keep = (value: unknown, place: Place): unknown => {
+  const keep = (value: unknown): unknown => {
     if (typeof value === "string") {
       if (!namesUnlisted(value, listed)) return value;
       leftOut++;
       return LEFT_OUT;
     }
     if (Array.isArray(value))
-      return value.map((v) => keep(v, "inner")).filter((v) => v !== LEFT_OUT);
+      return value.map(keep).filter((v) => v !== LEFT_OUT);
     if (typeof value !== "object" || value === null) return value;
     const kept: Record<string, unknown> = {};
     for (const [key, v] of Object.entries(value)) {
-      if (
-        namesUnlisted(key, listed) ||
-        (place === "signers" && key === "feePayer" && v !== "user")
-      ) {
+      if (namesUnlisted(key, listed) || (key === "feePayer" && v !== "user")) {
         leftOut++;
         continue;
       }
-      const k = keep(
-        v,
-        place === "root" && key === "signers" ? "signers" : "inner",
-      );
+      const k = keep(v);
       if (k !== LEFT_OUT) kept[key] = k;
     }
     return kept;
   };
-  const kept = keep(summary, "root");
+  const kept = keep(summary);
   return { summary: kept === LEFT_OUT ? undefined : kept, leftOut };
 }
 
