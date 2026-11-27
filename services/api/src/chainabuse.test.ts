@@ -2,10 +2,26 @@
 // the exact request body. Both run end to end through POST /reports, with two fixture reports
 // from different devices that escalate one drain case under D-05.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import type { Server } from "node:http";
-import { Socket, type AddressInfo } from "node:net";
+import {
+  createServer as createNetServer,
+  Socket,
+  type AddressInfo,
+} from "node:net";
+import { tmpdir } from "node:os";
+import { join, sep } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   buildChainabuseRequest,
@@ -302,4 +318,90 @@ test("only an escalated case with a domain or a recipient builds a request", () 
     },
   );
   assert.equal(loadCase(db, 1, bundledLists()), null);
+});
+
+/** A port that was free a moment ago. */
+async function freePort(): Promise<number> {
+  const probe = createNetServer();
+  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const { port } = probe.address() as AddressInfo;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return port;
+}
+
+// RFC 8032 section 7.1, TEST 1: a published Ed25519 test vector, not a real key.
+const RFC_KEYPAIR = [
+  ...Buffer.from(
+    "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60" +
+      "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    "hex",
+  ),
+];
+
+test("with the flag on and no domain lists, the API still starts, serves /health and answers 503 on the triage routes", async () => {
+  // A copy of the API with no fixtures folder beside it, so the bundled lists cannot load. The
+  // real path, since the temporary directory can sit behind a symlink (as /var does on macOS).
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "limen-e13-no-lists-")));
+  const api = join(dir, "services", "api");
+  cpSync(fileURLToPath(new URL("..", import.meta.url)), api, {
+    recursive: true,
+    filter: (src) => !src.includes(`${sep}node_modules`),
+  });
+  assert.equal(existsSync(join(dir, "fixtures")), false);
+  const keyPath = join(dir, "organizer.json");
+  writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
+  const child = spawn(process.execPath, [join(api, "src", "index.ts")], {
+    env: {
+      PATH: process.env.PATH ?? "",
+      ORGANIZER_KEYPAIR_PATH: keyPath,
+      DATABASE_PATH: join(dir, "limen.db"),
+      // E-02 refuses API_PORT=0, so the test names a port that was free a moment ago.
+      API_PORT: String(await freePort()),
+      CHAINABUSE_POST: "dry-run",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => (stderr += chunk));
+  try {
+    const url = await new Promise<string>((resolve, reject) => {
+      let out = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => {
+        out += chunk;
+        const match =
+          /^limen api 0\.1\.0 listening on (http:\/\/127\.0\.0\.1:\d+)\n/.exec(
+            out,
+          );
+        if (match?.[1]) resolve(match[1]);
+      });
+      child.once("exit", (code) =>
+        reject(new Error(`API exited early with code ${code}: ${stderr}`)),
+      );
+    });
+    const health = await fetch(`${url}/health`);
+    assert.equal(health.status, 200);
+    assert.deepEqual(await health.json(), {
+      status: "ok",
+      version: "0.1.0",
+      schema_version: 3,
+    });
+    const report = await fetch(`${url}/reports`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(DEVICE_1),
+    });
+    assert.equal(report.status, 503);
+    assert.deepEqual(await report.json(), {
+      error: "triage_lists_unavailable",
+    });
+    assert.equal(
+      stderr,
+      "limen api: the triage domain lists did not load, so the triage routes answer 503.\n",
+    );
+  } finally {
+    child.kill();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
