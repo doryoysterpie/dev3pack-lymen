@@ -44,7 +44,9 @@ export {
 export {
   assertDevnet,
   jsonRpc,
+  RPC_TIMEOUT_MS,
   RpcError,
+  withTimeout,
   type AccountState,
   type Fetch,
   type FetchResponse,
@@ -75,5 +77,10 @@ export {
   type SimulatedAt,
   type SimulationOutcome,
 } from "./preflight.ts";
-export { drainPattern, SWEEP_DIVISOR } from "./drain.ts";
+export {
+  drainingChange,
+  drainPattern,
+  handsOverControl,
+  SWEEP_DIVISOR,
+} from "./drain.ts";
 export { USER_MARKER, withMarker } from "./marker.ts";

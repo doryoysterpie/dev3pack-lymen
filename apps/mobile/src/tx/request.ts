@@ -5,7 +5,7 @@
 // and the application answers {"transaction": <base64>} with an optional
 // "message". fetch is passed in, so the tests need no network.
 
-import type { Fetch } from "@limen/preflight";
+import { RPC_TIMEOUT_MS, withTimeout, type Fetch } from "@limen/preflight";
 
 export interface TransactionResponse {
   readonly transaction: string;
@@ -13,19 +13,29 @@ export interface TransactionResponse {
 }
 
 export class RequestError extends Error {
-  readonly reason: "http" | "not-json" | "no-transaction";
+  readonly reason: "http" | "not-json" | "no-transaction" | "timeout";
   constructor(reason: RequestError["reason"], message: string) {
     super(message);
     this.reason = reason;
   }
 }
 
+/**
+ * POSTs the account to the link. The answer and its body must each arrive
+ * within timeoutMs, or the request fails with a timeout.
+ */
 export async function requestTransaction(
   fetch: Fetch,
   link: string,
   account: string,
+  timeoutMs: number = RPC_TIMEOUT_MS,
 ): Promise<TransactionResponse> {
-  const response = await fetch(link, {
+  const late = () =>
+    new RequestError(
+      "timeout",
+      `the link did not answer within ${timeoutMs / 1000} seconds`,
+    );
+  const sent = fetch(link, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -33,13 +43,15 @@ export async function requestTransaction(
     },
     body: JSON.stringify({ account }),
   });
+  const response = await withTimeout(sent, timeoutMs, late);
   if (!response.ok) {
     throw new RequestError("http", `the link answered HTTP ${response.status}`);
   }
   let body: unknown;
   try {
-    body = await response.json();
-  } catch {
+    body = await withTimeout(response.json(), timeoutMs, late);
+  } catch (error) {
+    if (error instanceof RequestError) throw error;
     throw new RequestError("not-json", "the link did not answer with JSON");
   }
   if (typeof body !== "object" || body === null) {

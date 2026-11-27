@@ -12,7 +12,8 @@
 // Signing follows the Solana Pay specification (solana-foundation/pay
 // 8e1b87c, "POST Response"). The wallet signs only when its signature is
 // expected, which holds for the fee payer. It rejects the transaction when
-// another signer's signature is missing, the one signing block left. For a
+// another signer's signature is missing; limen also blocks signing until a
+// simulation has run on devnet without an error. For a
 // transaction with no signatures it sets the fee payer to its account, which
 // it already is, and the recent blockhash to the latest, which forSigning does.
 
@@ -56,7 +57,14 @@ export interface SimulatedAt {
   readonly blockhash: string | null;
 }
 
-export type SignBlock = "cosigner-missing";
+/**
+ * cosigner-missing: another required signature is missing, which the Solana
+ * Pay format has wallets refuse. simulation-not-run and simulation-failed:
+ * the card can show only the decode, so signing waits for a simulation that
+ * ran on devnet without an error.
+ */
+export type SignBlock =
+  "cosigner-missing" | "simulation-not-run" | "simulation-failed";
 
 export type Preflight =
   | {
@@ -75,10 +83,17 @@ export type Preflight =
       readonly simulatedAt: SimulatedAt | null;
     };
 
-export function signBlocks(summary: TransactionSummary): SignBlock[] {
-  return summary.signers.others.some((other) => !other.signed)
-    ? ["cosigner-missing"]
-    : [];
+export function signBlocks(
+  summary: TransactionSummary,
+  simulation: SimulationOutcome,
+): SignBlock[] {
+  const blocks: SignBlock[] = [];
+  if (summary.signers.others.some((other) => !other.signed)) {
+    blocks.push("cosigner-missing");
+  }
+  if (simulation.status === "not-run") blocks.push("simulation-not-run");
+  else if (simulation.err !== null) blocks.push("simulation-failed");
+  return blocks;
 }
 
 async function loadTables(
@@ -162,7 +177,7 @@ export async function preflight(
     transaction,
     summary,
     simulation,
-    blocks: signBlocks(summary),
+    blocks: signBlocks(summary, simulation),
     simulatedAt,
   };
 }

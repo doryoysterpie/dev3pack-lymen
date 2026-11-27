@@ -43,7 +43,7 @@ export interface Simulation {
 }
 
 export class RpcError extends Error {
-  readonly reason: "not-devnet" | "http" | "rpc" | "shape";
+  readonly reason: "not-devnet" | "http" | "rpc" | "shape" | "timeout";
   constructor(reason: RpcError["reason"], message: string) {
     super(message);
     this.reason = reason;
@@ -58,6 +58,57 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 let nextId = 1;
+
+/** How long jsonRpc waits for each answer, unless told otherwise. */
+export const RPC_TIMEOUT_MS = 10_000;
+
+interface Timers {
+  setTimeout(callback: () => void, ms: number): unknown;
+  clearTimeout(id: unknown): void;
+}
+
+/**
+ * Settles as the promise does, or rejects with error() once ms have passed.
+ * The timers come from the runtime (Node or React Native), not from this
+ * package's type library.
+ */
+export function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  error: () => Error,
+): Promise<T> {
+  const timers = globalThis as unknown as Timers;
+  return new Promise<T>((resolve, reject) => {
+    const id = timers.setTimeout(() => reject(error()), ms);
+    promise.then(
+      (value) => {
+        timers.clearTimeout(id);
+        resolve(value);
+      },
+      (reason: unknown) => {
+        timers.clearTimeout(id);
+        reject(reason);
+      },
+    );
+  });
+}
+
+/** A fetch whose answer and body each must arrive within ms. */
+function timedFetch(fetch: Fetch, ms: number): Fetch {
+  const late = () =>
+    new RpcError(
+      "timeout",
+      `the RPC endpoint did not answer within ${ms / 1000} seconds`,
+    );
+  return async (url, init) => {
+    const response = await withTimeout(fetch(url, init), ms, late);
+    return {
+      ok: response.ok,
+      status: response.status,
+      json: () => withTimeout(response.json(), ms, late),
+    };
+  };
+}
 
 async function call(
   fetch: Fetch,
@@ -188,11 +239,19 @@ async function fetchSimulation(
     isRecord(replacement) && typeof replacement.blockhash === "string"
       ? replacement.blockhash
       : null;
+  // A missing err field is not a clean run, and a clean run must return the
+  // accounts it was asked for: either answer is refused, so the pre-flight
+  // marks the simulation not run instead of showing no changes.
+  if (!("err" in value)) {
+    throw new RpcError("shape", "simulateTransaction: no err field");
+  }
   const accounts = value.accounts;
   if (accounts !== null && accounts !== undefined) {
     if (!Array.isArray(accounts) || accounts.length !== addresses.length) {
       throw new RpcError("shape", "simulateTransaction: accounts");
     }
+  } else if (value.err === null && addresses.length > 0) {
+    throw new RpcError("shape", "simulateTransaction: no accounts");
   }
   const logs = Array.isArray(value.logs)
     ? value.logs.filter((line): line is string => typeof line === "string")
@@ -222,8 +281,16 @@ async function fetchLatestBlockhash(
   return value.blockhash;
 }
 
-/** The Rpc that calls a JSON-RPC endpoint through the fetch passed in. */
-export function jsonRpc(fetch: Fetch, url: string): Rpc {
+/**
+ * The Rpc that calls a JSON-RPC endpoint through the fetch passed in. Each
+ * answer must arrive within timeoutMs, or the call fails with a timeout.
+ */
+export function jsonRpc(
+  untimed: Fetch,
+  url: string,
+  timeoutMs: number = RPC_TIMEOUT_MS,
+): Rpc {
+  const fetch = timedFetch(untimed, timeoutMs);
   return {
     async getGenesisHash() {
       const hash = await call(fetch, url, "getGenesisHash", []);
