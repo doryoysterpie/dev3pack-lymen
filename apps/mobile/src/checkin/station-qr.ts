@@ -33,7 +33,8 @@ export type StationQrRejection =
   | "bad_signature"
   | "invalid_payload"
   | "not_yet_valid"
-  | "expired";
+  | "expired"
+  | "invalid_clock";
 
 export type StationQrResult =
   | {
@@ -123,6 +124,8 @@ export function verifyStationQrOnDevice(
     ok: false,
     reason,
   });
+  // Fail closed, as E-03 does: with no usable clock, no QR can be judged in its window.
+  if (!Number.isFinite(options?.nowMs)) return reject("invalid_clock");
   if (!text.startsWith(PREFIX)) return reject("not_station_qr");
   if (text.length > MAX_QR_LENGTH) return reject("malformed");
   const parts = text.slice(PREFIX.length).split(".");

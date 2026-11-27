@@ -129,3 +129,23 @@ test("other text, a throwing verifier and wrong shapes are refused with the owed
   });
   assert.deepEqual(throwing, { ok: false, reason: "bad_signature" });
 });
+
+test("with no usable clock the device fails closed, as E-03 does: missing, NaN or infinite nowMs is invalid_clock", () => {
+  const verdict = (nowMs: unknown) => {
+    const r = verifyStationQrOnDevice(FIXTURE.valid, {
+      allowlist: ALLOWLIST,
+      nowMs: nowMs as number,
+      verify: nodeVerify,
+    });
+    return r.ok ? "ok" : r.reason;
+  };
+  assert.equal(verdict(T * 1000), "ok");
+  for (const nowMs of [
+    undefined,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+  ]) {
+    assert.equal(verdict(nowMs), "invalid_clock", String(nowMs));
+  }
+});
