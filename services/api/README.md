@@ -53,6 +53,12 @@ The domain lists load once at start-up. If they cannot load, the API still start
 | `POST /cases/:id/escalate` | A human escalates the case                                                |
 | `POST /cases/:id/dismiss`  | A human dismisses the case; later sightings attach and it stays dismissed |
 
+## Chainabuse escalation (E-13)
+
+`CHAINABUSE_POST` is off unless set to `dry-run`. Off: an escalation builds, logs and sends nothing. Dry run: when a report moves its case from held to escalated, the API logs the request it would send to Chainabuse's `POST https://api.chainabuse.com/v0/reports/batch`, with the exact JSON body, and sends nothing. This build has no live mode and reads no Chainabuse credential; any other value of `CHAINABUSE_POST` stops start-up.
+
+The body follows Chainabuse's published OpenAPI definition (https://docs.chainabuse.com/reference/createreports). It carries the case's domain, recipients and program IDs, and the decoded simulation summary. It never carries transaction bytes, the QR text, device IDs or a reporter's wallet, even when the reporter included the wallet in their report.
+
 ## Test
 
 ```bash
@@ -73,3 +79,4 @@ npm test -w @limen/api
 | `src/triage.test.ts`        | E-11 done test: two bundles from different devices for one drainer make one case with two sightings; the threshold gives the D-05 answer for every input combination and at the case level; hostnames are normalized, so a trailing dot neither escapes a list nor splits a case; E-12 done test: a dismissed case does not re-open on a third sighting              |
 | `src/dashboard.test.ts`     | E-12 done test end to end, with a control that escalates without the dismissal; the token is required; the evidence view shows each bundle as stored; without the domain lists, /health still answers and the triage routes answer 503; the page shows a time it cannot format as its number                                                                         |
 | `src/start-lists.test.ts`   | Without the domain list file the real entry point still starts and serves `/health`, and `POST /reports` and `/cases` answer 503 `triage_lists_unavailable`                                                                                                                                                                                                          |
+| `src/chainabuse.test.ts`    | E-13 done test: flag off, an escalation sends and logs nothing; flag on, the dry run logs the exact owed body and sends nothing; the body keeps to the published schema and leaves out bytes, wallets and device IDs                                                                                                                                                 |

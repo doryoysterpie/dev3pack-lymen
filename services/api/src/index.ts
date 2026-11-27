@@ -3,6 +3,7 @@
 import type { Server } from "node:http";
 import { isIPv6, type AddressInfo } from "node:net";
 
+import { chainabuseHook, parseChainabuseMode } from "./chainabuse.ts";
 import { openDatabase } from "./db.ts";
 import { isMainModule } from "./main-module.ts";
 import { loadOrganizerKey } from "./organizer-key.ts";
@@ -40,6 +41,7 @@ export async function start(
   // Loaded first so a bad key file stops start-up before anything else happens.
   // E-03 hands the key to the station QR signer.
   loadOrganizerKey(env.ORGANIZER_KEYPAIR_PATH);
+  const chainabuse = parseChainabuseMode(env.CHAINABUSE_POST);
   const port = parsePort(env.API_PORT);
   const host = env.API_HOST || "127.0.0.1";
   const db = openDatabase(env.DATABASE_PATH || "limen.db");
@@ -58,7 +60,16 @@ export async function start(
   const server = createApiServer({
     db,
     version: API_VERSION,
-    reports: { triageToken: env.TRIAGE_TOKEN || undefined, lists },
+    reports: {
+      triageToken: env.TRIAGE_TOKEN || undefined,
+      lists,
+      // Without the lists no case can escalate, since the triage routes answer 503, so the
+      // Chainabuse hook is built only from lists that loaded (E-13 on E-12's start-up).
+      onEscalated:
+        lists === null
+          ? undefined
+          : chainabuseHook(chainabuse, db, lists, (line) => console.log(line)),
+    },
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
