@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { decodePublicKey } from "../qr/base58.ts";
+import { decodePublicKey } from "@limen/preflight";
 import { walletAddress } from "./address.ts";
 
 const KEY = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";

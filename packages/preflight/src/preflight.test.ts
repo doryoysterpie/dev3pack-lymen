@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
-import { decodePublicKey } from "../qr/base58.ts";
+import { decodePublicKey } from "./base58.ts";
 import { decodeBase64, encodeBase64 } from "./base64.ts";
 import {
   forSigning,
@@ -12,11 +12,15 @@ import {
 } from "./preflight.ts";
 import {
   ADDRESS_LOOKUP_TABLE_PROGRAM,
-  DEVNET_GENESIS_HASH,
   SYSTEM_PROGRAM,
   TOKEN_PROGRAM,
 } from "./programs.ts";
-import type { Fetch } from "./rpc.ts";
+import {
+  recordedRpc,
+  type RecordedAccount,
+  type Recording,
+} from "./recorded.ts";
+import type { Rpc } from "./rpc.ts";
 import { parseTransaction } from "./wire.ts";
 
 interface FixtureCase {
@@ -27,7 +31,7 @@ interface FixtureCase {
 
 const fixture = JSON.parse(
   readFileSync(
-    new URL("../../../../fixtures/tx/e09-transactions.json", import.meta.url),
+    new URL("../../../fixtures/tx/e09-transactions.json", import.meta.url),
     "utf8",
   ),
 ) as {
@@ -100,95 +104,84 @@ function lookupTableData(addresses: readonly string[]): string {
   return encodeBase64(data);
 }
 
-interface Rpc {
-  genesis?: string;
-  before: Record<string, { lamports: number; owner: string; data: string }>;
-  after: Record<string, { lamports: number; owner: string; data: string }>;
-  err?: unknown;
-  down?: boolean;
-}
+const account = (
+  lamports: number,
+  owner: string,
+  data: string,
+): RecordedAccount => ({
+  lamports,
+  owner,
+  data: [data, "base64"],
+  executable: false,
+  rentEpoch: 0,
+});
 
-/** A fake JSON-RPC endpoint that answers from the maps it is given. */
-function fakeRpc(rpc: Rpc): { fetch: Fetch; methods: string[] } {
-  const methods: string[] = [];
-  const answer = (map: Rpc["before"], address: string) => {
-    const state = map[address];
-    return state === undefined
-      ? null
-      : {
-          lamports: state.lamports,
-          owner: state.owner,
-          data: [state.data, "base64"],
-          executable: false,
-          rentEpoch: 0,
-        };
-  };
-  const fetch: Fetch = async (_url, init) => {
-    if (rpc.down) throw new Error("network down");
-    const request = JSON.parse(init.body) as {
-      id: number;
-      method: string;
-      params: unknown[];
-    };
-    methods.push(request.method);
-    let result: unknown;
-    if (request.method === "getGenesisHash") {
-      result = rpc.genesis ?? DEVNET_GENESIS_HASH;
-    } else if (request.method === "getMultipleAccounts") {
-      const addresses = request.params[0] as string[];
-      result = {
-        context: { slot: 1 },
-        value: addresses.map((a) => answer(rpc.before, a)),
-      };
-    } else if (request.method === "simulateTransaction") {
-      const options = request.params[1] as {
-        accounts: { addresses: string[] };
-      };
-      result = {
-        context: { slot: 1 },
-        value: {
-          err: rpc.err ?? null,
-          logs: ["Program log: fake"],
-          accounts: options.accounts.addresses.map((a) => answer(rpc.after, a)),
-          unitsConsumed: 1234,
-        },
-      };
-    } else {
-      throw new Error(`unexpected method ${request.method}`);
-    }
-    return {
-      ok: true,
-      status: 200,
-      json: async () => ({ jsonrpc: "2.0", id: request.id, result }),
-    };
-  };
-  return { fetch, methods };
-}
-
-const drainerRpc: Rpc = {
-  before: {
-    [USER]: { lamports: 5_000_000_000, owner: SYSTEM_PROGRAM, data: "" },
-    [USER_TOKEN_ACCOUNT]: {
-      lamports: 2_039_280,
-      owner: TOKEN_PROGRAM,
-      data: tokenAccount(USER, "1000", null, "0"),
-    },
-    [tableKey]: {
-      lamports: 1,
-      owner: ADDRESS_LOOKUP_TABLE_PROGRAM,
-      data: lookupTableData(tableAddresses),
-    },
+// What a devnet RPC would answer for the drainer: the state before, and the
+// simulation's state after.
+const drainerRecording: Recording = {
+  accounts: {
+    [USER]: account(5_000_000_000, SYSTEM_PROGRAM, ""),
+    [USER_TOKEN_ACCOUNT]: account(
+      2_039_280,
+      TOKEN_PROGRAM,
+      tokenAccount(USER, "1000", null, "0"),
+    ),
+    [tableKey]: account(
+      1,
+      ADDRESS_LOOKUP_TABLE_PROGRAM,
+      lookupTableData(tableAddresses),
+    ),
   },
-  after: {
-    [USER]: { lamports: 9_995_000, owner: SYSTEM_PROGRAM, data: "" },
-    [USER_TOKEN_ACCOUNT]: {
-      lamports: 2_039_280,
-      owner: TOKEN_PROGRAM,
-      data: tokenAccount(USER, "1000", ATTACKER, U64_MAX),
+  simulation: {
+    err: null,
+    logs: ["Program log: fake"],
+    unitsConsumed: 1234,
+    accounts: {
+      [USER]: account(9_995_000, SYSTEM_PROGRAM, ""),
+      [USER_TOKEN_ACCOUNT]: account(
+        2_039_280,
+        TOKEN_PROGRAM,
+        tokenAccount(USER, "1000", ATTACKER, U64_MAX),
+      ),
+      [ATTACKER]: account(4_990_000_000, SYSTEM_PROGRAM, ""),
     },
-    [ATTACKER]: { lamports: 4_990_000_000, owner: SYSTEM_PROGRAM, data: "" },
   },
 };
+
+/** Lists the Rpc methods called, and can stand for an unreachable endpoint. */
+function observed(
+  rpc: Rpc,
+  down = false,
+): { readonly rpc: Rpc; readonly methods: string[] } {
+  const methods: string[] = [];
+  const note = (name: string) => {
+    methods.push(name);
+    if (down) throw new Error("network down");
+  };
+  return {
+    methods,
+    rpc: {
+      getGenesisHash: async () => (
+        note("getGenesisHash"),
+        rpc.getGenesisHash()
+      ),
+      getAccounts: async (addresses) => (
+        note("getAccounts"),
+        rpc.getAccounts(addresses)
+      ),
+      simulate: async (transaction, addresses) => (
+        note("simulate"),
+        rpc.simulate(transaction, addresses)
+      ),
+      latestBlockhash: async () => (
+        note("latestBlockhash"),
+        rpc.latestBlockhash()
+      ),
+    },
+  };
+}
+
+const drainerRpc = () => recordedRpc(drainerRecording);
 
 const ready = (result: Preflight) => {
   assert.equal(result.kind, "ready");
@@ -197,15 +190,8 @@ const ready = (result: Preflight) => {
 
 describe("E-09 done test: the drainer pre-flight", () => {
   it("simulates the drainer and shows SOL balance out and the delegate approved", async () => {
-    const { fetch } = fakeRpc(drainerRpc);
-    const result = ready(
-      await preflight(
-        fetch,
-        "https://devnet.example",
-        drainer.transaction,
-        USER,
-      ),
-    );
+    const rpc = drainerRpc();
+    const result = ready(await preflight(rpc, drainer.transaction, USER));
     assert.deepEqual(
       result.summary.effects.map((effect) => effect.kind),
       ["sol-out", "delegate-approved"],
@@ -233,15 +219,8 @@ describe("E-09 done test: the drainer pre-flight", () => {
   });
 
   it("loads lookup tables through the RPC, so the v0 drainer names the attacker", async () => {
-    const { fetch } = fakeRpc(drainerRpc);
-    const result = ready(
-      await preflight(
-        fetch,
-        "https://devnet.example",
-        drainerV0.transaction,
-        USER,
-      ),
-    );
+    const rpc = drainerRpc();
+    const result = ready(await preflight(rpc, drainerV0.transaction, USER));
     assert.equal(result.summary.unresolvedAccounts, 0);
     const out = result.summary.effects[0];
     assert.ok(out.kind === "sol-out");
@@ -251,33 +230,30 @@ describe("E-09 done test: the drainer pre-flight", () => {
 
 describe("pre-flight paths", () => {
   it("stops at an endpoint that is not devnet", async () => {
-    const { fetch, methods } = fakeRpc({ ...drainerRpc, genesis: MINT });
-    assert.deepEqual(
-      await preflight(fetch, "https://x.example", drainer.transaction, USER),
-      { kind: "not-devnet" },
+    const { rpc, methods } = observed(
+      recordedRpc({ ...drainerRecording, genesisHash: MINT }),
     );
+    assert.deepEqual(await preflight(rpc, drainer.transaction, USER), {
+      kind: "not-devnet",
+    });
     assert.deepEqual(methods, ["getGenesisHash"]);
   });
 
   it("still decodes when the RPC cannot be reached, and says the simulation did not run", async () => {
-    const { fetch } = fakeRpc({ ...drainerRpc, down: true });
-    const result = ready(
-      await preflight(fetch, "https://x.example", drainer.transaction, USER),
-    );
+    const { rpc } = observed(drainerRpc(), true);
+    const result = ready(await preflight(rpc, drainer.transaction, USER));
     assert.equal(result.simulation.status, "not-run");
     assert.equal(result.summary.effects.length, 2);
   });
 
   it("passes a simulation error through for an unknown program, without a crash", async () => {
     const err = { InstructionError: [1, "InvalidInstructionData"] };
-    const { fetch } = fakeRpc({ ...drainerRpc, err });
+    const rpc = recordedRpc({
+      ...drainerRecording,
+      simulation: { ...drainerRecording.simulation, err },
+    });
     const result = ready(
-      await preflight(
-        fetch,
-        "https://x.example",
-        caseNamed("unknown program").transaction,
-        USER,
-      ),
+      await preflight(rpc, caseNamed("unknown program").transaction, USER),
     );
     assert.deepEqual(
       result.summary.undecoded.map((u) => u.reason),
@@ -288,11 +264,10 @@ describe("pre-flight paths", () => {
   });
 
   it("blocks signing when a co-signer has not signed", async () => {
-    const { fetch } = fakeRpc(drainerRpc);
+    const rpc = drainerRpc();
     const result = ready(
       await preflight(
-        fetch,
-        "https://x.example",
+        rpc,
         caseNamed("a co-signer that has not signed").transaction,
         USER,
       ),
@@ -301,11 +276,10 @@ describe("pre-flight paths", () => {
   });
 
   it("allows a sponsored transaction whose fee payer has signed", async () => {
-    const { fetch } = fakeRpc(drainerRpc);
+    const rpc = drainerRpc();
     const result = ready(
       await preflight(
-        fetch,
-        "https://x.example",
+        rpc,
         caseNamed("a co-signer that has signed").transaction,
         USER,
       ),
@@ -314,11 +288,9 @@ describe("pre-flight paths", () => {
   });
 
   it("blocks signing for a wallet the transaction does not ask to sign", async () => {
-    const { fetch } = fakeRpc(drainerRpc);
+    const rpc = drainerRpc();
     const other = "GsJrhpq3YeSBYmKAtkbQFjYN9EoLJvVJvfvs9pTQ84Hc";
-    const result = ready(
-      await preflight(fetch, "https://x.example", drainer.transaction, other),
-    );
+    const result = ready(await preflight(rpc, drainer.transaction, other));
     // To this wallet, the fixture user is another required signer with no
     // signature, which the specification also has wallets reject.
     assert.deepEqual(result.blocks, [
@@ -329,15 +301,15 @@ describe("pre-flight paths", () => {
   });
 
   it("refuses text that is not base64 and a truncated transaction", async () => {
-    const { fetch } = fakeRpc(drainerRpc);
-    assert.deepEqual(
-      await preflight(fetch, "https://x.example", "not base64!", USER),
-      { kind: "malformed", problem: "not-base64" },
-    );
+    const rpc = drainerRpc();
+    assert.deepEqual(await preflight(rpc, "not base64!", USER), {
+      kind: "malformed",
+      problem: "not-base64",
+    });
     const bytes = decodeBase64(drainer.transaction);
     assert.ok(bytes !== null);
     const cut = encodeBase64(bytes.slice(0, 200));
-    assert.deepEqual(await preflight(fetch, "https://x.example", cut, USER), {
+    assert.deepEqual(await preflight(rpc, cut, USER), {
       kind: "malformed",
       problem: "truncated",
     });
@@ -346,13 +318,8 @@ describe("pre-flight paths", () => {
 
 describe("signing gate", () => {
   it("allows signing only after this transaction's card is shown", async () => {
-    const { fetch } = fakeRpc(drainerRpc);
-    const result = await preflight(
-      fetch,
-      "https://x.example",
-      drainer.transaction,
-      USER,
-    );
+    const rpc = drainerRpc();
+    const result = await preflight(rpc, drainer.transaction, USER);
     assert.equal(signingAllowed(result, null), false);
     assert.equal(
       signingAllowed(result, caseNamed("unknown program").transaction),
@@ -362,22 +329,15 @@ describe("signing gate", () => {
   });
 
   it("never allows signing a blocked transaction, shown or not", async () => {
-    const { fetch } = fakeRpc(drainerRpc);
+    const rpc = drainerRpc();
     const c = caseNamed("a co-signer that has not signed");
-    const result = await preflight(
-      fetch,
-      "https://x.example",
-      c.transaction,
-      USER,
-    );
+    const result = await preflight(rpc, c.transaction, USER);
     assert.equal(signingAllowed(result, c.transaction), false);
   });
 
   it("replaces only the blockhash of an unsigned transaction", async () => {
-    const { fetch } = fakeRpc(drainerRpc);
-    const result = ready(
-      await preflight(fetch, "https://x.example", drainer.transaction, USER),
-    );
+    const rpc = drainerRpc();
+    const result = ready(await preflight(rpc, drainer.transaction, USER));
     const fresh = "GsJrhpq3YeSBYmKAtkbQFjYN9EoLJvVJvfvs9pTQ84Hc";
     const signed = decodeBase64(forSigning(result, fresh));
     assert.ok(signed !== null);
@@ -391,11 +351,9 @@ describe("signing gate", () => {
   });
 
   it("leaves a signed transaction as it is", async () => {
-    const { fetch } = fakeRpc(drainerRpc);
+    const rpc = drainerRpc();
     const c = caseNamed("a co-signer that has signed");
-    const result = ready(
-      await preflight(fetch, "https://x.example", c.transaction, USER),
-    );
+    const result = ready(await preflight(rpc, c.transaction, USER));
     assert.equal(
       forSigning(result, "GsJrhpq3YeSBYmKAtkbQFjYN9EoLJvVJvfvs9pTQ84Hc"),
       c.transaction,

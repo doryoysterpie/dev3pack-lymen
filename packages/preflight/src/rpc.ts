@@ -1,7 +1,8 @@
-// Solana JSON-RPC calls for the pre-flight (E-09). fetch is passed in, so the
-// tests run on canned responses and no test needs the network.
+// Solana RPC for the pre-flight (E-09). The pre-flight talks to an Rpc, not to
+// the network: jsonRpc(fetch, url) is the JSON-RPC implementation, and a test
+// or a server can pass any other Rpc, such as recordedRpc (recorded.ts).
 //
-// Devnet only (D-03): every session starts with assertDevnet, which compares
+// Devnet only (D-03): every pre-flight starts with assertDevnet, which compares
 // the endpoint's genesis hash with devnet's and refuses any other cluster.
 
 import { decodeBase64 } from "./base64.ts";
@@ -79,10 +80,25 @@ async function call(
   return body.result;
 }
 
+/** What the pre-flight asks of an RPC endpoint. */
+export interface Rpc {
+  getGenesisHash(): Promise<string>;
+  /** Accounts at the confirmed commitment, in the order asked; null if absent. */
+  getAccounts(addresses: readonly string[]): Promise<(AccountState | null)[]>;
+  /**
+   * Simulates without checking signatures, with the recent blockhash replaced,
+   * and reads back the named accounts after it.
+   */
+  simulate(
+    transactionBase64: string,
+    addresses: readonly string[],
+  ): Promise<Simulation>;
+  latestBlockhash(): Promise<string>;
+}
+
 /** Refuses any endpoint whose genesis hash is not devnet's. */
-export async function assertDevnet(fetch: Fetch, url: string): Promise<void> {
-  const hash = await call(fetch, url, "getGenesisHash", []);
-  if (hash !== DEVNET_GENESIS_HASH) {
+export async function assertDevnet(rpc: Rpc): Promise<void> {
+  if ((await rpc.getGenesisHash()) !== DEVNET_GENESIS_HASH) {
     throw new RpcError("not-devnet", "the RPC endpoint is not devnet");
   }
 }
@@ -120,8 +136,7 @@ function valueOf(result: unknown, method: string): unknown {
   return result.value;
 }
 
-/** Reads accounts at the confirmed commitment, in the order asked. */
-export async function getAccounts(
+async function fetchAccounts(
   fetch: Fetch,
   url: string,
   addresses: readonly string[],
@@ -142,11 +157,7 @@ export async function getAccounts(
   return out;
 }
 
-/**
- * Simulates the transaction without checking signatures, with the recent
- * blockhash replaced, and reads back the named accounts after it.
- */
-export async function simulate(
+async function fetchSimulation(
   fetch: Fetch,
   url: string,
   transactionBase64: string,
@@ -183,8 +194,7 @@ export async function simulate(
   };
 }
 
-/** The latest blockhash at the confirmed commitment. */
-export async function latestBlockhash(
+async function fetchLatestBlockhash(
   fetch: Fetch,
   url: string,
 ): Promise<string> {
@@ -196,4 +206,21 @@ export async function latestBlockhash(
     throw new RpcError("shape", "getLatestBlockhash: blockhash");
   }
   return value.blockhash;
+}
+
+/** The Rpc that calls a JSON-RPC endpoint through the fetch passed in. */
+export function jsonRpc(fetch: Fetch, url: string): Rpc {
+  return {
+    async getGenesisHash() {
+      const hash = await call(fetch, url, "getGenesisHash", []);
+      if (typeof hash !== "string") {
+        throw new RpcError("shape", "getGenesisHash: not a string");
+      }
+      return hash;
+    },
+    getAccounts: (addresses) => fetchAccounts(fetch, url, addresses),
+    simulate: (transactionBase64, addresses) =>
+      fetchSimulation(fetch, url, transactionBase64, addresses),
+    latestBlockhash: () => fetchLatestBlockhash(fetch, url),
+  };
 }

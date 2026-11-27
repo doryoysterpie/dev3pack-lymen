@@ -18,7 +18,7 @@
 
 import type { Account } from "./accounts.ts";
 import * as programs from "./programs.ts";
-import { encodeBase58 } from "../qr/base58.ts";
+import { encodeBase58 } from "./base58.ts";
 import type { CompiledInstruction } from "./wire.ts";
 
 export type TokenProgram = "token" | "token-2022";

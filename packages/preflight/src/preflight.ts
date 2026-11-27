@@ -12,18 +12,13 @@
 import { messageAccounts, type LookupTables } from "./accounts.ts";
 import { decodeBase64, encodeBase64 } from "./base64.ts";
 import { ADDRESS_LOOKUP_TABLE_PROGRAM } from "./programs.ts";
-import {
-  assertDevnet,
-  getAccounts,
-  RpcError,
-  simulate,
-  type Fetch,
-} from "./rpc.ts";
+import { assertDevnet, RpcError, type Rpc } from "./rpc.ts";
 import {
   balanceChanges,
   watchedAddresses,
   type BalanceChange,
 } from "./simulate.ts";
+import { drainPattern } from "./drain.ts";
 import { parseLookupTable } from "./state.ts";
 import { summarizeTransaction, type TransactionSummary } from "./summary.ts";
 import {
@@ -31,7 +26,7 @@ import {
   type ParsedTransaction,
   type WireProblem,
 } from "./wire.ts";
-import { decodePublicKey } from "../qr/base58.ts";
+import { decodePublicKey } from "./base58.ts";
 
 export type SimulationOutcome =
   | {
@@ -75,14 +70,13 @@ export function signBlocks(summary: TransactionSummary): SignBlock[] {
 }
 
 async function loadTables(
-  fetch: Fetch,
-  rpcUrl: string,
+  rpc: Rpc,
   transaction: ParsedTransaction,
 ): Promise<LookupTables> {
   const keys = transaction.message.lookups.map((lookup) => lookup.table);
   const tables = new Map<string, readonly string[]>();
   if (keys.length === 0) return tables;
-  const states = await getAccounts(fetch, rpcUrl, keys);
+  const states = await rpc.getAccounts(keys);
   keys.forEach((key, i) => {
     const state = states[i];
     if (state === null || state.owner !== ADDRESS_LOOKUP_TABLE_PROGRAM) return;
@@ -98,8 +92,7 @@ async function loadTables(
  * simulation marked not run. An endpoint that is not devnet stops it.
  */
 export async function preflight(
-  fetch: Fetch,
-  rpcUrl: string,
+  rpc: Rpc,
   base64: string,
   user: string,
 ): Promise<Preflight> {
@@ -115,14 +108,14 @@ export async function preflight(
   let tables: LookupTables = new Map();
   let simulation: SimulationOutcome;
   try {
-    await assertDevnet(fetch, rpcUrl);
-    tables = await loadTables(fetch, rpcUrl, transaction);
+    await assertDevnet(rpc);
+    tables = await loadTables(rpc, transaction);
     const watched = watchedAddresses(
       user,
       messageAccounts(transaction.message, tables),
     );
-    const before = await getAccounts(fetch, rpcUrl, watched);
-    const result = await simulate(fetch, rpcUrl, base64, watched);
+    const before = await rpc.getAccounts(watched);
+    const result = await rpc.simulate(base64, watched);
     simulation = {
       status: "ran",
       err: result.err,
@@ -189,4 +182,51 @@ export function forSigning(
   const out = bytes.slice();
   out.set(hash, at);
   return encodeBase64(out);
+}
+
+/**
+ * The pre-flight as plain JSON data: strings, numbers, booleans, arrays and
+ * objects only, with amounts as decimal strings. It drops the parsed
+ * transaction and its base64, which only signing needs.
+ */
+export type PreflightReport =
+  | Exclude<Preflight, { kind: "ready" }>
+  | {
+      readonly kind: "ready";
+      readonly user: string;
+      readonly summary: TransactionSummary;
+      readonly simulation: SimulationOutcome;
+      readonly blocks: readonly SignBlock[];
+    };
+
+export function toReport(result: Preflight, user: string): PreflightReport {
+  if (result.kind !== "ready") return result;
+  const { summary, simulation, blocks } = result;
+  return { kind: "ready", user, summary, simulation, blocks };
+}
+
+/**
+ * For a server holding transaction bytes, such as a stored evidence bundle:
+ * simulates on devnet through the Rpc given and decodes the result into the
+ * same summary the app's card shows, with drainPattern (drain.ts) applied to
+ * it. user is the wallet the summary is written for; it defaults to the fee
+ * payer, the account a Solana Pay transaction request is built for when the
+ * application sets the fee payer as the specification asks.
+ */
+export async function preflightTransaction(
+  transaction: Uint8Array,
+  options: { readonly rpc: Rpc; readonly user?: string },
+): Promise<{ summary: PreflightReport; drainPattern: boolean }> {
+  const parsed = parseTransaction(transaction);
+  if (!parsed.ok) {
+    const summary: PreflightReport = {
+      kind: "malformed",
+      problem: parsed.problem,
+    };
+    return { summary, drainPattern: false };
+  }
+  const user = options.user ?? parsed.transaction.message.staticKeys[0];
+  const result = await preflight(options.rpc, encodeBase64(transaction), user);
+  const summary = toReport(result, user);
+  return { summary, drainPattern: drainPattern(summary) };
 }

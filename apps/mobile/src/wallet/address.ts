@@ -5,8 +5,7 @@
 // @solana-mobile/mobile-wallet-adapter-protocol 3.0.2, lib/types/index.d.ts).
 // A wallet-standard account carries the key bytes as publicKey instead.
 
-import { encodeBase58 } from "../qr/base58.ts";
-import { decodeBase64 } from "../tx/base64.ts";
+import { decodeBase64, encodeBase58 } from "@limen/preflight";
 
 export interface WalletAccountLike {
   readonly address: string;

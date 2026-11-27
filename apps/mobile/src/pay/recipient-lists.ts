@@ -3,7 +3,7 @@
 // Pure module: the lists are passed in, so the source of the lists can change
 // without touching the checks.
 
-import { decodePublicKey } from "../qr/base58.ts";
+import { decodePublicKey } from "@limen/preflight";
 
 export interface RecipientLists {
   readonly organizers: ReadonlySet<string>;

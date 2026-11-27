@@ -5,7 +5,7 @@
 // and the application answers {"transaction": <base64>} with an optional
 // "message". fetch is passed in, so the tests need no network.
 
-import type { Fetch } from "./rpc.ts";
+import type { Fetch } from "@limen/preflight";
 
 export interface TransactionResponse {
   readonly transaction: string;

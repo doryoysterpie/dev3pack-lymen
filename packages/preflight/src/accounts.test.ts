@@ -18,7 +18,7 @@ interface OrderCase {
 
 const { accountOrder } = JSON.parse(
   readFileSync(
-    new URL("../../../../fixtures/tx/e09-transactions.json", import.meta.url),
+    new URL("../../../fixtures/tx/e09-transactions.json", import.meta.url),
     "utf8",
   ),
 ) as { readonly accountOrder: OrderCase };

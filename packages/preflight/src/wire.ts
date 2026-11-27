@@ -6,7 +6,7 @@
 // short-vec/src/lib.rs (compact-u16). Anything outside those rules is refused
 // with a reason, never guessed at.
 
-import { encodeBase58 } from "../qr/base58.ts";
+import { encodeBase58 } from "./base58.ts";
 
 export interface MessageHeader {
   readonly numRequiredSignatures: number;

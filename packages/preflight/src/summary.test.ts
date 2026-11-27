@@ -15,7 +15,7 @@ interface FixtureCase {
 
 const fixture = JSON.parse(
   readFileSync(
-    new URL("../../../../fixtures/tx/e09-transactions.json", import.meta.url),
+    new URL("../../../fixtures/tx/e09-transactions.json", import.meta.url),
     "utf8",
   ),
 ) as { readonly user: string; readonly cases: readonly FixtureCase[] };

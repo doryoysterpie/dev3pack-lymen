@@ -11,5 +11,5 @@
     "verbatimModuleSyntax": true,
     "types": ["node"]
   },
-  "include": ["services/*/src/**/*.ts"]
+  "include": ["packages/*/src/**/*.ts", "services/*/src/**/*.ts"]
 }
