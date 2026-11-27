@@ -131,6 +131,34 @@ test("done test 1: the 60 s limit is measured in milliseconds, so 60.001 s and 6
   assert.equal(reasonOf(text, T - 5.001), "not_yet_valid");
 });
 
+test("with no usable clock the verifier fails closed: missing, NaN or infinite nowMs is invalid_clock", () => {
+  const text = issue();
+  const verdict = (options: unknown) => {
+    const r = verifyStationQr(
+      text,
+      options as { allowlist: ReadonlySet<string>; nowMs: number },
+    );
+    return r.ok ? "ok" : r.reason;
+  };
+  // The control: the same QR with a good clock is accepted.
+  assert.equal(verdict({ allowlist: ALLOWLIST, nowMs: T * 1000 }), "ok");
+  for (const nowMs of [
+    undefined,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    "1795000000000",
+  ]) {
+    assert.equal(
+      verdict({ allowlist: ALLOWLIST, nowMs }),
+      "invalid_clock",
+      String(nowMs),
+    );
+  }
+  // The option E-05 used before the switch to milliseconds is refused, not read as "no limit".
+  assert.equal(verdict({ allowlist: ALLOWLIST, now: T }), "invalid_clock");
+});
+
 test("a QR issued near the end of its session expires when the session ends", () => {
   const sessionEnd = T + 1;
   const { text, payload } = issueStationQr({

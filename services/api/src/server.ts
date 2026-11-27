@@ -118,7 +118,9 @@ function stationQr(
     session: payload.session,
     issued_at: payload.issued_at,
     expires_at: payload.expires_at,
-    refresh_after_s: STATION_QR_ROTATION_S,
+    // Near a session's end the QR expires early, so the page refreshes when it does and picks
+    // up the next session's QR then, rather than waiting the full 30 s with nothing shown.
+    refresh_after_s: Math.min(STATION_QR_ROTATION_S, payload.expires_at - now),
   });
 }
 

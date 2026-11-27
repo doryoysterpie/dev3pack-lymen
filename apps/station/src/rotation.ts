@@ -112,7 +112,6 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
   };
 }
 
-/** Reads the station ID from ?station= and the display token from #token= in the page URL. */
 /**
  * The value of `name` in an address fragment such as "#token=abc&x=1". Percent escapes are
  * decoded, but "+" stays "+": the fragment is not form data, and a base64 token such as
@@ -132,6 +131,7 @@ export function fragmentParam(hash: string, name: string): string | null {
   return null;
 }
 
+/** Reads the station ID from ?station= and the display token from #token= in the page URL. */
 export function readStationConfig(
   href: string,
 ): { station: string; token: string } | { error: string } {
