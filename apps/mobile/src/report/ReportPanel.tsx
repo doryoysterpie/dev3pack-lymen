@@ -8,11 +8,13 @@ import {
   View,
 } from "react-native";
 
+import * as SecureStore from "expo-secure-store";
+
 import appJson from "../../app.json";
 import { buildReport, type ReadyPreflight } from "./bundle.ts";
 import { sendReport, type ReportFetch } from "./client.ts";
 import { API_URL } from "./config.ts";
-import { deviceId } from "./device-id.ts";
+import { installId } from "./device-id.ts";
 
 // The Decline and Report actions under a transaction request card (E-10, app side). Decline
 // comes first; the report is offered only after it.
@@ -61,7 +63,7 @@ export function ReportPanel({
       link,
       user,
       includeWallet,
-      deviceId: deviceId(),
+      deviceId: await installId(SecureStore),
       timestamp: Math.floor(Date.now() / 1000),
       appVersion: appJson.expo.version,
     });
