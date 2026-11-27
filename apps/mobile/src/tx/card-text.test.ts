@@ -285,6 +285,33 @@ describe("transaction card text", () => {
     );
   });
 
+  it("m13: says when limen set the wallet as fee payer", async () => {
+    const result = await preflight(
+      offline,
+      transactionOf("drainer: SOL balance out"),
+      fixture.user,
+    );
+    assert.ok(result.kind === "ready");
+    const card = transactionCardText(LINK, null, {
+      ...result,
+      feePayerSet: true,
+    });
+    assert.ok(
+      card.rows.some(
+        (row) =>
+          row.label === "Fee payer" &&
+          row.value ===
+            "Your wallet. The request left the fee payer unset, so limen set your wallet, as the Solana Pay specification has the wallet do. limen pre-flights only transactions your wallet pays the fee for.",
+      ),
+    );
+  });
+
+  it("m13: stops when the fee payer is unset and no wallet is given", () => {
+    const card = transactionCardText(LINK, null, { kind: "fee-payer-not-set" });
+    assert.equal(card.title, "Stopped: no fee payer");
+    assert.equal(card.tone, "flagged");
+  });
+
   it("stops with its own card when the endpoint is not devnet", () => {
     const card = transactionCardText(LINK, null, { kind: "not-devnet" });
     assert.equal(card.title, "Stopped: not devnet");

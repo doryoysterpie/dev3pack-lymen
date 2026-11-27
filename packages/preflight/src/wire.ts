@@ -189,8 +189,15 @@ function readMessage(reader: Reader): {
   };
 }
 
-/** The sanitize rules of v0 Message::sanitize, applied to both versions. */
-function sanitize(message: ParsedMessage, signatureCount: number): void {
+/**
+ * The sanitize rules of v0 Message::sanitize, applied to both versions.
+ * feePayerUnset relaxes one rule, for parseTransaction's option of that name.
+ */
+function sanitize(
+  message: ParsedMessage,
+  signatureCount: number,
+  feePayerUnset: boolean,
+): void {
   const { header, staticKeys, instructions, lookups } = message;
   if (
     header.numRequiredSignatures + header.numReadonlyUnsignedAccounts >
@@ -224,7 +231,7 @@ function sanitize(message: ParsedMessage, signatureCount: number): void {
     // Program ids come from the static keys only, and the fee payer at index
     // 0 cannot be a program.
     if (
-      instruction.programIdIndex === 0 ||
+      (instruction.programIdIndex === 0 && !feePayerUnset) ||
       instruction.programIdIndex >= staticKeys.length
     ) {
       throw new Refused("bad-program-index");
@@ -235,8 +242,19 @@ function sanitize(message: ParsedMessage, signatureCount: number): void {
   }
 }
 
-/** Parses a serialized transaction: signatures, then the message. */
-export function parseTransaction(bytes: Uint8Array): ParseResult {
+/**
+ * Parses a serialized transaction: signatures, then the message.
+ *
+ * feePayerUnset is for a transaction whose fee payer is the zero key, which
+ * the Solana Pay specification lets an application send unsigned for the
+ * wallet to replace (fee-payer.ts). The zero key is also the System Program's
+ * address, so with this option index 0 may be a program. Every other rule
+ * still applies.
+ */
+export function parseTransaction(
+  bytes: Uint8Array,
+  options: { readonly feePayerUnset?: boolean } = {},
+): ParseResult {
   const reader: Reader = { bytes, offset: 0 };
   try {
     const signatureCount = readCompactU16(reader);
@@ -247,7 +265,7 @@ export function parseTransaction(bytes: Uint8Array): ParseResult {
     const messageStart = reader.offset;
     const { message, blockhashOffset } = readMessage(reader);
     if (reader.offset !== bytes.length) throw new Refused("trailing-bytes");
-    sanitize(message, signatureCount);
+    sanitize(message, signatureCount, options.feePayerUnset === true);
     return {
       ok: true,
       transaction: {

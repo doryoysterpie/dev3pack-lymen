@@ -250,6 +250,15 @@ export function transactionCardText(
       rows: [from, { label: "Fee payer", value: result.feePayer }],
     };
   }
+  if (result.kind === "fee-payer-not-set") {
+    return {
+      title: "Stopped: no fee payer",
+      tone: "flagged",
+      status:
+        "limen holds this transaction: it leaves the fee payer unset, and no wallet is connected to set as the fee payer.",
+      rows: [from],
+    };
+  }
   if (result.kind === "malformed") {
     return {
       title: "Malformed transaction",
@@ -314,8 +323,9 @@ export function transactionCardText(
 
   rows.push({
     label: "Fee payer",
-    value:
-      "Your wallet. limen pre-flights only transactions your wallet pays the fee for.",
+    value: result.feePayerSet
+      ? "Your wallet. The request left the fee payer unset, so limen set your wallet, as the Solana Pay specification has the wallet do. limen pre-flights only transactions your wallet pays the fee for."
+      : "Your wallet. limen pre-flights only transactions your wallet pays the fee for.",
   });
   for (const block of blocks) {
     rows.push({ label: "limen holds this transaction", value: BLOCK[block] });
