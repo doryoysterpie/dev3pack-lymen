@@ -74,9 +74,9 @@ They mint a pass and check its extensions and metadata, send a transfer from the
 
 ## Station QR (E-03)
 
-`GET /stations/<station ID>/qr` with `Authorization: Bearer <STATION_DISPLAY_TOKEN>` returns a QR signed with the organizer key, for that station in the session whose window holds the current time, with `refresh_after_s: 30`. It answers 401 without the token, 404 for an unknown station and 409 outside every session. The station page in `apps/station` calls it.
+`GET /stations/<station ID>/qr` with `Authorization: Bearer <STATION_DISPLAY_TOKEN>` returns a QR signed with the organizer key, for that station in the session whose window holds the current time, with `refresh_after_s: 30`. A QR lives 60 s, or until its session ends if that comes first. It answers 401 without the token, 404 for an unknown station and 409 outside every session. The station page in `apps/station` calls it.
 
-The QR text is `limen:station:v1.<payload>.<signer>.<signature>`. `src/station-qr.ts` documents each part, and `verifyStationQr` there accepts a QR only when its signer is on the allowlist, its signature verifies, its payload has exactly the five owed fields, and it is at most 60 s old.
+The QR text is `limen:station:v1.<payload>.<signer>.<signature>`. `src/station-qr.ts` documents each part, and `verifyStationQr` there accepts a QR only when its signer is on the allowlist, its signature verifies, its payload has exactly the five owed fields, and the verifying time, in milliseconds, is no more than 60 s after `issued_at` and not after `expires_at`. Its caller passes the time as `nowMs`. At this head only the tests call `verifyStationQr`; the check-in endpoint, E-05 (#45), calls it.
 
 ## Test
 
