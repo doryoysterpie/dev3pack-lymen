@@ -33,8 +33,14 @@ async function api(path, method = "GET") {
   return body;
 }
 
-const time = (seconds) =>
-  new Date(seconds * 1000).toISOString().replace(".000Z", "Z");
+// A time the page cannot show as a date is shown as its number, so one bad value never stops the
+// case view from opening.
+function time(seconds) {
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime())
+    ? `${seconds} (not a valid time)`
+    : date.toISOString().replace(".000Z", "Z");
+}
 const yesNo = (value) => (value ? "yes" : "no");
 
 function cell(row, text) {
@@ -121,7 +127,12 @@ async function showCase(id) {
     field(dl, "Re-simulation", resimulationText(e.resimulation));
     field(dl, "Transaction (base64)", e.transaction ?? "(none)");
     field(dl, "Reported", `${time(e.reported_at)}, app ${e.app_version}`);
-    field(dl, "Wallet", e.wallet ?? "(left out)");
+    field(
+      dl,
+      "Wallet field",
+      e.wallet ??
+        "Not sent. The transaction bytes still name the signing wallet.",
+    );
     item.append(dl);
     list.append(item);
   }

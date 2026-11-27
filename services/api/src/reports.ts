@@ -22,8 +22,11 @@ export interface ReportOptions {
   readonly resimulator?: Resimulator;
   /** How long a re-simulation may take before it counts as failed. Defaults to 15 s. */
   readonly resimulationTimeoutMs?: number;
-  /** The domain lists the D-05 threshold reads. Defaults to the bundled fixture lists. */
-  readonly lists?: DomainLists;
+  /**
+   * The domain lists the D-05 threshold reads, loaded once at start-up. Null when they could not
+   * be loaded: the triage routes then answer 503. Unset, the bundled fixture lists are read.
+   */
+  readonly lists?: DomainLists | null;
   /** The bearer token for the dashboard's JSON routes (E-12). Unset: those routes answer 503. */
   readonly triageToken?: string;
 }
@@ -45,6 +48,22 @@ function sendJson(
 }
 
 class BodyTooLarge extends Error {}
+
+/** The paths whose handlers read the domain lists: POST /reports and the dashboard's data. */
+const TRIAGE_PATH = /^\/(reports|cases)(\/|$)/;
+
+/** Stands in for the lists on routes that never read them. */
+const NO_LISTS: DomainLists = { phantom: new Set(), phishdestroy: new Set() };
+
+/** The lists given at start-up, or the bundled ones read once; null when neither loads. */
+function triageLists(options: ReportOptions): DomainLists | null {
+  if (options.lists !== undefined) return options.lists;
+  try {
+    return bundledLists();
+  } catch {
+    return null;
+  }
+}
 
 const systemNow = (): number => Math.floor(Date.now() / 1000);
 
@@ -69,6 +88,7 @@ function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
 async function postReport(
   db: DatabaseSync,
   options: ReportOptions,
+  lists: DomainLists,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
@@ -115,12 +135,7 @@ async function postReport(
           : "differs"
         : outcome.status;
   }
-  const triage = triageSighting(
-    db,
-    sightingId,
-    options.lists ?? bundledLists(),
-    now(),
-  );
+  const triage = triageSighting(db, sightingId, lists, now());
   sendJson(res, 201, {
     sighting_id: sightingId,
     resimulation,
@@ -141,18 +156,25 @@ export function routeReports(
   pathname: string,
 ): boolean {
   const now = options.now ?? systemNow;
-  const dashboard = {
-    triageToken: options.triageToken,
-    lists: options.lists ?? bundledLists(),
-    now,
-  };
+  // Only the triage routes read the lists, so no other route, /health among them, depends on
+  // them. The page's own files do not read them either.
+  let lists: DomainLists = NO_LISTS;
+  if (TRIAGE_PATH.test(pathname)) {
+    const loaded = triageLists(options);
+    if (loaded === null) {
+      sendJson(res, 503, { error: "triage_lists_unavailable" });
+      return true;
+    }
+    lists = loaded;
+  }
+  const dashboard = { triageToken: options.triageToken, lists, now };
   if (routeDashboard(db, dashboard, req, res, pathname)) return true;
   if (pathname !== "/reports") return false;
   if (req.method !== "POST") {
     sendJson(res, 405, { error: "method_not_allowed" }, { allow: "POST" });
     return true;
   }
-  postReport(db, options, req, res).catch(() => {
+  postReport(db, options, lists, req, res).catch(() => {
     // Internal detail stays in the process; the client gets a fixed body.
     if (!res.headersSent) sendJson(res, 500, { error: "internal" });
     else res.destroy();

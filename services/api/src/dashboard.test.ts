@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, test } from "node:test";
+import { createContext, runInContext } from "node:vm";
 
 import { openDatabase } from "./db.ts";
 import { DASHBOARD_CSP } from "./dashboard.ts";
@@ -50,6 +51,7 @@ function recorded(state: { drain: boolean }): Resimulator {
 async function start(options: {
   triageToken?: string;
   resimulator?: Resimulator;
+  lists?: null;
 }): Promise<string> {
   let clock = 1_795_200_000;
   const server = createApiServer({
@@ -275,4 +277,47 @@ test("the page, script and style are served without a token, with a CSP that all
     (await fetch(`${base}/dashboard`, { method: "POST" })).status,
     405,
   );
+});
+
+test("without the domain lists, /health and the page still answer, and the triage routes answer 503", async () => {
+  const base = await start({ triageToken: TOKEN, lists: null });
+  const health = await fetch(`${base}/health`);
+  assert.equal(health.status, 200);
+  assert.equal(((await health.json()) as { status: string }).status, "ok");
+  assert.equal((await fetch(`${base}/dashboard`)).status, 200);
+  const report = await fetch(`${base}/reports`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(FIXTURES.drainer_device_1),
+  });
+  assert.deepEqual(
+    [report.status, await report.json()],
+    [503, { error: "triage_lists_unavailable" }],
+  );
+  const cases = await fetch(`${base}/cases`, { headers: auth });
+  assert.equal(cases.status, 503);
+  assert.equal((await fetch(`${base}/nope`)).status, 404);
+});
+
+test("the page shows a time it cannot format as its number, and never calls a missing wallet field left out", () => {
+  const source = readFileSync(
+    new URL("../dashboard/dashboard.js", import.meta.url),
+    "utf8",
+  );
+  // The script needs only window at load; time() is a plain function in it.
+  const page = createContext({ window: { addEventListener() {} } });
+  runInContext(source, page);
+  // The owed date for 1795000001 was computed with date -u and Python, not with this code.
+  assert.equal(runInContext("time(1795000001)", page), "2026-11-18T11:06:41Z");
+  assert.equal(
+    runInContext("time(8640000000001)", page),
+    "8640000000001 (not a valid time)",
+  );
+  assert.equal(
+    source.includes(
+      "Not sent. The transaction bytes still name the signing wallet.",
+    ),
+    true,
+  );
+  assert.equal(source.includes("(left out)"), false);
 });
