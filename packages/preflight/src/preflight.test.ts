@@ -197,7 +197,7 @@ describe("E-09 done test: the drainer pre-flight", () => {
     const result = ready(await preflight(rpc, drainer.transaction, USER));
     assert.deepEqual(
       result.summary.effects.map((effect) => effect.kind),
-      ["sol-out", "delegate-approved"],
+      ["priority-fee", "sol-out", "delegate-approved"],
     );
     assert.deepEqual(result.simulatedAt, {
       slot: 527004383,
@@ -240,7 +240,7 @@ describe("E-09 done test: the drainer pre-flight", () => {
     const rpc = drainerRpc();
     const result = ready(await preflight(rpc, drainerV0.transaction, USER));
     assert.equal(result.summary.unresolvedAccounts, 0);
-    const out = result.summary.effects[0];
+    const out = result.summary.effects[1];
     assert.ok(out.kind === "sol-out");
     assert.deepEqual(out.to, { address: ATTACKER });
   });
@@ -261,7 +261,10 @@ describe("pre-flight paths", () => {
     const { rpc } = observed(drainerRpc(), true);
     const result = ready(await preflight(rpc, drainer.transaction, USER));
     assert.equal(result.simulation.status, "not-run");
-    assert.equal(result.summary.effects.length, 2);
+    assert.deepEqual(
+      result.summary.effects.map((effect) => effect.kind),
+      ["priority-fee", "sol-out", "delegate-approved"],
+    );
   });
 
   it("passes a simulation error through for an unknown program, without a crash", async () => {

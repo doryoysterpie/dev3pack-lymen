@@ -11,8 +11,10 @@
 // - Compute Budget: anza-xyz/solana-sdk 7b382f6,
 //   compute-budget-interface/src/lib.rs (borsh: a u8 tag, then the value).
 //
-// The decoder is stricter than the programs: data of any length other than the
-// exact one for the instruction is "unexpected-data", never decoded. Anything
+// The decoder is stricter than the programs: for each instruction it decodes,
+// data of any length other than the exact one is "unexpected-data", never
+// decoded. The base token instructions it only names (TOKEN_NAMED) carry no
+// field the summary reads, and are named at any data length. Anything
 // it cannot decode comes back as "undecoded" with a reason, so the card can
 // say so instead of guessing.
 
@@ -107,6 +109,16 @@ export type Decoded =
       readonly program: TokenProgram;
       readonly account: Account;
       readonly mint: Account;
+      readonly authorizers: readonly Account[];
+      readonly amount: string;
+      readonly decimals: number | null;
+    }
+  | {
+      readonly kind: "token-mint-to";
+      readonly program: TokenProgram;
+      readonly mint: Account;
+      readonly destination: Account;
+      /** The mint authority, then any multisig signers. */
       readonly authorizers: readonly Account[];
       readonly amount: string;
       readonly decimals: number | null;
@@ -263,10 +275,8 @@ const TOKEN_NAMED: Readonly<Record<number, string>> = {
   0: "InitializeMint",
   1: "InitializeAccount",
   2: "InitializeMultisig",
-  7: "MintTo",
   10: "FreezeAccount",
   11: "ThawAccount",
-  14: "MintToChecked",
   16: "InitializeAccount2",
   17: "SyncNative",
   18: "InitializeAccount3",
@@ -372,6 +382,22 @@ function decodeToken(
         authorizers: accounts.slice(1),
         authorityType: AUTHORITY_TYPES[typeIndex],
         newAuthority: option === 1 ? encodeBase58(data.subarray(3, 35)) : null,
+      };
+    }
+    case 7: // MintTo: mint, destination, mint authority
+    case 14: {
+      // MintToChecked: same accounts, plus decimals in the data.
+      const checked = tag === 14;
+      const problem = checked ? shape(10, 3) : shape(9, 3);
+      if (problem) return undecoded(id, problem);
+      return {
+        kind: "token-mint-to",
+        program,
+        mint: accounts[0],
+        destination: accounts[1],
+        authorizers: accounts.slice(2),
+        amount: u64(data, 1),
+        decimals: checked ? data[9] : null,
       };
     }
     case 8: // Burn: account, mint, authority

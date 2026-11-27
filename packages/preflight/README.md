@@ -93,10 +93,11 @@ The script typechecks the package with no Node or DOM types, typechecks the test
 
 ## Sources
 
-Layouts and rules come from the program sources at pinned commits, named at the top of each file: anza-xyz/solana-sdk `7b382f6`, solana-program/token `38de8d1`, solana-program/token-2022 `efe55b4`, solana-program/associated-token-account `34509e4`, and the Solana Pay specification at solana-foundation/pay `8e1b87c`.
+Layouts and rules come from the program sources at pinned commits, named at the top of each file: anza-xyz/solana-sdk `7b382f6`, solana-program/token `38de8d1`, solana-program/token-2022 `efe55b4`, solana-program/associated-token-account `34509e4`, anza-xyz/agave `a64fa73` for the priority fee (`src/fee.ts`), and the Solana Pay specification at solana-foundation/pay `8e1b87c`.
 
 ## Not verified
 
 - Other signers' signatures are not checked cryptographically.
 - No funded transaction has been simulated against devnet.
 - The drain pattern definition is limen's; D-05 names the condition but does not define it.
+- With no `SetComputeUnitLimit`, the priority fee effect gives the most the fee can be, at 1400000 units; limen does not work out the runtime's default limit, which depends on the instructions and the cluster's feature set.
