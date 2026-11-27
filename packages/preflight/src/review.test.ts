@@ -124,6 +124,7 @@ async function drain(
 ): Promise<boolean> {
   const result = await preflightTransaction(transaction, {
     rpc: recordedRpc(recording),
+    user: USER,
   });
   assert.equal(result.summary.kind, "ready");
   return result.drainPattern;
@@ -373,7 +374,7 @@ describe("m9, m10, m11: a simulation that did not run is not a clean run", () =>
         json: async () => ({ jsonrpc: "2.0", id: request.id, result }),
       };
     };
-    const result = await preflight(jsonRpc(answer, "x"), base64());
+    const result = await preflight(jsonRpc(answer, "x"), base64(), USER);
     assert.ok(result.kind === "ready");
     assert.equal(result.simulation.status, "not-run");
     assert.deepEqual(result.blocks, ["simulation-not-run"]);
@@ -382,7 +383,7 @@ describe("m9, m10, m11: a simulation that did not run is not a clean run", () =>
 
   it("m10: an endpoint that never answers times out as not run", async () => {
     const hang: Fetch = () => new Promise(() => {});
-    const result = await preflight(jsonRpc(hang, "x", 50), base64());
+    const result = await preflight(jsonRpc(hang, "x", 50), base64(), USER);
     assert.ok(result.kind === "ready");
     assert.deepEqual(result.simulation, {
       status: "not-run",
@@ -397,7 +398,7 @@ describe("m9, m10, m11: a simulation that did not run is not a clean run", () =>
       status: 503,
       json: async () => ({}),
     });
-    const result = await preflight(jsonRpc(down, "x"), base64());
+    const result = await preflight(jsonRpc(down, "x"), base64(), USER);
     assert.ok(result.kind === "ready");
     assert.equal(result.simulation.status, "not-run");
     assert.equal(signingAllowed(result, base64()), false);
@@ -410,6 +411,7 @@ describe("m9, m10, m11: a simulation that did not run is not a clean run", () =>
         simulation: { err: { InstructionError: [0, "Custom"] }, accounts: {} },
       }),
       base64(),
+      USER,
     );
     assert.ok(result.kind === "ready");
     assert.deepEqual(result.blocks, ["simulation-failed"]);
@@ -423,6 +425,7 @@ describe("m9, m10, m11: a simulation that did not run is not a clean run", () =>
         simulation: { err: null, accounts: { [USER]: wallet(4_999_995_000) } },
       }),
       base64(),
+      USER,
     );
     assert.ok(result.kind === "ready");
     assert.deepEqual(result.blocks, []);
@@ -439,6 +442,7 @@ describe("m5: an empty token account closed back to the wallet", () => {
       rpc: jsonRpc(async () => {
         throw new Error("offline");
       }, "x"),
+      user: USER,
     });
     assert.equal(result.summary.kind, "ready");
     assert.equal(result.drainPattern, false);
@@ -466,7 +470,161 @@ describe("m5: an empty token account closed back to the wallet", () => {
       rpc: jsonRpc(async () => {
         throw new Error("offline");
       }, "x"),
+      user: USER,
     });
     assert.equal(result.drainPattern, true);
+  });
+});
+
+describe("n2: a hand-over to the wallet itself is no hand-over", () => {
+  const offline = () =>
+    jsonRpc(async () => {
+      throw new Error("offline");
+    }, "x");
+  const decodedDrain = async (instruction: web3.TransactionInstruction) => {
+    const result = await preflightTransaction(build([instruction]), {
+      rpc: offline(),
+      user: USER,
+    });
+    assert.equal(result.summary.kind, "ready");
+    return result.drainPattern;
+  };
+
+  it("the wallet approved as delegate over its own token account", async () => {
+    assert.equal(
+      await decodedDrain(
+        spl.createApproveInstruction(tokenAccount, user, user, BigInt(5)),
+      ),
+      false,
+    );
+  });
+
+  it("the wallet assigned to the System Program", async () => {
+    assert.equal(
+      await decodedDrain(
+        web3.SystemProgram.assign({
+          accountPubkey: user,
+          programId: web3.SystemProgram.programId,
+        }),
+      ),
+      false,
+    );
+  });
+
+  it("still a hand-over: another address approved, or another program assigned", async () => {
+    assert.equal(
+      await decodedDrain(
+        spl.createApproveInstruction(tokenAccount, attacker, user, BigInt(5)),
+      ),
+      true,
+    );
+    assert.equal(
+      await decodedDrain(
+        web3.SystemProgram.assign({
+          accountPubkey: user,
+          programId: unknownProgram,
+        }),
+      ),
+      true,
+    );
+  });
+});
+
+describe("n3: which token accounts a report marks as the wallet's", () => {
+  const offline = () =>
+    jsonRpc(async () => {
+      throw new Error("offline");
+    }, "x");
+  const reportOf = async (
+    instructions: web3.TransactionInstruction[],
+    rpc: ReturnType<typeof offline>,
+  ) => {
+    const result = await preflightTransaction(build(instructions), {
+      rpc,
+      user: USER,
+    });
+    assert.equal(result.summary.kind, "ready");
+    return JSON.stringify(result.summary);
+  };
+
+  it("an account the wallet owns only after the simulation, named in a decoded transfer", async () => {
+    // An undecoded program creates the account; a decoded transfer from the
+    // wallet's other token account then names it as the destination.
+    const other = key(K.userToken2022Account);
+    const result = await preflightTransaction(
+      build([
+        unknown([writable(tokenAccount)]),
+        spl.createTransferInstruction(other, tokenAccount, user, BigInt(1)),
+      ]),
+      {
+        rpc: recordedRpc({
+          accounts: {
+            [USER]: wallet(5_000_000_000),
+            [K.userToken2022Account]: token({ amount: BigInt(9) }),
+          },
+          simulation: {
+            err: null,
+            accounts: {
+              [USER]: wallet(4_997_955_720),
+              [K.userToken2022Account]: token({ amount: BigInt(8) }),
+              [K.userTokenAccount]: token({ amount: BigInt(1) }),
+            },
+          },
+        }),
+        user: USER,
+      },
+    );
+    assert.ok(result.summary.kind === "ready");
+    const json = JSON.stringify(result.summary);
+    assert.equal(json.includes(K.userTokenAccount), false);
+    assert.equal(json.includes(K.userToken2022Account), false);
+    const out = result.summary.summary.effects.find(
+      (effect) => effect.kind === "token-out",
+    );
+    assert.ok(out !== undefined && out.kind === "token-out");
+    assert.ok(
+      "address" in out.destination &&
+        out.destination.address.startsWith("user token account "),
+    );
+  });
+
+  it("with no simulation: an associated token account created for the wallet", async () => {
+    const ata = spl.getAssociatedTokenAddressSync(mint, user);
+    const json = await reportOf(
+      [spl.createAssociatedTokenAccountInstruction(user, ata, user, mint)],
+      offline(),
+    );
+    assert.equal(json.includes(ata.toBase58()), false);
+  });
+
+  it("with no simulation: a token account whose owner the wallet changes", async () => {
+    const json = await reportOf(
+      [
+        spl.createSetAuthorityInstruction(
+          tokenAccount,
+          user,
+          spl.AuthorityType.AccountOwner,
+          attacker,
+        ),
+      ],
+      offline(),
+    );
+    assert.equal(json.includes(K.userTokenAccount), false);
+  });
+
+  it("with no simulation: not an account a multisig owns, with the wallet one of its signers", async () => {
+    const json = await reportOf(
+      [
+        spl.createApproveInstruction(
+          tokenAccount,
+          attacker,
+          attacker,
+          BigInt(5),
+          [user],
+        ),
+      ],
+      offline(),
+    );
+    assert.ok(json.includes(K.userTokenAccount));
   });
 });

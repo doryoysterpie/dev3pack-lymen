@@ -8,7 +8,9 @@
 // authorizes: the wallet is the System funding account, the account being
 // assigned, or a signing owner, delegate or authority of a token instruction.
 // The summary writes the role marker "user" (marker.ts) wherever the user's
-// address would appear, so it carries no wallet address.
+// address would appear, so it carries no wallet address. It still names the
+// wallet's token accounts by address; a report marks those too (preflight.ts,
+// toReport).
 
 import {
   messageAccounts,
@@ -357,6 +359,57 @@ function priorityFee(decoded: readonly Decoded[]): Effect | null {
     unitLimit,
     lamports,
   };
+}
+
+/**
+ * The token accounts the decoded instructions show the user owns: the account
+ * of an Approve, Revoke or SetAuthority (AccountOwner) the user signs as the
+ * direct authority, which the token program lets only the account's owner
+ * sign (solana-program/token 38de8d1, program/src/processor.rs, validate_owner
+ * against the account's owner at lines 379, 407 and 442), and an associated
+ * token account created for the user's wallet, which the program initializes
+ * with that wallet as owner (solana-program/associated-token-account 34509e4,
+ * program/src/processor.rs, lines 77 and 145 to 149). Addresses only, in the
+ * order the instructions name them, without repeats.
+ */
+export function userTokenAccounts(
+  transaction: ParsedTransaction,
+  tables: LookupTables,
+): string[] {
+  const { message } = transaction;
+  const accounts = messageAccounts(message, tables);
+  const user = message.staticKeys[0];
+  const direct = (authorizers: readonly Account[]): boolean =>
+    authorizers.length > 0 &&
+    authorizers[0].signer &&
+    authorizers[0].address === user;
+  const found: string[] = [];
+  for (const compiled of message.instructions) {
+    const decoded = decodeInstruction(compiled, accounts);
+    let account: Account | null = null;
+    if (
+      (decoded.kind === "token-approve" || decoded.kind === "token-revoke") &&
+      direct(decoded.authorizers)
+    ) {
+      account = decoded.source;
+    } else if (
+      decoded.kind === "token-set-authority" &&
+      decoded.authorityType === "AccountOwner" &&
+      direct(decoded.authorizers)
+    ) {
+      account = decoded.target;
+    } else if (
+      decoded.kind === "create-token-account" &&
+      decoded.wallet.address === user
+    ) {
+      account = decoded.account;
+    }
+    const address = account?.address ?? null;
+    if (address !== null && address !== user && !found.includes(address)) {
+      found.push(address);
+    }
+  }
+  return found;
 }
 
 function isZero(signature: Uint8Array): boolean {

@@ -311,10 +311,20 @@ describe("transaction card text", () => {
     );
   });
 
-  it("m13: stops when the fee payer is unset and no wallet is given", () => {
-    const card = transactionCardText(LINK, null, { kind: "fee-payer-not-set" });
-    assert.equal(card.title, "Stopped: no fee payer");
+  it("n3: stops when no wallet is given", async () => {
+    const result = await preflight(
+      offline,
+      transactionOf("drainer: SOL balance out"),
+      undefined as unknown as string,
+    );
+    assert.deepEqual(result, { kind: "user-not-given" });
+    const card = transactionCardText(LINK, null, result);
+    assert.equal(card.title, "Stopped: no wallet");
     assert.equal(card.tone, "flagged");
+    assert.equal(
+      card.status,
+      "limen holds this transaction: no wallet is connected, and limen pre-flights a transaction only for the wallet that pays its fee.",
+    );
   });
 
   it("m6: shows a set priority fee in SOL", async () => {
@@ -374,6 +384,100 @@ describe("transaction card text", () => {
       label: "Mints tokens",
       value: `Your wallet's mint authority mints 1000000000000000 base units of mint ${fixture.keys.mint} to token account ${attacker}.`,
     });
+  });
+
+  it("n1: the fallback card says when the simulation found a drain pattern", async () => {
+    const walletAccount = (lamports: number, owner: string) => ({
+      lamports,
+      owner,
+      data: ["", "base64"] as const,
+    });
+    const result = await preflight(
+      recordedRpc({
+        accounts: {
+          [fixture.user]: walletAccount(5_000_000_000, SYSTEM_PROGRAM),
+        },
+        simulation: {
+          err: null,
+          accounts: {
+            [fixture.user]: walletAccount(4_999_995_000, unknownProgram),
+          },
+        },
+      }),
+      transactionOf("unknown program"),
+      fixture.user,
+    );
+    const card = transactionCardText(LINK, null, result);
+    assert.equal(
+      card.status,
+      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation ran, and the balance changes it found are shown below. As simulated, it would hand control of your wallet or tokens to another address, or leave your wallet or a token account with less than a tenth of what it holds.",
+    );
+  });
+
+  it("n1: the fallback card says when a decoded instruction hands over control", async () => {
+    const result = await preflight(
+      offline,
+      transactionOf("unknown program"),
+      fixture.user,
+    );
+    assert.ok(result.kind === "ready");
+    const card = transactionCardText(LINK, null, {
+      ...result,
+      summary: {
+        ...result.summary,
+        effects: [
+          {
+            kind: "delegate-approved" as const,
+            instruction: 0,
+            program: "token" as const,
+            account: { address: userTokenAccount },
+            delegate: { address: attacker },
+            mint: null,
+            amount: "5",
+            decimals: null,
+          },
+        ],
+      },
+    });
+    assert.equal(
+      card.status,
+      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation did not run, so no balance change is shown. It would hand control of your tokens or accounts to another address.",
+    );
+  });
+
+  it("starts the delegate row with a capital when the delegate is the wallet", async () => {
+    const result = await preflight(
+      offline,
+      transactionOf("drainer: SOL balance out"),
+      fixture.user,
+    );
+    assert.ok(result.kind === "ready");
+    const card = transactionCardText(LINK, null, {
+      ...result,
+      summary: {
+        ...result.summary,
+        effects: [
+          {
+            kind: "delegate-approved" as const,
+            instruction: 0,
+            program: "token" as const,
+            account: { address: userTokenAccount },
+            delegate: { address: "user" },
+            mint: null,
+            amount: "5",
+            decimals: null,
+          },
+        ],
+      },
+    });
+    assert.deepEqual(card.rows[1], {
+      label: "Approves a delegate",
+      value: `Your wallet may move up to 5 base units from your token account ${userTokenAccount}.`,
+    });
+    assert.equal(
+      card.status,
+      "This card shows what the transaction would do before you sign.",
+    );
   });
 
   it("stops with its own card when the endpoint is not devnet", () => {

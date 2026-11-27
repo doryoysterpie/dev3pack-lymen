@@ -35,6 +35,10 @@ const sol = (lamports: string) => `${withDecimals(lamports, 9)} SOL`;
 const shown = (address: string): string =>
   address === USER_MARKER ? "your wallet" : address;
 
+// "your wallet" starts a sentence as "Your wallet".
+const capitalized = (text: string): string =>
+  text.charAt(0).toUpperCase() + text.slice(1);
+
 function where(place: Place): string {
   return "address" in place
     ? shown(place.address)
@@ -90,8 +94,8 @@ function effectRow(effect: Effect): CardRow {
         label: "Approves a delegate",
         value:
           effect.amount === U64_MAX
-            ? `${where(effect.delegate)} may move every token in your token account ${where(effect.account)}, with no limit.`
-            : `${where(effect.delegate)} may move up to ${tokenAmount(effect.amount, effect.decimals)} from your token account ${where(effect.account)}.`,
+            ? `${capitalized(where(effect.delegate))} may move every token in your token account ${where(effect.account)}, with no limit.`
+            : `${capitalized(where(effect.delegate))} may move up to ${tokenAmount(effect.amount, effect.decimals)} from your token account ${where(effect.account)}.`,
       };
     case "delegate-revoked":
       return {
@@ -223,6 +227,15 @@ const BLOCK: Readonly<Record<SignBlock, string>> = {
     "the transaction failed when simulated on devnet. Signed now, it would most likely fail the same way.",
 };
 
+// The two ways the drain pattern (drain.ts) fires, said the same way on every
+// card: in the decoded instructions, or only in the simulation.
+const DRAIN = {
+  decoded:
+    "It would hand control of your tokens or accounts to another address.",
+  simulated:
+    "As simulated, it would hand control of your wallet or tokens to another address, or leave your wallet or a token account with less than a tenth of what it holds.",
+} as const;
+
 // What the simulation adds to the fallback card, said only as far as it ran.
 function simulated(simulation: SimulationOutcome): string {
   if (simulation.status === "not-run") {
@@ -263,12 +276,12 @@ export function transactionCardText(
       rows: [from, { label: "Fee payer", value: result.feePayer }],
     };
   }
-  if (result.kind === "fee-payer-not-set") {
+  if (result.kind === "user-not-given") {
     return {
-      title: "Stopped: no fee payer",
+      title: "Stopped: no wallet",
       tone: "flagged",
       status:
-        "limen holds this transaction: it leaves the fee payer unset, and no wallet is connected to set as the fee payer.",
+        "limen holds this transaction: no wallet is connected, and limen pre-flights a transaction only for the wallet that pays its fee.",
       rows: [from],
     };
   }
@@ -350,11 +363,11 @@ export function transactionCardText(
       : "Solana Pay transaction request",
     tone: fallback || drains || blocks.length > 0 ? "flagged" : "neutral",
     status: fallback
-      ? `limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. ${simulated(simulation)}`
+      ? `limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. ${simulated(simulation)}${handsOver ? ` ${DRAIN.decoded}` : drains ? ` ${DRAIN.simulated}` : ""}`
       : handsOver
-        ? "limen flags this transaction: it would hand control of your tokens or accounts to another address."
+        ? `limen flags this transaction: ${DRAIN.decoded.charAt(0).toLowerCase()}${DRAIN.decoded.slice(1)}`
         : drains
-          ? "limen flags this transaction: as simulated, it would hand control of your wallet or tokens to another address, or leave your wallet or a token account with less than a tenth of what it holds."
+          ? `limen flags this transaction: ${DRAIN.simulated.charAt(0).toLowerCase()}${DRAIN.simulated.slice(1)}`
           : "This card shows what the transaction would do before you sign.",
     rows,
   };

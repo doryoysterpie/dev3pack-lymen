@@ -113,6 +113,7 @@ describe("preflightTransaction, the server entry point", () => {
           },
         },
       }),
+      user: USER,
     });
     assert.equal(result.drainPattern, true);
     assert.equal(result.summary.kind, "ready");
@@ -128,6 +129,7 @@ describe("preflightTransaction, the server entry point", () => {
   it("returns a summary that is plain JSON, with amounts as strings", async () => {
     const { summary } = await preflightTransaction(DRAINER, {
       rpc: recordedRpc(unknownOutcome(9_995_000, token(1000, ATTACKER))),
+      user: USER,
     });
     // JSON.stringify throws on a bigint, and the round trip drops undefined
     // fields and turns typed arrays into objects, so equality proves plainness.
@@ -140,17 +142,25 @@ describe("preflightTransaction, the server entry point", () => {
     assert.equal(out.lamports, "4990000000");
   });
 
-  it("owes the same summary whether user is left out or given as the fee payer", async () => {
+  it("n3: yields no report when no wallet is named", async () => {
     const recording = unknownOutcome(9_995_000, token(1000, ATTACKER));
-    const omitted = await preflightTransaction(DRAINER, {
-      rpc: recordedRpc(recording),
-    });
-    const given = await preflightTransaction(DRAINER, {
-      rpc: recordedRpc(recording),
-      user: USER,
-    });
-    assert.deepEqual(given, omitted);
-    assert.equal(omitted.drainPattern, true);
+    const owed = {
+      summary: { kind: "user-not-given" },
+      drainPattern: false,
+      simulatedAt: null,
+    };
+    // A JavaScript caller can leave user out, or pass something that is not
+    // a public key.
+    const run = (options: object) =>
+      preflightTransaction(
+        DRAINER,
+        options as Parameters<typeof preflightTransaction>[1],
+      );
+    assert.deepEqual(await run({ rpc: recordedRpc(recording) }), owed);
+    assert.deepEqual(
+      await run({ rpc: recordedRpc(recording), user: "not a key" }),
+      owed,
+    );
   });
 
   it("refuses a user that is not the fee payer, with no drain pattern", async () => {
@@ -175,6 +185,7 @@ describe("preflightTransaction, the server entry point", () => {
           replacementBlockhash: "GktecGbUNfCx8DDQSQYK9CKuFoN95ca2JdPYz6pZLeiW",
         },
       }),
+      user: USER,
     });
     assert.deepEqual(result.simulatedAt, {
       slot: 527004383,
@@ -187,6 +198,7 @@ describe("preflightTransaction, the server entry point", () => {
     assert.deepEqual(
       await preflightTransaction(new Uint8Array([1, 2, 3]), {
         rpc: recordedRpc(unknownOutcome(0, token(0, null))),
+        user: USER,
       }),
       {
         summary: { kind: "malformed", problem: "truncated" },
@@ -202,6 +214,7 @@ describe("preflightTransaction, the server entry point", () => {
         ...unknownOutcome(0, token(0, null)),
         genesisHash: MINT,
       }),
+      user: USER,
     });
     assert.deepEqual(result, {
       summary: { kind: "not-devnet" },
@@ -260,6 +273,7 @@ describe("drainPattern through the simulation, for an instruction limen cannot d
     it(`${name}: ${owed}`, async () => {
       const result = await preflightTransaction(UNKNOWN, {
         rpc: recordedRpc(recording),
+        user: USER,
       });
       assert.equal(result.drainPattern, owed);
     });

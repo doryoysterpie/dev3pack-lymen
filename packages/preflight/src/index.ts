@@ -83,4 +83,11 @@ export {
   handsOverControl,
   SWEEP_DIVISOR,
 } from "./drain.ts";
-export { USER_MARKER, withMarker } from "./marker.ts";
+export {
+  SCRUBBED,
+  scrubAddresses,
+  USER_MARKER,
+  USER_TOKEN_ACCOUNT_MARKER,
+  withMarker,
+  withMarkers,
+} from "./marker.ts";

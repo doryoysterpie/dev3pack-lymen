@@ -69,6 +69,27 @@ function isTokenProgram(owner: string): boolean {
   return owner === TOKEN_PROGRAM || owner === TOKEN_2022_PROGRAM;
 }
 
+/**
+ * The watched token accounts the user owns, before the simulation or after
+ * it, in the order of the watched addresses. after is empty when the
+ * simulation did not run.
+ */
+export function ownedTokenAccounts(
+  user: string,
+  addresses: readonly string[],
+  before: readonly (AccountState | null)[],
+  after: readonly (AccountState | null)[],
+): string[] {
+  const owned = (state: AccountState | null | undefined): boolean =>
+    state !== null &&
+    state !== undefined &&
+    isTokenProgram(state.owner) &&
+    parseTokenAccount(state.data)?.owner === user;
+  return addresses.filter(
+    (address, i) => address !== user && (owned(before[i]) || owned(after[i])),
+  );
+}
+
 /** Lists what changed for the user, in the order of the watched addresses. */
 export function balanceChanges(
   user: string,

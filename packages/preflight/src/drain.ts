@@ -7,11 +7,12 @@
 // A ready report shows a drain pattern when, for the user's wallet (the
 // transaction's fee payer, written "user" in the report), any of these holds:
 //
-// 1. Control handed over, in the decoded instructions: a delegate approved
-//    over one of the wallet's token accounts; the wallet account assigned to
-//    another program; a token account or mint authority moved to an address
-//    other than the wallet; or a token account closed with its SOL sent to an
-//    address other than the wallet.
+// 1. Control handed over, in the decoded instructions: a delegate other than
+//    the wallet approved over one of the wallet's token accounts; the wallet
+//    account assigned to a program other than the System Program; a token
+//    account or mint authority moved to an address other than the wallet; or
+//    a token account closed with its SOL sent to an address other than the
+//    wallet.
 // 2. Control handed over, in a simulation that ran without an error: the
 //    wallet account given a new owner program or a different data length; or
 //    a token account the wallet owned given a new delegate other than the
@@ -24,11 +25,12 @@
 //
 // A request whose fee payer is unset is checked as rebuilt with the user's
 // wallet as fee payer (fee-payer.ts). A malformed transaction, a stop at a
-// non-devnet endpoint, another wallet's transaction, a request whose fee payer
-// is unset when no wallet is given, and a payment that leaves each account a
-// tenth or more show no drain pattern.
+// non-devnet endpoint, another wallet's transaction, a run with no wallet
+// named, and a payment that leaves each account a tenth or more show no drain
+// pattern.
 
 import { USER_MARKER } from "./marker.ts";
+import { SYSTEM_PROGRAM } from "./programs.ts";
 import type { PreflightReport } from "./preflight.ts";
 import type { BalanceChange } from "./simulate.ts";
 import type { Effect } from "./summary.ts";
@@ -43,8 +45,14 @@ export const SWEEP_DIVISOR = 10;
 export function handsOverControl(effect: Effect): boolean {
   switch (effect.kind) {
     case "delegate-approved":
+      // An unloaded lookup address is not the wallet's own address.
+      return (
+        !("address" in effect.delegate) ||
+        effect.delegate.address !== USER_MARKER
+      );
     case "owner-assigned":
-      return true;
+      // The System Program already owns a wallet account.
+      return effect.newOwner !== SYSTEM_PROGRAM;
     case "authority-changed":
       return (
         effect.newAuthority !== null && effect.newAuthority !== USER_MARKER

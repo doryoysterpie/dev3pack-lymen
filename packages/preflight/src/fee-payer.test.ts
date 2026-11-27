@@ -13,6 +13,7 @@ import * as web3 from "@solana/web3.js";
 
 import type { LookupTables } from "./accounts.ts";
 import { decodeBase64, encodeBase64 } from "./base64.ts";
+import { encodeTransaction } from "./encode.ts";
 import {
   readUnsetFeePayer,
   UNSET_FEE_PAYER,
@@ -76,7 +77,9 @@ function build(
 function rebuilt(unset: Uint8Array): Uint8Array {
   const read = readUnsetFeePayer(unset);
   assert.ok(read !== null);
-  return withFeePayer(read, fixture.user);
+  const result = withFeePayer(read, fixture.user);
+  assert.ok(result.ok);
+  return result.bytes;
 }
 
 function summary(bytes: Uint8Array) {
@@ -124,7 +127,9 @@ describe("m13: the fee payer left unset", () => {
     assert.ok(read !== null);
     assert.equal(read.message.staticKeys.length, 3);
     assert.deepEqual(read.message.instructions[0].accountIndexes, [1, 3]);
-    const got = withFeePayer(read, fixture.user);
+    const result = withFeePayer(read, fixture.user);
+    assert.ok(result.ok);
+    const got = result.bytes;
     const owed = build(user, [call()], true);
     assert.deepEqual(summary(got), summary(owed));
     assert.deepEqual(got, owed);
@@ -230,10 +235,14 @@ describe("m13: the pre-flight of a request with the fee payer unset", () => {
   });
 
   it("stops, with no drain pattern, when no wallet is given to set", async () => {
-    const result = await preflightTransaction(build(unsetPayer, [transfer()]), {
-      rpc: recordedRpc(sweep),
-    });
-    assert.deepEqual(result.summary, { kind: "fee-payer-not-set" });
+    const options = { rpc: recordedRpc(sweep) } as Parameters<
+      typeof preflightTransaction
+    >[1];
+    const result = await preflightTransaction(
+      build(unsetPayer, [transfer()]),
+      options,
+    );
+    assert.deepEqual(result.summary, { kind: "user-not-given" });
     assert.equal(result.drainPattern, false);
   });
 
@@ -243,5 +252,65 @@ describe("m13: the pre-flight of a request with the fee payer unset", () => {
     assert.ok(result.kind === "ready");
     assert.equal(result.feePayerSet, false);
     assert.equal(result.base64, sent);
+  });
+});
+
+describe("n4: a rebuild that needs more accounts than a message holds", () => {
+  // The PM's second read: an unsigned v0 request with the zero key as fee
+  // payer and named as an account, one unknown program, and 254 lookup
+  // addresses, 256 accounts in all, whose instruction names account 255.
+  // Adding the wallet would need account 256.
+  const request = encodeTransaction([new Uint8Array(64)], {
+    version: 0,
+    header: {
+      numRequiredSignatures: 1,
+      numReadonlySignedAccounts: 0,
+      numReadonlyUnsignedAccounts: 1,
+    },
+    staticKeys: [UNSET_FEE_PAYER, K.unknownProgram],
+    recentBlockhash: K.mint,
+    instructions: [
+      { programIdIndex: 1, accountIndexes: [0, 255], data: Uint8Array.of(1) },
+    ],
+    lookups: [
+      {
+        table: K.lookupTable,
+        writableIndexes: Array.from({ length: 254 }, (_, i) => i),
+        readonlyIndexes: [],
+      },
+    ],
+  });
+
+  it("reads as a request with the fee payer unset", () => {
+    assert.ok(readUnsetFeePayer(request) !== null);
+  });
+
+  it("is refused as malformed, not thrown", async () => {
+    const read = readUnsetFeePayer(request);
+    assert.ok(read !== null);
+    assert.deepEqual(withFeePayer(read, fixture.user), {
+      ok: false,
+      problem: "too-many-keys",
+    });
+    const rpc = recordedRpc({
+      accounts: {},
+      simulation: { err: null, accounts: {} },
+    });
+    assert.deepEqual(
+      await preflight(rpc, encodeBase64(request), fixture.user),
+      {
+        kind: "malformed",
+        problem: "too-many-keys",
+      },
+    );
+    const server = await preflightTransaction(request, {
+      rpc,
+      user: fixture.user,
+    });
+    assert.deepEqual(server.summary, {
+      kind: "malformed",
+      problem: "too-many-keys",
+    });
+    assert.equal(server.drainPattern, false);
   });
 });
