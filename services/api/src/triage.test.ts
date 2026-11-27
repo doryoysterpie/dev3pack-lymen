@@ -13,6 +13,7 @@ import {
   dedupHash,
   domainListed,
   holdQueue,
+  normalizeHostname,
   parseDomainLists,
   triageSighting,
   type ThresholdInputs,
@@ -281,6 +282,42 @@ test("E-11 done test: without a reproduced drain pattern, two devices and a list
     resimulated(db, id, true, false);
     assert.equal(triageSighting(db, id, lists, clock++).case.status, "held");
   }
+});
+
+test("hostnames are normalized: lower case, punycode, and one trailing dot dropped", () => {
+  // "bücher" is the punycode example "xn--bcher-kva" from the IDNA documentation.
+  assert.equal(
+    normalizeHostname("Listed-On-Phantom.Example."),
+    "listed-on-phantom.example",
+  );
+  assert.equal(normalizeHostname("bücher.example"), "xn--bcher-kva.example");
+  assert.equal(normalizeHostname("listed-on-phantom.example.."), null);
+  assert.equal(normalizeHostname("Bad Domain"), null);
+  const unicodeList = parseDomainLists({
+    phantom: ["bücher.example"],
+    phishdestroy: [],
+  });
+  assert.equal(domainListed("xn--bcher-kva.example", unicodeList), true);
+});
+
+test("a trailing dot no longer escapes the list or splits the case", () => {
+  const db = openDatabase(":memory:");
+  const plain = drainReport(db, "drainer_device_1", {
+    url: "https://listed-on-phantom.example/api/tx",
+  });
+  const dotted = drainReport(db, "drainer_device_2", {
+    url: "https://Listed-On-Phantom.Example./api/tx",
+  });
+  assert.equal(dotted.case.id, plain.case.id);
+  assert.equal(dotted.case.domain, "listed-on-phantom.example");
+  assert.equal(dotted.case.inputs.domainListed, true);
+  assert.equal(plain.case.status, "escalated");
+  // On its own, the dotted form is listed and escalates.
+  const alone = openDatabase(":memory:");
+  const only = drainReport(alone, "drainer_device_2", {
+    url: "https://listed-on-phantom.example./api/tx",
+  });
+  assert.equal(only.case.status, "escalated");
 });
 
 test("a listed domain matches only by exact hostname, in any case", () => {

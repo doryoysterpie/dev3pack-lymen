@@ -24,16 +24,29 @@ export const BUNDLED_LISTS_URL = new URL(
 const HOSTNAME =
   /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$/;
 
-function hostnameSet(value: unknown, field: string): ReadonlySet<string> {
-  if (
-    !Array.isArray(value) ||
-    !value.every((d) => typeof d === "string" && HOSTNAME.test(d))
-  ) {
-    throw new Error(
-      `domain lists: ${field} must be an array of lower-case hostnames`,
-    );
+/**
+ * A hostname in the one form lists and cases use: lower case, punycode for non-ASCII labels (as
+ * the WHATWG URL parser gives it), and without one trailing dot. Null when it is not a hostname.
+ */
+export function normalizeHostname(host: string): string | null {
+  let parsed: string;
+  try {
+    parsed = new URL(`http://${host}/`).hostname;
+  } catch {
+    return null;
   }
-  return new Set(value as string[]);
+  const bare = parsed.endsWith(".") ? parsed.slice(0, -1) : parsed;
+  return HOSTNAME.test(bare) ? bare : null;
+}
+
+function hostnameSet(value: unknown, field: string): ReadonlySet<string> {
+  const hosts = Array.isArray(value)
+    ? value.map((d) => (typeof d === "string" ? normalizeHostname(d) : null))
+    : null;
+  if (hosts === null || hosts.some((h) => h === null)) {
+    throw new Error(`domain lists: ${field} must be an array of hostnames`);
+  }
+  return new Set(hosts as string[]);
 }
 
 /** Reads { "phantom": [...], "phishdestroy": [...] }. Throws on a missing or malformed list. */
@@ -58,13 +71,13 @@ export function bundledLists(): DomainLists {
   return bundled;
 }
 
-/** True when the domain appears on either list, by exact hostname. */
+/** True when the domain appears on either list, by exact hostname once both are normalized. */
 export function domainListed(
   domain: string | null,
   lists: DomainLists,
 ): boolean {
-  if (domain === null) return false;
-  const host = domain.toLowerCase();
+  const host = domain === null ? null : normalizeHostname(domain);
+  if (host === null) return false;
   return lists.phantom.has(host) || lists.phishdestroy.has(host);
 }
 
@@ -75,9 +88,14 @@ export interface CaseKey {
   readonly recipients: readonly string[];
 }
 
-/** The hostname of a bundle URL in lower case, or null when the bundle has no URL. */
+/**
+ * The normalized hostname of a bundle URL, or null when the bundle has no URL. A hostname the
+ * normalizer refuses, such as an IP address, keys the case as it stands, in lower case.
+ */
 export function domainOf(url: string | null): string | null {
-  return url === null ? null : new URL(url).hostname.toLowerCase();
+  if (url === null) return null;
+  const host = new URL(url).hostname;
+  return normalizeHostname(host) ?? host.toLowerCase();
 }
 
 /**
