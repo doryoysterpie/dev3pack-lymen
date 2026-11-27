@@ -34,13 +34,27 @@ export function listenUrl(host: string, port: number): string {
   return `http://${isIPv6(host) ? `[${host}]` : host}:${port}`;
 }
 
+const MIN_TOKEN_LENGTH = 32;
+
+function parseStationDisplayToken(value: string | undefined): string {
+  if (value === undefined || value.length < MIN_TOKEN_LENGTH) {
+    // The message never echoes the value, only whether it is set.
+    throw new Error(
+      `STATION_DISPLAY_TOKEN must be set to at least ${MIN_TOKEN_LENGTH} characters (${value === undefined || value === "" ? "it is not set" : "it is too short"}). Generate one with: openssl rand -base64 32`,
+    );
+  }
+  return value;
+}
+
 /** Starts the API. Throws a configuration error with an operator-readable message. */
 export async function start(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<StartedApi> {
   // Loaded first so a bad key file stops start-up before anything else happens.
-  // E-03 hands the key to the station QR signer.
-  loadOrganizerKey(env.ORGANIZER_KEYPAIR_PATH);
+  const organizerKey = loadOrganizerKey(env.ORGANIZER_KEYPAIR_PATH);
+  const stationDisplayToken = parseStationDisplayToken(
+    env.STATION_DISPLAY_TOKEN,
+  );
   const chainabuse = parseChainabuseMode(env.CHAINABUSE_POST);
   const port = parsePort(env.API_PORT);
   const host = env.API_HOST || "127.0.0.1";
@@ -60,6 +74,9 @@ export async function start(
   const server = createApiServer({
     db,
     version: API_VERSION,
+    stationSigner: organizerKey,
+    stationDisplayToken,
+    now: () => Math.floor(Date.now() / 1000),
     reports: {
       triageToken: env.TRIAGE_TOKEN || undefined,
       lists,
