@@ -109,6 +109,10 @@ const STATUS_MESSAGES: Record<number, string> = {
   401: "The API refused the display token.",
   404: "The API does not know this station.",
   409: "No session is open right now.",
+  // The Vite proxy answers 502 to 504 when the API behind it is down or slow.
+  502: "The API cannot be reached.",
+  503: "The API cannot be reached.",
+  504: "The API cannot be reached.",
 };
 
 /** Fetches one QR from the API at `apiBase`, turning each failure into a message for the screen. */
