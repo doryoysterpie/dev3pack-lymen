@@ -75,7 +75,11 @@ export default function App() {
         {scan.link === null ? (
           <CardView card={scan.card} />
         ) : (
-          <TransactionRequestView link={scan.link} intro={scan.card} />
+          <TransactionRequestView
+            link={scan.link}
+            intro={scan.card}
+            qrText={scan.text}
+          />
         )}
         <Text style={styles.label}>Scanned text</Text>
         <Text style={styles.raw} selectable>

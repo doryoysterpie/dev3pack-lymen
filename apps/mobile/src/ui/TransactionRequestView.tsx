@@ -23,6 +23,7 @@ import {
   signAndSend,
   type WalletSession,
 } from "../wallet/mwa.ts";
+import { ReportPanel } from "../report/ReportPanel.tsx";
 import { CardView } from "./CardView.tsx";
 
 type Step =
@@ -55,12 +56,16 @@ const reason = (error: unknown) =>
 export function TransactionRequestView({
   link,
   intro,
+  qrText,
 }: {
   readonly link: string;
   readonly intro: CardText;
+  /** The scanned QR text, for a report (E-10). */
+  readonly qrText: string;
 }) {
   const [step, setStep] = useState<Step>({ kind: "start" });
   const [shownFor, setShownFor] = useState<string | null>(null);
+  const [declined, setDeclined] = useState(false);
   const host = hostOf(link);
 
   const fetchAndCheck = async () => {
@@ -81,6 +86,7 @@ export function TransactionRequestView({
         session.address,
       );
       setShownFor(null);
+      setDeclined(false);
       setStep({ kind: "card", session, result, message: response.message });
     } catch (error) {
       setStep({ kind: "error", message: reason(error) });
@@ -134,11 +140,20 @@ export function TransactionRequestView({
           >
             <CardView card={card} />
           </View>
-          {signable ? (
+          {signable && !declined ? (
             <Button
               title="Sign with your wallet"
               disabled={!signingAllowed(result, shownFor)}
               onPress={() => void sign(session, result)}
+            />
+          ) : null}
+          {result.kind === "ready" ? (
+            <ReportPanel
+              qrText={qrText}
+              link={link}
+              result={result}
+              user={session.address}
+              onDecline={() => setDeclined(true)}
             />
           ) : null}
         </View>
