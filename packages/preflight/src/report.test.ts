@@ -128,7 +128,7 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
     assert.deepEqual(effects[1].account, { address: "user token account 2" });
   });
 
-  it("with no simulation, marks a token account the wallet approves from as its owner", async () => {
+  it("with no read, marks a token account the wallet approves from as user-authorized, not as the wallet's", async () => {
     const c = fixture.cases.find((entry) => entry.name.startsWith("drainer:"));
     assert.ok(c !== undefined);
     const offline: Fetch = async () => {
@@ -144,7 +144,9 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
       (effect) => effect.kind === "delegate-approved",
     );
     assert.ok(approve !== undefined && approve.kind === "delegate-approved");
-    assert.deepEqual(approve.account, { address: "user token account 1" });
+    assert.deepEqual(approve.account, {
+      address: "user-authorized token account 1",
+    });
     assert.equal(JSON.stringify(result).includes(K.userTokenAccount), false);
   });
 

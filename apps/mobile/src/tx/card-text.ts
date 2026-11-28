@@ -74,7 +74,12 @@ const AUTHORITY: Readonly<Record<string, string>> = {
   FreezeAccount: "The freeze authority",
 };
 
-function effectRow(effect: Effect): CardRow {
+/**
+ * One row per decoded effect. owned lists the token accounts a read shows
+ * the wallet owns (Preflight.userTokenAccounts); an instruction alone shows
+ * no ownership, so only these are called the wallet's.
+ */
+function effectRow(effect: Effect, owned: readonly string[]): CardRow {
   switch (effect.kind) {
     case "sol-out":
       return effect.reason === "create-account"
@@ -122,13 +127,17 @@ function effectRow(effect: Effect): CardRow {
       };
     case "delegate-approved": {
       const who = whereFirst(effect.delegate);
+      const from =
+        "address" in effect.account && owned.includes(effect.account.address)
+          ? `from your token account ${where(effect.account)}.`
+          : `from token account ${where(effect.account)}. Your wallet signs as the owner the instruction names.`;
       // The largest u64 is still an allowance each transfer spends down.
       return {
         label: "Approves a delegate",
         value:
           effect.amount === U64_MAX
-            ? `${who} may move up to ${U64_MAX} base units, the largest allowance a token account can hold, from your token account ${where(effect.account)}.`
-            : `${who} may move up to ${tokenAmount(effect.amount, effect.decimals)} from your token account ${where(effect.account)}.`,
+            ? `${who} may move up to ${U64_MAX} base units, the largest allowance a token account can hold, ${from}`
+            : `${who} may move up to ${tokenAmount(effect.amount, effect.decimals)} ${from}`,
       };
     }
     case "delegate-revoked":
@@ -138,7 +147,7 @@ function effectRow(effect: Effect): CardRow {
         label: "Removes any delegate",
         // The delegate itself may revoke (Token-2022), so the account is not
         // said to be the wallet's.
-        value: `From token account ${where(effect.account)}, with your wallet's authority.`,
+        value: `From token account ${where(effect.account)}. Your wallet signs as the authority the instruction names.`,
       };
     case "authority-changed": {
       const what = AUTHORITY[effect.authorityType] ?? effect.authorityType;
@@ -158,7 +167,7 @@ function effectRow(effect: Effect): CardRow {
     case "tokens-minted":
       return {
         label: "Mints tokens",
-        value: `Your wallet's mint authority mints ${tokenAmount(effect.amount, effect.decimals)} of mint ${where(effect.mint)} to token account ${where(effect.destination)}.`,
+        value: `${tokenAmount(effect.amount, effect.decimals)} of mint ${where(effect.mint)} to token account ${where(effect.destination)}. Your wallet signs as the mint authority the instruction names.`,
       };
     case "priority-fee":
       return {
@@ -273,12 +282,10 @@ const BLOCK: Readonly<Record<SignBlock, string>> = {
 // The two ways the drain pattern (drain.ts) fires, said the same way on every
 // card: in the decoded instructions, or only in the simulation.
 const DRAIN = {
+  // What the decoded instructions ask the wallet to authorize; they show no
+  // ownership, so no account is called the wallet's here.
   decoded:
-    "It would hand control of your tokens or accounts to another address.",
-  // The decoded instructions after a failed run, which signed now would most
-  // likely fail as well, so they only ask.
-  asked:
-    "Its instructions ask to hand control of your tokens or accounts to another address.",
+    "It asks your wallet to give another address control of tokens or accounts.",
   // Clauses 2 and 3 of the drain pattern (drain.ts), each named.
   simulated:
     "As simulated, it would hand control of your wallet or tokens to another address, give your wallet account a different amount of data, or leave your wallet or a token account with less than a tenth of what it holds.",
@@ -359,7 +366,11 @@ export function transactionCardText(
       quoted: true,
     });
   }
-  rows.push(...summary.effects.map(effectRow));
+  rows.push(
+    ...summary.effects.map((effect) =>
+      effectRow(effect, result.userTokenAccounts),
+    ),
+  );
   for (const entry of summary.undecoded) {
     rows.push({
       label: "Not decoded",
@@ -417,10 +428,10 @@ export function transactionCardText(
       : "Solana Pay transaction request",
     tone: fallback || drains || blocks.length > 0 ? "flagged" : "neutral",
     status: fallback
-      ? `limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. ${simulated(simulation)}${handsOver ? ` ${failed ? DRAIN.asked : DRAIN.decoded}` : drains ? ` ${DRAIN.simulated}` : ""}`
+      ? `limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. ${simulated(simulation)}${handsOver ? ` ${DRAIN.decoded}` : drains ? ` ${DRAIN.simulated}` : ""}`
       : handsOver
         ? failed
-          ? `limen flags this transaction: ${lower(DRAIN.asked)} The simulation failed, so signed now it would most likely fail.`
+          ? `limen flags this transaction: ${lower(DRAIN.decoded)} The simulation failed, so signed now it would most likely fail.`
           : `limen flags this transaction: ${lower(DRAIN.decoded)}`
         : drains
           ? `limen flags this transaction: ${lower(DRAIN.simulated)}`

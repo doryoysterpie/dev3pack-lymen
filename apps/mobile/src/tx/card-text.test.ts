@@ -3,10 +3,12 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
+  decodePublicKey,
   jsonRpc,
   preflight,
   recordedRpc,
   SYSTEM_PROGRAM,
+  TOKEN_PROGRAM,
   type Fetch,
 } from "@limen/preflight";
 
@@ -53,7 +55,7 @@ describe("E-09 done test: what the transaction card shows", () => {
     assert.equal(card.tone, "flagged");
     assert.equal(
       card.status,
-      "limen flags this transaction: it would hand control of your tokens or accounts to another address.",
+      "limen flags this transaction: it asks your wallet to give another address control of tokens or accounts.",
     );
     assert.deepEqual(card.rows.slice(0, 4), [
       { label: "Requested from", value: "pay.example" },
@@ -68,7 +70,7 @@ describe("E-09 done test: what the transaction card shows", () => {
       },
       {
         label: "Approves a delegate",
-        value: `${attacker} may move up to 18446744073709551615 base units, the largest allowance a token account can hold, from your token account ${userTokenAccount}.`,
+        value: `${attacker} may move up to 18446744073709551615 base units, the largest allowance a token account can hold, from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
       },
     ]);
   });
@@ -356,7 +358,7 @@ describe("transaction card text", () => {
     });
   });
 
-  it("m7: shows tokens minted with the wallet's mint authority", async () => {
+  it("m7: shows tokens minted, signed by the wallet as the mint authority the instruction names", async () => {
     const result = await preflight(
       offline,
       transactionOf("drainer: SOL balance out"),
@@ -382,7 +384,7 @@ describe("transaction card text", () => {
     });
     assert.deepEqual(card.rows[1], {
       label: "Mints tokens",
-      value: `Your wallet's mint authority mints 1000000000000000 base units of mint ${fixture.keys.mint} to token account ${attacker}.`,
+      value: `1000000000000000 base units of mint ${fixture.keys.mint} to token account ${attacker}. Your wallet signs as the mint authority the instruction names.`,
     });
   });
 
@@ -441,7 +443,7 @@ describe("transaction card text", () => {
     });
     assert.equal(
       card.status,
-      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. No simulation result is used, so no balance change is shown. It would hand control of your tokens or accounts to another address.",
+      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. No simulation result is used, so no balance change is shown. It asks your wallet to give another address control of tokens or accounts.",
     );
   });
 
@@ -472,7 +474,7 @@ describe("transaction card text", () => {
     });
     assert.deepEqual(card.rows[1], {
       label: "Approves a delegate",
-      value: `Your wallet may move up to 5 base units from your token account ${userTokenAccount}.`,
+      value: `Your wallet may move up to 5 base units from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
     });
     assert.equal(
       card.status,
@@ -535,7 +537,7 @@ describe("the owner's audit: what the card claims", () => {
     const rows = await rowsFor([approve(LOWER, "5")]);
     assert.deepEqual(rows[1], {
       label: "Approves a delegate",
-      value: `${LOWER} may move up to 5 base units from your token account ${userTokenAccount}.`,
+      value: `${LOWER} may move up to 5 base units from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
     });
   });
 
@@ -545,15 +547,53 @@ describe("the owner's audit: what the card claims", () => {
     ]);
     assert.deepEqual(rows[1], {
       label: "Approves a delegate",
-      value: `An address in lookup table ${LOWER} (index 0) that limen could not read may move up to 5 base units from your token account ${userTokenAccount}.`,
+      value: `An address in lookup table ${LOWER} (index 0) that limen could not read may move up to 5 base units from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
     });
+  });
+
+  it("A8: says your token account only when a read shows the wallet owns it", async () => {
+    const tokenData = new Uint8Array(165);
+    tokenData.set(decodePublicKey(fixture.keys.mint) ?? new Uint8Array(32), 0);
+    tokenData.set(decodePublicKey(fixture.user) ?? new Uint8Array(32), 32);
+    tokenData[64] = 200;
+    tokenData[108] = 1;
+    const result = await preflight(
+      recordedRpc({
+        accounts: {
+          [fixture.user]: {
+            lamports: 5_000_000_000,
+            owner: SYSTEM_PROGRAM,
+            data: ["", "base64"],
+          },
+          [userTokenAccount]: {
+            lamports: 2_039_280,
+            owner: TOKEN_PROGRAM,
+            data: [Buffer.from(tokenData).toString("base64"), "base64"],
+          },
+        },
+        simulation: { err: null, accounts: {} },
+      }),
+      transactionOf("drainer: SOL balance out"),
+      fixture.user,
+    );
+    assert.ok(result.kind === "ready");
+    assert.deepEqual(result.userTokenAccounts, [userTokenAccount]);
+    const card = transactionCardText(LINK, null, result);
+    assert.ok(
+      card.rows.some(
+        (row) =>
+          row.label === "Approves a delegate" &&
+          row.value ===
+            `${attacker} may move up to 18446744073709551615 base units, the largest allowance a token account can hold, from your token account ${userTokenAccount}.`,
+      ),
+    );
   });
 
   it("1: the largest allowance is not called unlimited", async () => {
     const rows = await rowsFor([approve(attacker, U64)]);
     assert.deepEqual(rows[1], {
       label: "Approves a delegate",
-      value: `${attacker} may move up to ${U64} base units, the largest allowance a token account can hold, from your token account ${userTokenAccount}.`,
+      value: `${attacker} may move up to ${U64} base units, the largest allowance a token account can hold, from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
     });
   });
 
@@ -682,7 +722,7 @@ describe("the owner's audit: what the card claims", () => {
     assert.deepEqual(rows.slice(1, 3), [
       {
         label: "Removes any delegate",
-        value: `From token account ${userTokenAccount}, with your wallet's authority.`,
+        value: `From token account ${userTokenAccount}. Your wallet signs as the authority the instruction names.`,
       },
       {
         label: "Burns tokens",
@@ -729,7 +769,7 @@ describe("the owner's audit: what the card claims", () => {
     });
     assert.equal(
       card.status,
-      "limen flags this transaction: its instructions ask to hand control of your tokens or accounts to another address. The simulation failed, so signed now it would most likely fail.",
+      "limen flags this transaction: it asks your wallet to give another address control of tokens or accounts. The simulation failed, so signed now it would most likely fail.",
     );
     const fallback = transactionCardText(LINK, null, {
       ...result,
@@ -748,7 +788,7 @@ describe("the owner's audit: what the card claims", () => {
     });
     assert.equal(
       fallback.status,
-      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation failed, so no balance change is shown. Its instructions ask to hand control of your tokens or accounts to another address.",
+      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation failed, so no balance change is shown. It asks your wallet to give another address control of tokens or accounts.",
     );
   });
 
@@ -789,7 +829,7 @@ describe("the owner's audit: what the card claims", () => {
       },
       {
         label: "Removes any delegate",
-        value: `From token account ${userTokenAccount}, with your wallet's authority.`,
+        value: `From token account ${userTokenAccount}. Your wallet signs as the authority the instruction names.`,
       },
       {
         label: "Creates a token account",

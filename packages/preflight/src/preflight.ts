@@ -117,15 +117,17 @@ export type Preflight =
       readonly simulatedAt: SimulatedAt | null;
       /**
        * The wallet's token accounts, in the message's account order: those
-       * the reads before and after the simulation show it owns, and those its
-       * decoded instructions show it owns (summary.ts, userTokenAccounts). A
-       * report writes "user token account N" for the Nth.
+       * the read before the simulation, or the simulation's own account
+       * state, shows it owns. A report writes "user token account N" for the
+       * Nth, and the card says "your token account" only for these.
        */
       readonly userTokenAccounts: readonly string[];
       /**
-       * Other token accounts the decoded instructions act on with the wallet
-       * as signing authority (summary.ts, userAuthorizedTokenAccounts), in
-       * the same order. A report writes "user-authorized token account N".
+       * Other token accounts the decoded instructions name as the wallet's
+       * (summary.ts, userTokenAccounts) or act on with the wallet as signing
+       * authority (summary.ts, userAuthorizedTokenAccounts), in the same
+       * order: an instruction alone shows no ownership. A report writes
+       * "user-authorized token account N".
        */
       readonly userAuthorizedTokenAccounts: readonly string[];
     };
@@ -381,16 +383,18 @@ export async function preflight(
     (account) => account.address,
   );
   const inOrder = (a: string, b: string) => order.indexOf(a) - order.indexOf(b);
-  const tokenAccounts = [
-    ...new Set([...owned, ...userTokenAccounts(transaction, tables)]),
-  ].sort(inOrder);
+  // The wallet's token accounts are those a read shows it owns. An
+  // instruction alone shows no ownership: an account it names as the
+  // wallet's is marked as user-authorized instead.
+  const tokenAccounts = [...new Set(owned)].sort(inOrder);
   // With no read, a wallet-signed transfer's destination is marked too: it
   // could be another of the wallet's token accounts.
-  const authorizedAccounts = userAuthorizedTokenAccounts(
-    transaction,
-    tables,
-    !read,
-  )
+  const authorizedAccounts = [
+    ...new Set([
+      ...userTokenAccounts(transaction, tables),
+      ...userAuthorizedTokenAccounts(transaction, tables, !read),
+    ]),
+  ]
     .filter((address) => !tokenAccounts.includes(address))
     .sort(inOrder);
   // The RPC's text can hold an address inside a longer run, which the scrub
