@@ -5,7 +5,13 @@
 // and the application answers {"transaction": <base64>} with an optional
 // "message". fetch is passed in, so the tests need no network.
 
-import { RPC_TIMEOUT_MS, withTimeout, type Fetch } from "@limen/preflight";
+import {
+  readAnswer,
+  RPC_TIMEOUT_MS,
+  withTimeout,
+  type Fetch,
+  type FetchResponse,
+} from "@limen/preflight";
 
 export interface TransactionResponse {
   readonly transaction: string;
@@ -21,8 +27,10 @@ export class RequestError extends Error {
 }
 
 /**
- * POSTs the account to the link. The answer and its body must each arrive
- * within timeoutMs, or the request fails with a timeout.
+ * POSTs the account to the link. The answer, its body read as text, must
+ * arrive within timeoutMs, or the request fails with a timeout. The fetch
+ * gives plain data ({ ok, status, url, text }, @limen/preflight's Fetch), and
+ * the text is parsed here, so no method is called on what it returns.
  */
 export async function requestTransaction(
   fetch: Fetch,
@@ -43,15 +51,20 @@ export async function requestTransaction(
     },
     body: JSON.stringify({ account }),
   });
-  const response = await withTimeout(sent, timeoutMs, late);
+  const raw = await withTimeout(sent, timeoutMs, late);
+  let response: FetchResponse;
+  try {
+    response = readAnswer(raw);
+  } catch {
+    throw new RequestError("not-json", "the link did not answer with text");
+  }
   if (!response.ok) {
     throw new RequestError("http", `the link answered HTTP ${response.status}`);
   }
   let body: unknown;
   try {
-    body = await withTimeout(response.json(), timeoutMs, late);
-  } catch (error) {
-    if (error instanceof RequestError) throw error;
+    body = JSON.parse(response.text);
+  } catch {
     throw new RequestError("not-json", "the link did not answer with JSON");
   }
   if (typeof body !== "object" || body === null) {

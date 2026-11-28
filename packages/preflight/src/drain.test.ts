@@ -10,10 +10,10 @@ import { drainPattern } from "./drain.ts";
 import { preflightTransaction, type PreflightReport } from "./preflight.ts";
 import { SYSTEM_PROGRAM, TOKEN_PROGRAM } from "./programs.ts";
 import {
-  recordedRpc,
+  recordedEndpoint,
   type RecordedAccount,
   type Recording,
-} from "./recorded.ts";
+} from "../test-support/recorded.ts";
 
 const fixture = JSON.parse(
   readFileSync(
@@ -138,7 +138,7 @@ function unknownOutcome(
 describe("preflightTransaction, the server entry point", () => {
   it("decodes and simulates stored bytes and finds the drainer's drain pattern", async () => {
     const result = await preflightTransaction(DRAINER, {
-      rpc: recordedRpc({
+      endpoint: recordedEndpoint({
         accounts: {
           [USER]: sol(5_000_000_000),
           [TOKEN_ACCOUNT]: token(1000, null),
@@ -166,7 +166,9 @@ describe("preflightTransaction, the server entry point", () => {
 
   it("returns a summary that is plain JSON, with amounts as strings", async () => {
     const { summary } = await preflightTransaction(DRAINER, {
-      rpc: recordedRpc(unknownOutcome(9_995_000, token(1000, ATTACKER))),
+      endpoint: recordedEndpoint(
+        unknownOutcome(9_995_000, token(1000, ATTACKER)),
+      ),
       user: USER,
     });
     // JSON.stringify throws on a bigint, and the round trip drops undefined
@@ -194,16 +196,21 @@ describe("preflightTransaction, the server entry point", () => {
         DRAINER,
         options as Parameters<typeof preflightTransaction>[1],
       );
-    assert.deepEqual(await run({ rpc: recordedRpc(recording) }), owed);
     assert.deepEqual(
-      await run({ rpc: recordedRpc(recording), user: "not a key" }),
+      await run({ endpoint: recordedEndpoint(recording) }),
+      owed,
+    );
+    assert.deepEqual(
+      await run({ endpoint: recordedEndpoint(recording), user: "not a key" }),
       owed,
     );
   });
 
   it("refuses a user that is not the fee payer, with no drain pattern", async () => {
     const result = await preflightTransaction(DRAINER, {
-      rpc: recordedRpc(unknownOutcome(9_995_000, token(1000, ATTACKER))),
+      endpoint: recordedEndpoint(
+        unknownOutcome(9_995_000, token(1000, ATTACKER)),
+      ),
       user: ATTACKER,
     });
     assert.deepEqual(result, {
@@ -215,7 +222,7 @@ describe("preflightTransaction, the server entry point", () => {
 
   it("returns the slot the simulation ran at, outside the summary, and not the RPC's blockhash", async () => {
     const result = await preflightTransaction(DRAINER, {
-      rpc: recordedRpc({
+      endpoint: recordedEndpoint({
         ...unknownOutcome(9_995_000, token(1000, ATTACKER)),
         simulation: {
           ...unknownOutcome(9_995_000, token(1000, ATTACKER)).simulation,
@@ -239,7 +246,7 @@ describe("preflightTransaction, the server entry point", () => {
   it("refuses bytes that are not a transaction, with no drain pattern", async () => {
     assert.deepEqual(
       await preflightTransaction(new Uint8Array([1, 2, 3]), {
-        rpc: recordedRpc(unknownOutcome(0, token(0, null))),
+        endpoint: recordedEndpoint(unknownOutcome(0, token(0, null))),
         user: USER,
       }),
       {
@@ -252,7 +259,7 @@ describe("preflightTransaction, the server entry point", () => {
 
   it("stops at an endpoint that is not devnet, with no drain pattern", async () => {
     const result = await preflightTransaction(DRAINER, {
-      rpc: recordedRpc({
+      endpoint: recordedEndpoint({
         ...unknownOutcome(0, token(0, null)),
         genesisHash: MINT,
       }),
@@ -314,7 +321,7 @@ describe("drainPattern through the simulation, for an instruction limen cannot d
   for (const [name, recording, owed] of cases) {
     it(`${name}: ${owed}`, async () => {
       const result = await preflightTransaction(UNKNOWN, {
-        rpc: recordedRpc(recording),
+        endpoint: recordedEndpoint(recording),
         user: USER,
       });
       assert.equal(result.drainPattern, owed);

@@ -26,8 +26,8 @@ import {
   signingAllowed,
 } from "./preflight.ts";
 import { SYSTEM_PROGRAM } from "./programs.ts";
-import { recordedRpc, type Recording } from "./recorded.ts";
-import type { Rpc } from "./rpc.ts";
+import { recordedEndpoint, type Recording } from "../test-support/recorded.ts";
+import type { RpcEndpoint } from "./rpc.ts";
 import { summarizeTransaction } from "./summary.ts";
 import { parseTransaction } from "./wire.ts";
 
@@ -190,12 +190,18 @@ describe("m13: the pre-flight of a request with the fee payer unset", () => {
 
   it("treats the wallet as fee payer, and simulates and signs the rebuilt transaction", async () => {
     const simulated: string[] = [];
-    const recorded = recordedRpc(sweep);
-    const rpc: Rpc = {
-      ...recorded,
-      simulate: (base64, addresses) => {
-        simulated.push(base64);
-        return recorded.simulate(base64, addresses);
+    const recorded = recordedEndpoint(sweep);
+    const rpc: RpcEndpoint = {
+      url: recorded.url,
+      fetch: (url, init) => {
+        const request = JSON.parse(init.body) as {
+          method: string;
+          params: unknown[];
+        };
+        if (request.method === "simulateTransaction") {
+          simulated.push(request.params[0] as string);
+        }
+        return recorded.fetch(url, init);
       },
     };
     const result = await preflight(rpc, unset(), fixture.user);
@@ -226,7 +232,7 @@ describe("m13: the pre-flight of a request with the fee payer unset", () => {
 
   it("finds the drain pattern in the rebuilt transaction", async () => {
     const result = await preflightTransaction(build(unsetPayer, [transfer()]), {
-      rpc: recordedRpc(sweep),
+      endpoint: recordedEndpoint(sweep),
       user: fixture.user,
     });
     assert.ok(result.summary.kind === "ready");
@@ -235,7 +241,7 @@ describe("m13: the pre-flight of a request with the fee payer unset", () => {
   });
 
   it("stops, with no drain pattern, when no wallet is given to set", async () => {
-    const options = { rpc: recordedRpc(sweep) } as Parameters<
+    const options = { endpoint: recordedEndpoint(sweep) } as Parameters<
       typeof preflightTransaction
     >[1];
     const result = await preflightTransaction(
@@ -248,7 +254,7 @@ describe("m13: the pre-flight of a request with the fee payer unset", () => {
 
   it("leaves a request that sets the wallet as fee payer as it was sent", async () => {
     const sent = encodeBase64(build(user, [transfer()]));
-    const result = await preflight(recordedRpc(sweep), sent, fixture.user);
+    const result = await preflight(recordedEndpoint(sweep), sent, fixture.user);
     assert.ok(result.kind === "ready");
     assert.equal(result.feePayerSet, false);
     assert.equal(result.base64, sent);
@@ -292,7 +298,7 @@ describe("n4: a rebuild that needs more accounts than a message holds", () => {
       ok: false,
       problem: "too-many-keys",
     });
-    const rpc = recordedRpc({
+    const rpc = recordedEndpoint({
       accounts: {},
       simulation: { err: null, accounts: {} },
     });
@@ -304,7 +310,7 @@ describe("n4: a rebuild that needs more accounts than a message holds", () => {
       },
     );
     const server = await preflightTransaction(request, {
-      rpc,
+      endpoint: rpc,
       user: fixture.user,
     });
     assert.deepEqual(server.summary, {

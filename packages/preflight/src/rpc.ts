@@ -1,6 +1,9 @@
-// Solana RPC for the pre-flight (E-09). The pre-flight talks to an Rpc, not to
-// the network: jsonRpc(fetch, url) is the JSON-RPC implementation, and a test
-// or a server can pass any other Rpc, such as recordedRpc (recorded.ts).
+// Solana JSON-RPC client for the pre-flight (E-09), the package's only RPC.
+// A caller gives an RpcEndpoint: the endpoint's URL and a fetch that posts a
+// body and resolves to plain data, { ok, status, url, text }. The client
+// calls no method on anything it receives: it parses the text itself, then
+// copies each value it uses into fresh, checked data, with index loops and
+// new Uint8Arrays. No caller can hand the pre-flight its own RPC adapter.
 //
 // Devnet only (D-03): every pre-flight starts with assertDevnet, which compares
 // the endpoint's genesis hash with devnet's and refuses any other cluster.
@@ -9,10 +12,13 @@ import { decodePublicKey } from "./base58.ts";
 import { decodeBase64 } from "./base64.ts";
 import { DEVNET_GENESIS_HASH } from "./programs.ts";
 
+/** What a fetch resolves to: plain data, the body already read as text. */
 export interface FetchResponse {
   readonly ok: boolean;
   readonly status: number;
-  json(): Promise<unknown>;
+  /** The URL the answer came from, after any redirect. */
+  readonly url: string;
+  readonly text: string;
 }
 
 export type Fetch = (
@@ -23,6 +29,14 @@ export type Fetch = (
     body: string;
   },
 ) => Promise<FetchResponse>;
+
+/** A Solana JSON-RPC endpoint: where it is, and how to post to it. */
+export interface RpcEndpoint {
+  readonly url: string;
+  readonly fetch: Fetch;
+  /** How long each answer may take; RPC_TIMEOUT_MS when left out. */
+  readonly timeoutMs?: number;
+}
 
 export interface AccountState {
   readonly lamports: string;
@@ -41,12 +55,10 @@ export interface TokenBalance {
 }
 
 export interface Simulation {
-  /** The runtime error, as the RPC reports it, or null when it ran clean. */
+  /** The runtime error, as the RPC reports it (JSON data), or null. */
   readonly err: unknown;
-  readonly logs: readonly string[];
   /** Post-simulation state of the requested accounts; null when absent. */
   readonly accounts: readonly (AccountState | null)[];
-  readonly unitsConsumed: number | null;
   /** The slot the simulation ran at, from the response context. */
   readonly slot: number | null;
   /** The blockhash the simulation used in place of the transaction's own. */
@@ -76,12 +88,12 @@ export class RpcError extends Error {
 const MAX_ACCOUNTS_PER_CALL = 100;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 let nextId = 1;
 
-/** How long jsonRpc waits for each answer, unless told otherwise. */
+/** How long the client waits for each answer, unless told otherwise. */
 export const RPC_TIMEOUT_MS = 10_000;
 
 interface Timers {
@@ -115,53 +127,76 @@ export function withTimeout<T>(
   });
 }
 
-/** A fetch whose answer and body each must arrive within ms. */
-function timedFetch(fetch: Fetch, ms: number): Fetch {
-  const late = () =>
-    new RpcError(
-      "timeout",
-      `the RPC endpoint did not answer within ${ms / 1000} seconds`,
-    );
-  return async (url, init) => {
-    const response = await withTimeout(fetch(url, init), ms, late);
-    return {
-      ok: response.ok,
-      status: response.status,
-      json: () => withTimeout(response.json(), ms, late),
-    };
+/**
+ * A fetch's answer as fresh plain data. Only the four fields are read; an
+ * answer without its body as text is refused.
+ */
+export function readAnswer(answer: unknown): FetchResponse {
+  if (typeof answer !== "object" || answer === null) {
+    throw new RpcError("shape", "the answer is not an object");
+  }
+  const { ok, status, url, text } = answer as Record<string, unknown>;
+  if (typeof text !== "string") {
+    throw new RpcError("shape", "the answer's body is not text");
+  }
+  return {
+    ok: ok === true,
+    status: typeof status === "number" ? status : 0,
+    url: typeof url === "string" ? url : "",
+    text,
   };
 }
 
+/** One JSON-RPC call; its result, parsed from the answer's text. */
 async function call(
-  fetch: Fetch,
-  url: string,
+  endpoint: Required<RpcEndpoint>,
   method: string,
   params: unknown[],
 ): Promise<unknown> {
   const id = nextId;
   nextId += 1;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-  });
-  if (!response.ok) {
-    throw new RpcError("http", `${method}: HTTP ${response.status}`);
+  const late = () =>
+    new RpcError(
+      "timeout",
+      `the RPC endpoint did not answer within ${endpoint.timeoutMs / 1000} seconds`,
+    );
+  const answer = readAnswer(
+    await withTimeout(
+      endpoint.fetch(endpoint.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+      }),
+      endpoint.timeoutMs,
+      late,
+    ),
+  );
+  if (!answer.ok) {
+    throw new RpcError("http", `${method}: HTTP ${answer.status}`);
   }
-  const body = await response.json();
+  let body: unknown;
+  try {
+    body = JSON.parse(answer.text);
+  } catch {
+    throw new RpcError("shape", `${method}: not JSON`);
+  }
   if (!isRecord(body)) throw new RpcError("shape", `${method}: not an object`);
   // An answer to another request is not evidence for this one.
   if (body.id !== id) {
     throw new RpcError("shape", `${method}: the answer is for another request`);
   }
   if (isRecord(body.error)) {
-    throw new RpcError("rpc", `${method}: ${String(body.error.message)}`);
+    const message = body.error.message;
+    throw new RpcError(
+      "rpc",
+      `${method}: ${typeof message === "string" ? message : "an error"}`,
+    );
   }
   if (!("result" in body)) throw new RpcError("shape", `${method}: no result`);
   return body.result;
 }
 
-/** What the pre-flight asks of an RPC endpoint. */
+/** What the pre-flight asks of the endpoint, inside the package only. */
 export interface Rpc {
   getGenesisHash(): Promise<string>;
   /** Accounts at the confirmed commitment, in the order asked; null if absent. */
@@ -187,9 +222,9 @@ export async function assertDevnet(rpc: Rpc): Promise<void> {
 const U64_MAX = BigInt("18446744073709551615");
 
 /**
- * Whether a value is a lamport or token amount as the Rpc interface carries
- * it: a whole number from 0 to the largest u64, as a decimal string with no
- * sign, point, exponent or leading zero.
+ * Whether a value is a lamport or token amount: a whole number from 0 to the
+ * largest u64, as a decimal string with no sign, point, exponent or leading
+ * zero.
  */
 export function isAmount(value: unknown): value is string {
   return (
@@ -212,16 +247,26 @@ function amountOf(value: unknown, what: string): string {
   throw new RpcError("shape", `${what}: not a whole amount`);
 }
 
+/** Each item of a JSON list, read by index into a new array. */
+function listOf<T>(
+  value: unknown,
+  what: string,
+  read: (item: unknown) => T,
+): T[] {
+  if (!Array.isArray(value)) throw new RpcError("shape", `${what}: not a list`);
+  const out: T[] = [];
+  for (let i = 0; i < value.length; i += 1) out.push(read(value[i]));
+  return out;
+}
+
 function balancesOf(value: unknown, what: string): string[] | null {
   if (value === undefined || value === null) return null;
-  if (!Array.isArray(value)) throw new RpcError("shape", `${what}: not a list`);
-  return value.map((item) => amountOf(item, what));
+  return listOf(value, what, (item) => amountOf(item, what));
 }
 
 function tokenBalancesOf(value: unknown, what: string): TokenBalance[] | null {
   if (value === undefined || value === null) return null;
-  if (!Array.isArray(value)) throw new RpcError("shape", `${what}: not a list`);
-  return value.map((item) => {
+  return listOf(value, what, (item) => {
     if (!isRecord(item) || !isRecord(item.uiTokenAmount)) {
       throw new RpcError("shape", `${what}: entry`);
     }
@@ -261,14 +306,17 @@ function accountState(value: unknown): AccountState | null {
   if (!isPublicKey(owner)) throw new RpcError("shape", "account: owner");
   if (
     !Array.isArray(data) ||
+    data.length !== 2 ||
     data[1] !== "base64" ||
     typeof data[0] !== "string"
   ) {
     throw new RpcError("shape", "account: data is not base64");
   }
+  // decodeBase64 writes a new Uint8Array.
   const bytes = decodeBase64(data[0]);
-  if (bytes === null)
+  if (bytes === null) {
     throw new RpcError("shape", "account: data is not base64");
+  }
   return {
     lamports: amountOf(lamports, "account: lamports"),
     owner,
@@ -284,33 +332,35 @@ function valueOf(result: unknown, method: string): unknown {
 }
 
 async function fetchAccounts(
-  fetch: Fetch,
-  url: string,
+  endpoint: Required<RpcEndpoint>,
   addresses: readonly string[],
 ): Promise<(AccountState | null)[]> {
   const out: (AccountState | null)[] = [];
   for (let i = 0; i < addresses.length; i += MAX_ACCOUNTS_PER_CALL) {
     const batch = addresses.slice(i, i + MAX_ACCOUNTS_PER_CALL);
-    const result = await call(fetch, url, "getMultipleAccounts", [
+    const result = await call(endpoint, "getMultipleAccounts", [
       batch,
       { encoding: "base64", commitment: "confirmed" },
     ]);
-    const value = valueOf(result, "getMultipleAccounts");
-    if (!Array.isArray(value) || value.length !== batch.length) {
+    const states = listOf(
+      valueOf(result, "getMultipleAccounts"),
+      "getMultipleAccounts",
+      accountState,
+    );
+    if (states.length !== batch.length) {
       throw new RpcError("shape", "getMultipleAccounts: wrong length");
     }
-    out.push(...value.map(accountState));
+    for (let k = 0; k < states.length; k += 1) out.push(states[k]);
   }
   return out;
 }
 
 async function fetchSimulation(
-  fetch: Fetch,
-  url: string,
+  endpoint: Required<RpcEndpoint>,
   transactionBase64: string,
   addresses: readonly string[],
 ): Promise<Simulation> {
-  const result = await call(fetch, url, "simulateTransaction", [
+  const result = await call(endpoint, "simulateTransaction", [
     transactionBase64,
     {
       encoding: "base64",
@@ -321,8 +371,9 @@ async function fetchSimulation(
     },
   ]);
   const value = valueOf(result, "simulateTransaction");
-  if (!isRecord(value))
+  if (!isRecord(value)) {
     throw new RpcError("shape", "simulateTransaction: value");
+  }
   const context = isRecord(result) ? result.context : undefined;
   // A slot that is given must be one; with none given, it is unknown.
   const given = isRecord(context) ? context.slot : undefined;
@@ -333,9 +384,7 @@ async function fetchSimulation(
   const replacement = value.replacementBlockhash;
   // A blockhash is 32 bytes in base58; anything else is not kept.
   const replacementBlockhash =
-    isRecord(replacement) &&
-    typeof replacement.blockhash === "string" &&
-    decodePublicKey(replacement.blockhash) !== null
+    isRecord(replacement) && isPublicKey(replacement.blockhash)
       ? replacement.blockhash
       : null;
   // A missing err field is not a clean run, and a clean run must return the
@@ -345,22 +394,19 @@ async function fetchSimulation(
     throw new RpcError("shape", "simulateTransaction: no err field");
   }
   const accounts = value.accounts;
+  let states: (AccountState | null)[] = [];
   if (accounts !== null && accounts !== undefined) {
-    if (!Array.isArray(accounts) || accounts.length !== addresses.length) {
+    states = listOf(accounts, "simulateTransaction: accounts", accountState);
+    if (states.length !== addresses.length) {
       throw new RpcError("shape", "simulateTransaction: accounts");
     }
   } else if (value.err === null && addresses.length > 0) {
     throw new RpcError("shape", "simulateTransaction: no accounts");
   }
-  const logs = Array.isArray(value.logs)
-    ? value.logs.filter((line): line is string => typeof line === "string")
-    : [];
   return {
+    // Parsed from the answer's text by this client, so it is JSON data.
     err: value.err ?? null,
-    logs,
-    accounts: Array.isArray(accounts) ? accounts.map(accountState) : [],
-    unitsConsumed:
-      typeof value.unitsConsumed === "number" ? value.unitsConsumed : null,
+    accounts: states,
     slot,
     replacementBlockhash,
     preBalances: balancesOf(
@@ -383,40 +429,64 @@ async function fetchSimulation(
 }
 
 async function fetchLatestBlockhash(
-  fetch: Fetch,
-  url: string,
+  endpoint: Required<RpcEndpoint>,
 ): Promise<string> {
-  const result = await call(fetch, url, "getLatestBlockhash", [
+  const result = await call(endpoint, "getLatestBlockhash", [
     { commitment: "confirmed" },
   ]);
   const value = valueOf(result, "getLatestBlockhash");
-  if (!isRecord(value) || typeof value.blockhash !== "string") {
+  if (!isRecord(value) || !isPublicKey(value.blockhash)) {
     throw new RpcError("shape", "getLatestBlockhash: blockhash");
   }
   return value.blockhash;
 }
 
 /**
- * The Rpc that calls a JSON-RPC endpoint through the fetch passed in. Each
- * answer must arrive within timeoutMs, or the call fails with a timeout.
+ * The endpoint as the client uses it, or a refusal: a URL as text, a fetch
+ * function, and a time limit that is a positive number when given.
  */
-export function jsonRpc(
-  untimed: Fetch,
-  url: string,
-  timeoutMs: number = RPC_TIMEOUT_MS,
-): Rpc {
-  const fetch = timedFetch(untimed, timeoutMs);
+function checkedEndpoint(endpoint: unknown): Required<RpcEndpoint> {
+  if (typeof endpoint !== "object" || endpoint === null) {
+    throw new RpcError("shape", "not an RPC endpoint");
+  }
+  const { url, fetch, timeoutMs } = endpoint as Record<string, unknown>;
+  if (
+    typeof url !== "string" ||
+    typeof fetch !== "function" ||
+    (timeoutMs !== undefined &&
+      (typeof timeoutMs !== "number" || !(timeoutMs > 0)))
+  ) {
+    throw new RpcError("shape", "not an RPC endpoint");
+  }
+  return {
+    url,
+    fetch: fetch as Fetch,
+    timeoutMs: (timeoutMs as number | undefined) ?? RPC_TIMEOUT_MS,
+  };
+}
+
+/**
+ * The client for an endpoint, inside the package only. It throws when the
+ * endpoint is not one.
+ */
+export function jsonRpc(endpoint: RpcEndpoint): Rpc {
+  const checked = checkedEndpoint(endpoint);
   return {
     async getGenesisHash() {
-      const hash = await call(fetch, url, "getGenesisHash", []);
+      const hash = await call(checked, "getGenesisHash", []);
       if (typeof hash !== "string") {
         throw new RpcError("shape", "getGenesisHash: not a string");
       }
       return hash;
     },
-    getAccounts: (addresses) => fetchAccounts(fetch, url, addresses),
+    getAccounts: (addresses) => fetchAccounts(checked, addresses),
     simulate: (transactionBase64, addresses) =>
-      fetchSimulation(fetch, url, transactionBase64, addresses),
-    latestBlockhash: () => fetchLatestBlockhash(fetch, url),
+      fetchSimulation(checked, transactionBase64, addresses),
+    latestBlockhash: () => fetchLatestBlockhash(checked),
   };
+}
+
+/** The endpoint's latest blockhash, for forSigning. */
+export function latestBlockhash(endpoint: RpcEndpoint): Promise<string> {
+  return jsonRpc(endpoint).latestBlockhash();
 }

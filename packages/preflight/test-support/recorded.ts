@@ -1,18 +1,18 @@
-// A recorded Rpc (E-09): it answers from recorded RPC data instead of the
-// network, through the same JSON-RPC parsing as jsonRpc. For tests, and for a
-// server that replays a recorded simulation with no network.
+// Test support, not part of the package's exports (E-09): an RPC endpoint
+// whose fetch answers from recorded RPC data instead of the network, as JSON
+// text, so the pre-flight reads it through its own JSON-RPC client.
 
-import { messageAccounts, type LookupTables } from "./accounts.ts";
-import { decodeBase64 } from "./base64.ts";
+import { messageAccounts, type LookupTables } from "../src/accounts.ts";
+import { decodeBase64 } from "../src/base64.ts";
 import {
   ADDRESS_LOOKUP_TABLE_PROGRAM,
   DEVNET_GENESIS_HASH,
   TOKEN_2022_PROGRAM,
   TOKEN_PROGRAM,
-} from "./programs.ts";
-import { jsonRpc, type Fetch, type Rpc } from "./rpc.ts";
-import { parseLookupTable, parseTokenAccount } from "./state.ts";
-import { parseTransaction } from "./wire.ts";
+} from "../src/programs.ts";
+import type { Fetch, RpcEndpoint } from "../src/rpc.ts";
+import { parseLookupTable, parseTokenAccount } from "../src/state.ts";
+import { parseTransaction } from "../src/wire.ts";
 
 /**
  * An account as getMultipleAccounts and simulateTransaction return it with
@@ -131,8 +131,8 @@ const byAddress = (
   addresses: readonly string[],
 ) => addresses.map((address) => map[address] ?? null);
 
-/** An Rpc that answers every call from the recording. */
-export function recordedRpc(recording: Recording): Rpc {
+/** An endpoint whose fetch answers every call from the recording. */
+export function recordedEndpoint(recording: Recording): RpcEndpoint {
   const fetch: Fetch = async (_url, init) => {
     const request = JSON.parse(init.body) as Request;
     let result: unknown;
@@ -199,7 +199,8 @@ export function recordedRpc(recording: Recording): Rpc {
         return {
           ok: true,
           status: 200,
-          json: async () => ({
+          url: "recorded:",
+          text: JSON.stringify({
             jsonrpc: "2.0",
             id: request.id,
             error: { code: -32601, message: `not recorded: ${request.method}` },
@@ -209,8 +210,18 @@ export function recordedRpc(recording: Recording): Rpc {
     return {
       ok: true,
       status: 200,
-      json: async () => ({ jsonrpc: "2.0", id: request.id, result }),
+      url: "recorded:",
+      text: JSON.stringify({ jsonrpc: "2.0", id: request.id, result }),
     };
   };
-  return jsonRpc(fetch, "recorded:");
+  return { url: "recorded:", fetch };
+}
+
+/** An endpoint for a test's own fetch. */
+export function endpointFor(
+  fetch: Fetch,
+  url: string,
+  timeoutMs?: number,
+): RpcEndpoint {
+  return timeoutMs === undefined ? { url, fetch } : { url, fetch, timeoutMs };
 }

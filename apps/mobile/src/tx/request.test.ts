@@ -8,9 +8,15 @@ import { requestTransaction, RequestError } from "./request.ts";
 const LINK = "https://pay.example/solana-pay?order=7";
 const ACCOUNT = "3vMQ3uubVTa1BQf9cQE5FETCDhSP5ZbLjfv87zvvMe7p";
 
+// A link that answers with the given body, as text.
 const answering =
   (body: () => Promise<unknown>): Fetch =>
-  async () => ({ ok: true, status: 200, json: body });
+  async (url) => ({
+    ok: true,
+    status: 200,
+    url,
+    text: JSON.stringify(await body()),
+  });
 
 async function reasonOf(fetch: Fetch): Promise<string> {
   try {
@@ -49,11 +55,12 @@ describe("m10: the transaction request link has a time limit", () => {
 
   it("still says when the body is not JSON", async () => {
     assert.equal(
-      await reasonOf(
-        answering(async () => {
-          throw new SyntaxError("Unexpected token");
-        }),
-      ),
+      await reasonOf(async (url) => ({
+        ok: true,
+        status: 200,
+        url,
+        text: "Unexpected <html>",
+      })),
       "not-json: the link did not answer with JSON",
     );
   });

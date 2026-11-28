@@ -1,6 +1,7 @@
 // @limen/preflight (E-09): the transaction decoder, the pre-flight and the
 // drain pattern, shared by the app and the server. Pure TypeScript: no React
-// Native or Node imports; the network is reached only through an Rpc.
+// Native or Node imports; the network is reached only through the package's
+// own JSON-RPC client, at the endpoint a caller gives.
 
 export { decodeBase58, decodePublicKey, encodeBase58 } from "./base58.ts";
 export { decodeBase64, encodeBase64 } from "./base64.ts";
@@ -43,23 +44,17 @@ export {
   type TokenAccount,
 } from "./state.ts";
 
+// The package's only RPC is its own JSON-RPC client: a caller gives an
+// endpoint (a URL and a fetch), never an RPC adapter of its own.
 export {
-  assertDevnet,
-  jsonRpc,
+  latestBlockhash,
+  readAnswer,
   RPC_TIMEOUT_MS,
-  RpcError,
   withTimeout,
-  type AccountState,
   type Fetch,
   type FetchResponse,
-  type Rpc,
-  type Simulation,
+  type RpcEndpoint,
 } from "./rpc.ts";
-export {
-  recordedRpc,
-  type RecordedAccount,
-  type Recording,
-} from "./recorded.ts";
 export {
   balanceChanges,
   MAX_WATCHED,

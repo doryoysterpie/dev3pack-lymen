@@ -8,11 +8,12 @@ import {
 } from "react-native";
 import {
   forSigning,
-  jsonRpc,
+  latestBlockhash,
   preflight,
   signingAllowed,
   type Fetch,
   type Preflight,
+  type RpcEndpoint,
 } from "@limen/preflight";
 
 import { SOLANA_RPC_URL } from "../config.ts";
@@ -38,8 +39,18 @@ type Step =
   | { readonly kind: "sent"; readonly signature: string }
   | { readonly kind: "error"; readonly message: string };
 
-const appFetch: Fetch = (url, init) => fetch(url, init);
-const rpc = jsonRpc(appFetch, SOLANA_RPC_URL);
+// The runtime's fetch, its answer handed on as plain data with the body read
+// as text, so neither the package nor the request code calls a method on it.
+const appFetch: Fetch = async (url, init) => {
+  const response = await fetch(url, init);
+  return {
+    ok: response.ok,
+    status: response.status,
+    url: response.url,
+    text: await response.text(),
+  };
+};
+const endpoint: RpcEndpoint = { url: SOLANA_RPC_URL, fetch: appFetch };
 
 const reason = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -72,7 +83,7 @@ export function TransactionRequestView({
       );
       setStep({ kind: "working", what: "Decoding and simulating on devnet" });
       const result = await preflight(
-        rpc,
+        endpoint,
         response.transaction,
         session.address,
       );
@@ -87,7 +98,7 @@ export function TransactionRequestView({
     if (result.kind !== "ready" || !signingAllowed(result, shownFor)) return;
     try {
       setStep({ kind: "working", what: "Waiting for your wallet" });
-      const hash = await rpc.latestBlockhash();
+      const hash = await latestBlockhash(endpoint);
       const signature = await signAndSend(session, forSigning(result, hash));
       setStep({ kind: "sent", signature });
     } catch (error) {

@@ -16,11 +16,11 @@ import {
   TOKEN_PROGRAM,
 } from "./programs.ts";
 import {
-  recordedRpc,
+  recordedEndpoint,
   type RecordedAccount,
   type Recording,
-} from "./recorded.ts";
-import type { Rpc } from "./rpc.ts";
+} from "../test-support/recorded.ts";
+import type { RpcEndpoint } from "./rpc.ts";
 import { parseTransaction } from "./wire.ts";
 
 interface FixtureCase {
@@ -153,40 +153,29 @@ const drainerRecording: Recording = {
   },
 };
 
-/** Lists the Rpc methods called, and can stand for an unreachable endpoint. */
+/**
+ * Lists the JSON-RPC methods an endpoint is asked, and can stand for an
+ * unreachable endpoint.
+ */
 function observed(
-  rpc: Rpc,
+  base: RpcEndpoint,
   down = false,
-): { readonly rpc: Rpc; readonly methods: string[] } {
+): { readonly endpoint: RpcEndpoint; readonly methods: string[] } {
   const methods: string[] = [];
-  const note = (name: string) => {
-    methods.push(name);
-    if (down) throw new Error("network down");
-  };
   return {
     methods,
-    rpc: {
-      getGenesisHash: async () => (
-        note("getGenesisHash"),
-        rpc.getGenesisHash()
-      ),
-      getAccounts: async (addresses) => (
-        note("getAccounts"),
-        rpc.getAccounts(addresses)
-      ),
-      simulate: async (transaction, addresses) => (
-        note("simulate"),
-        rpc.simulate(transaction, addresses)
-      ),
-      latestBlockhash: async () => (
-        note("latestBlockhash"),
-        rpc.latestBlockhash()
-      ),
+    endpoint: {
+      url: base.url,
+      fetch: async (url, init) => {
+        methods.push((JSON.parse(init.body) as { method: string }).method);
+        if (down) throw new Error("network down");
+        return base.fetch(url, init);
+      },
     },
   };
 }
 
-const drainerRpc = () => recordedRpc(drainerRecording);
+const drainerRpc = () => recordedEndpoint(drainerRecording);
 
 const ready = (result: Preflight) => {
   assert.equal(result.kind, "ready");
@@ -257,8 +246,8 @@ describe("E-09 done test: the drainer pre-flight", () => {
 
 describe("pre-flight paths", () => {
   it("stops at an endpoint that is not devnet", async () => {
-    const { rpc, methods } = observed(
-      recordedRpc({ ...drainerRecording, genesisHash: MINT }),
+    const { endpoint: rpc, methods } = observed(
+      recordedEndpoint({ ...drainerRecording, genesisHash: MINT }),
     );
     assert.deepEqual(await preflight(rpc, drainer.transaction, USER), {
       kind: "not-devnet",
@@ -267,7 +256,7 @@ describe("pre-flight paths", () => {
   });
 
   it("still decodes when the RPC cannot be reached, and says the simulation did not run", async () => {
-    const { rpc } = observed(drainerRpc(), true);
+    const { endpoint: rpc } = observed(drainerRpc(), true);
     const result = ready(await preflight(rpc, drainer.transaction, USER));
     assert.equal(result.simulation.status, "not-run");
     assert.deepEqual(
@@ -278,7 +267,7 @@ describe("pre-flight paths", () => {
 
   it("passes a simulation error through for an unknown program, without a crash", async () => {
     const err = { InstructionError: [1, "InvalidInstructionData"] };
-    const rpc = recordedRpc({
+    const rpc = recordedEndpoint({
       ...drainerRecording,
       simulation: { ...drainerRecording.simulation, err },
     });

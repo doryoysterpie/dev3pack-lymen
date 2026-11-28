@@ -38,12 +38,11 @@ import {
 import { ADDRESS_LOOKUP_TABLE_PROGRAM } from "./programs.ts";
 import {
   assertDevnet,
-  isAmount,
   isPublicKey,
-  isSlot,
+  jsonRpc,
   RpcError,
-  type AccountState,
   type Rpc,
+  type RpcEndpoint,
 } from "./rpc.ts";
 import {
   balanceChanges,
@@ -177,33 +176,8 @@ function lookupProblem(
 }
 
 /**
- * Any Rpc can be passed in, not only jsonRpc, so each account's owner is
- * checked here as well: an owner that is not a public key is not evidence.
- */
-function validStates(
-  states: readonly (AccountState | null)[],
-  asked?: number,
-): readonly (AccountState | null)[] {
-  if (
-    !Array.isArray(states) ||
-    (asked !== undefined && states.length !== asked)
-  ) {
-    throw new Error("the RPC did not return the accounts asked");
-  }
-  if (!states.every((state) => state === null || isPublicKey(state?.owner))) {
-    throw new Error("an account's owner is not a public key");
-  }
-  if (
-    !states.every((state) => state === null || state.data instanceof Uint8Array)
-  ) {
-    throw new Error("an account's data is not bytes");
-  }
-  return states;
-}
-
-/**
- * The text of what an Rpc threw, for the reason no result is used. An Rpc
- * can throw anything, so reading it must not throw in turn.
+ * The text of what the RPC call threw, for the reason no result is used. A
+ * caller's fetch can throw anything, so reading it must not throw in turn.
  */
 function errorText(error: unknown): string {
   try {
@@ -221,35 +195,6 @@ function isNotDevnet(error: unknown): boolean {
   }
 }
 
-/**
- * The runtime error as JSON data, for any Rpc: null, booleans, strings,
- * finite numbers, arrays and plain objects, with a bigint written as its
- * decimal string. Anything else, or a cycle, is not evidence, and throws.
- */
-function jsonError(value: unknown, seen: readonly object[] = []): unknown {
-  const refused = () => new Error("the simulation's error is not JSON data");
-  if (
-    value === null ||
-    typeof value === "boolean" ||
-    typeof value === "string"
-  ) {
-    return value;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw refused();
-    return value;
-  }
-  if (typeof value === "bigint") return value.toString();
-  if (typeof value !== "object" || seen.includes(value)) throw refused();
-  const inside = [...seen, value];
-  if (Array.isArray(value)) return value.map((item) => jsonError(item, inside));
-  const prototype = Object.getPrototypeOf(value) as unknown;
-  if (prototype !== Object.prototype && prototype !== null) throw refused();
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [key, jsonError(item, inside)]),
-  );
-}
-
 async function loadTables(
   rpc: Rpc,
   transaction: ParsedTransaction,
@@ -257,7 +202,7 @@ async function loadTables(
   const keys = transaction.message.lookups.map((lookup) => lookup.table);
   const tables = new Map<string, readonly string[]>();
   if (keys.length === 0) return tables;
-  const states = validStates(await rpc.getAccounts(keys), keys.length);
+  const states = await rpc.getAccounts(keys);
   keys.forEach((key, i) => {
     const state = states[i];
     if (state === null || state.owner !== ADDRESS_LOOKUP_TABLE_PROGRAM) return;
@@ -277,7 +222,7 @@ async function loadTables(
  * stops it.
  */
 export async function preflight(
-  rpc: Rpc,
+  endpoint: RpcEndpoint,
   sent: string,
   user: string,
 ): Promise<Preflight> {
@@ -316,6 +261,8 @@ export async function preflight(
   // nothing shows which token accounts are the wallet's.
   let read = false;
   try {
+    // The package's own JSON-RPC client is the only RPC (rpc.ts).
+    const rpc = jsonRpc(endpoint);
     await assertDevnet(rpc);
     tables = await loadTables(rpc, transaction);
     const refused = lookupProblem(transaction, tables);
@@ -327,15 +274,11 @@ export async function preflight(
     const unwatched = watchProblem(feePayer, accounts);
     if (unwatched !== null) throw new Error(unwatched);
     const watched = watchedAddresses(feePayer, accounts);
-    const before = validStates(await rpc.getAccounts(watched), watched.length);
+    const before = await rpc.getAccounts(watched);
     read = true;
     owned = ownedTokenAccounts(feePayer, watched, before, []);
     const result = await rpc.simulate(base64, watched);
-    validStates(result.accounts);
-    if (result.slot !== null && !isSlot(result.slot)) {
-      throw new Error("the simulation's slot is not a slot");
-    }
-    const err = jsonError(result.err);
+    const err = result.err;
     if (result.accounts.length !== watched.length) {
       throw new Error(
         `the simulation returned ${result.accounts.length} accounts for the ${watched.length} asked`,
@@ -356,24 +299,12 @@ export async function preflight(
         "the simulation did not return the balances of its own run",
       );
     }
-    // Any Rpc can be passed in, not only jsonRpc, so every amount is checked
-    // here as well: a balance that is not a whole amount is not used.
-    if (
-      ![...preBalances, ...postBalances].every(isAmount) ||
-      ![...preTokenBalances, ...postTokenBalances].every((balance) =>
-        isAmount(balance.amount),
-      )
-    ) {
-      throw new Error(
-        "the simulation returned a balance that is not a whole amount",
-      );
-    }
     // The amounts come from the simulation's own run, except a token
     // account's in a transaction with no token program, which cannot change
     // (simulate.ts, balanceChanges). The other fields come from the read
     // before it, which a second read must confirm, so a change another
     // transaction made in between is not taken for this one's.
-    const again = validStates(await rpc.getAccounts(watched), watched.length);
+    const again = await rpc.getAccounts(watched);
     if (!unchangedBetween(before, again)) {
       throw new Error(
         "an account limen watches changed on devnet during the check",
@@ -555,7 +486,7 @@ export function toReport(result: Preflight): PreflightReport {
  */
 export async function preflightTransaction(
   transaction: Uint8Array,
-  options: { readonly rpc: Rpc; readonly user: string },
+  options: { readonly endpoint: RpcEndpoint; readonly user: string },
 ): Promise<{
   summary: PreflightReport;
   drainPattern: boolean;
@@ -570,7 +501,7 @@ export async function preflightTransaction(
     };
   }
   const result = await preflight(
-    options.rpc,
+    options.endpoint,
     encodeBase64(transaction),
     options.user,
   );

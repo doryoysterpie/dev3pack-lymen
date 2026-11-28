@@ -21,12 +21,13 @@ import {
   SYSTEM_PROGRAM,
   TOKEN_PROGRAM,
 } from "./programs.ts";
-import { jsonRpc, type Fetch } from "./rpc.ts";
+import type { Fetch } from "./rpc.ts";
 import {
-  recordedRpc,
+  endpointFor,
+  recordedEndpoint,
   type RecordedAccount,
   type Recording,
-} from "./recorded.ts";
+} from "../test-support/recorded.ts";
 
 const fixture = JSON.parse(
   readFileSync(
@@ -132,7 +133,7 @@ async function drain(
   recording: Recording,
 ): Promise<boolean> {
   const result = await preflightTransaction(transaction, {
-    rpc: recordedRpc(recording),
+    endpoint: recordedEndpoint(recording),
     user: USER,
   });
   assert.equal(result.summary.kind, "ready");
@@ -372,7 +373,7 @@ describe("m9, m10, m11: a simulation that did not run is not a clean run", () =>
   const base64 = () => encodeBase64(transaction());
 
   it("m9: an answer with no err field and no accounts is marked not run, and blocks signing", async () => {
-    const answer: Fetch = async (_url, init) => {
+    const answer: Fetch = async (url, init) => {
       const request = JSON.parse(init.body) as {
         id: number;
         method: string;
@@ -386,10 +387,11 @@ describe("m9, m10, m11: a simulation that did not run is not a clean run", () =>
       return {
         ok: true,
         status: 200,
-        json: async () => ({ jsonrpc: "2.0", id: request.id, result }),
+        url,
+        text: JSON.stringify({ jsonrpc: "2.0", id: request.id, result }),
       };
     };
-    const result = await preflight(jsonRpc(answer, "x"), base64(), USER);
+    const result = await preflight(endpointFor(answer, "x"), base64(), USER);
     assert.ok(result.kind === "ready");
     assert.equal(result.simulation.status, "not-run");
     assert.deepEqual(result.blocks, ["simulation-not-run"]);
@@ -398,7 +400,7 @@ describe("m9, m10, m11: a simulation that did not run is not a clean run", () =>
 
   it("m10: an endpoint that never answers times out as not run", async () => {
     const hang: Fetch = () => new Promise(() => {});
-    const result = await preflight(jsonRpc(hang, "x", 50), base64(), USER);
+    const result = await preflight(endpointFor(hang, "x", 50), base64(), USER);
     assert.ok(result.kind === "ready");
     assert.deepEqual(result.simulation, {
       status: "not-run",
@@ -408,12 +410,13 @@ describe("m9, m10, m11: a simulation that did not run is not a clean run", () =>
   });
 
   it("m11: devnet never confirmed (getGenesisHash HTTP 503) blocks signing", async () => {
-    const down: Fetch = async () => ({
+    const down: Fetch = async (url) => ({
       ok: false,
       status: 503,
-      json: async () => ({}),
+      url,
+      text: "{}",
     });
-    const result = await preflight(jsonRpc(down, "x"), base64(), USER);
+    const result = await preflight(endpointFor(down, "x"), base64(), USER);
     assert.ok(result.kind === "ready");
     assert.equal(result.simulation.status, "not-run");
     assert.equal(signingAllowed(result, base64()), false);
@@ -421,7 +424,7 @@ describe("m9, m10, m11: a simulation that did not run is not a clean run", () =>
 
   it("m11: a failed simulation blocks signing", async () => {
     const result = await preflight(
-      recordedRpc({
+      recordedEndpoint({
         accounts: { [USER]: wallet(5_000_000_000) },
         simulation: { err: { InstructionError: [0, "Custom"] }, accounts: {} },
       }),
@@ -435,7 +438,7 @@ describe("m9, m10, m11: a simulation that did not run is not a clean run", () =>
 
   it("a clean simulation leaves signing to the card", async () => {
     const result = await preflight(
-      recordedRpc({
+      recordedEndpoint({
         accounts: { [USER]: wallet(5_000_000_000) },
         simulation: { err: null, accounts: { [USER]: wallet(4_999_995_000) } },
       }),
@@ -454,7 +457,7 @@ describe("m5: an empty token account closed back to the wallet", () => {
 
   it("shows no drain pattern from the decode alone", async () => {
     const result = await preflightTransaction(transaction(), {
-      rpc: jsonRpc(async () => {
+      endpoint: endpointFor(async () => {
         throw new Error("offline");
       }, "x"),
       user: USER,
@@ -482,7 +485,7 @@ describe("m5: an empty token account closed back to the wallet", () => {
       spl.createCloseAccountInstruction(tokenAccount, attacker, user),
     ]);
     const result = await preflightTransaction(closeToAttacker, {
-      rpc: jsonRpc(async () => {
+      endpoint: endpointFor(async () => {
         throw new Error("offline");
       }, "x"),
       user: USER,
@@ -493,12 +496,12 @@ describe("m5: an empty token account closed back to the wallet", () => {
 
 describe("n2: a hand-over to the wallet itself is no hand-over", () => {
   const offline = () =>
-    jsonRpc(async () => {
+    endpointFor(async () => {
       throw new Error("offline");
     }, "x");
   const decodedDrain = async (instruction: web3.TransactionInstruction) => {
     const result = await preflightTransaction(build([instruction]), {
-      rpc: offline(),
+      endpoint: offline(),
       user: USER,
     });
     assert.equal(result.summary.kind, "ready");
@@ -547,7 +550,7 @@ describe("n2: a hand-over to the wallet itself is no hand-over", () => {
 
 describe("n3: which token accounts a report marks as the wallet's", () => {
   const offline = () =>
-    jsonRpc(async () => {
+    endpointFor(async () => {
       throw new Error("offline");
     }, "x");
   const reportOf = async (
@@ -555,7 +558,7 @@ describe("n3: which token accounts a report marks as the wallet's", () => {
     rpc: ReturnType<typeof offline>,
   ) => {
     const result = await preflightTransaction(build(instructions), {
-      rpc,
+      endpoint: rpc,
       user: USER,
     });
     assert.equal(result.summary.kind, "ready");
@@ -572,7 +575,7 @@ describe("n3: which token accounts a report marks as the wallet's", () => {
         spl.createTransferInstruction(other, tokenAccount, user, BigInt(1)),
       ]),
       {
-        rpc: recordedRpc({
+        endpoint: recordedEndpoint({
           accounts: {
             [USER]: wallet(5_000_000_000),
             [K.userToken2022Account]: token({ amount: BigInt(9) }),

@@ -5,13 +5,17 @@ import { describe, it } from "node:test";
 import {
   decodePublicKey,
   FROM_READ_BEFORE,
-  jsonRpc,
   preflight,
-  recordedRpc,
   SYSTEM_PROGRAM,
   TOKEN_PROGRAM,
   type Fetch,
 } from "@limen/preflight";
+
+// Test support from the package, not one of its exports.
+import {
+  endpointFor,
+  recordedEndpoint,
+} from "../../../../packages/preflight/test-support/recorded.ts";
 
 import { linkHost, transactionCardText, withDecimals } from "./card-text.ts";
 
@@ -42,7 +46,7 @@ const { attacker, userTokenAccount, unknownProgram } = fixture.keys;
 const unreachable: Fetch = async () => {
   throw new Error("offline");
 };
-const offline = jsonRpc(unreachable, "https://devnet.example");
+const offline = endpointFor(unreachable, "https://devnet.example");
 
 describe("E-09 done test: what the transaction card shows", () => {
   it("shows the drainer's SOL balance out and the delegate approved, flagged", async () => {
@@ -119,7 +123,7 @@ describe("E-09 done test: what the transaction card shows", () => {
 
 describe("transaction card text", () => {
   it("says when the simulation gives the wallet a new owner program", async () => {
-    const rpc = recordedRpc({
+    const rpc = recordedEndpoint({
       accounts: {
         [fixture.user]: {
           lamports: 5_000_000_000,
@@ -205,7 +209,7 @@ describe("transaction card text", () => {
     );
     assert.equal(
       await statusWith(
-        recordedRpc({
+        recordedEndpoint({
           accounts: { [fixture.user]: walletAccount(5_000_000_000) },
           simulation: {
             err: null,
@@ -217,7 +221,7 @@ describe("transaction card text", () => {
     );
     assert.equal(
       await statusWith(
-        recordedRpc({
+        recordedEndpoint({
           accounts: { [fixture.user]: walletAccount(5_000_000_000) },
           simulation: {
             err: { InstructionError: [1, "Custom"] },
@@ -231,7 +235,7 @@ describe("transaction card text", () => {
 
   it("m5: a token account closed back to the wallet is not flagged", async () => {
     const ran = await preflight(
-      recordedRpc({
+      recordedEndpoint({
         accounts: {},
         simulation: { err: null, accounts: {} },
       }),
@@ -401,7 +405,7 @@ describe("transaction card text", () => {
       data: ["", "base64"] as const,
     });
     const result = await preflight(
-      recordedRpc({
+      recordedEndpoint({
         accounts: {
           [fixture.user]: walletAccount(5_000_000_000, SYSTEM_PROGRAM),
         },
@@ -564,7 +568,7 @@ describe("the owner's audit: what the card claims", () => {
     tokenData[64] = 200;
     tokenData[108] = 1;
     const result = await preflight(
-      recordedRpc({
+      recordedEndpoint({
         accounts: {
           [fixture.user]: {
             lamports: 5_000_000_000,
@@ -633,7 +637,7 @@ describe("the owner's audit: what the card claims", () => {
       data: ["", "base64"] as const,
     });
     const result = await preflight(
-      recordedRpc({
+      recordedEndpoint({
         accounts: { [fixture.user]: walletAccount(5_000_000_000) },
         simulation: {
           err: { InstructionError: [1, "Custom"] },
@@ -651,39 +655,6 @@ describe("the owner's audit: what the card claims", () => {
     assert.ok(
       card.status.endsWith(
         "The simulation failed, so no balance change is shown.",
-      ),
-    );
-  });
-
-  it("A6: a custom Rpc's bigint error still gives the failed-simulation card", async () => {
-    const recorded = recordedRpc({
-      accounts: {
-        [fixture.user]: {
-          lamports: 5_000_000_000,
-          owner: SYSTEM_PROGRAM,
-          data: ["", "base64"],
-        },
-      },
-      simulation: { err: null, accounts: {} },
-    });
-    const result = await preflight(
-      {
-        ...recorded,
-        simulate: async (base64, addresses) => ({
-          ...(await recorded.simulate(base64, addresses)),
-          err: { InstructionError: [1, { Custom: BigInt(6) }] },
-        }),
-      },
-      transactionOf("unknown program"),
-      fixture.user,
-    );
-    const card = transactionCardText(LINK, null, result);
-    assert.ok(
-      card.rows.some(
-        (row) =>
-          row.label === "Simulation" &&
-          row.value ===
-            'Failed on devnet: {"InstructionError":[1,{"Custom":"6"}]}. Signed now, the transaction would most likely fail the same way.',
       ),
     );
   });
@@ -744,7 +715,7 @@ describe("the owner's audit: what the card claims", () => {
       data: [Buffer.alloc(length).toString("base64"), "base64"] as const,
     });
     const result = await preflight(
-      recordedRpc({
+      recordedEndpoint({
         accounts: { [fixture.user]: wallet(5_000_000_000, 0) },
         simulation: {
           err: null,
