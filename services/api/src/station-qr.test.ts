@@ -159,6 +159,22 @@ test("with no usable clock the verifier fails closed: missing, NaN or infinite n
   assert.equal(verdict({ allowlist: ALLOWLIST, now: T }), "invalid_clock");
 });
 
+test("a QR whose full 60 s would end exactly at its session's end is cut to 59 s, so it reads as cut short", () => {
+  const { text, payload } = issueStationQr({
+    station: "st-front",
+    session: "day-2",
+    now: T,
+    signer: ORGANIZER,
+    nonce: NONCE,
+    notAfter: T + 60,
+  });
+  assert.equal(payload.expires_at, T + 59);
+  assert.equal(reasonOf(text, T + 59 - 0.001), "ok");
+  // Refused from its expires_at on, before the session's end, where the API moves on.
+  assert.equal(reasonOf(text, T + 59), "expired");
+  assert.equal(reasonOf(text, T + 60), "expired");
+});
+
 test("a QR issued near the end of its session expires when the session ends", () => {
   const sessionEnd = T + 1;
   const { text, payload } = issueStationQr({

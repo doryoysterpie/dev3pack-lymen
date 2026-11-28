@@ -15,12 +15,14 @@
 // The signature covers the encoded payload text, so changing any character of it, even one
 // that decodes to the same bytes, breaks the signature. The station page shows a fresh QR
 // every 30 s and each QR lives 60 s, so a participant who scans just before a rotation still
-// has 30 s to finish. A QR issued near the end of a session expires when the session ends.
+// has 30 s to finish. A QR whose 60 s would reach its session's end is cut short: it expires at
+// that end, or one second before it when the 60 s would end exactly there, so that every QR
+// that reaches its session's end carries expires_at < issued_at + 60 and reads as cut short.
 //
 // The verifier measures time in milliseconds: a QR is refused at any instant more than 60 s
-// after issued_at, or after expires_at, not only from the next whole second. A QR cut short by
-// its session's end is refused from that end itself, since a session's end is exclusive and at
-// that instant the API already issues for the next session.
+// after issued_at, or after expires_at, not only from the next whole second. A cut-short QR is
+// refused from its expires_at on, at or before its session's end. A session's end is exclusive:
+// from that instant the API issues for the next session, or answers 409 if none follows.
 import {
   createPublicKey,
   randomBytes,
@@ -147,8 +149,10 @@ function parsePayload(encoded: string): StationPayload | null {
 
 /**
  * Issues a station QR for `station` in `session` at Unix time `now` (whole seconds), valid for
- * 60 s or until `notAfter`, whichever comes first. Pass the session's end as `notAfter` so no
- * QR outlives its session.
+ * 60 s, or cut short when those 60 s would reach `notAfter`. Pass the session's end as
+ * `notAfter` so no QR outlives its session. A cut-short QR expires at `notAfter`, or one second
+ * before it when the full 60 s would end exactly at `notAfter`, so its expires_at is always less
+ * than issued_at + 60 and the verifier refuses it from expires_at on.
  */
 export function issueStationQr(input: {
   station: string;
@@ -164,9 +168,18 @@ export function issueStationQr(input: {
     throw new Error("session ID must be 1 to 64 characters of [A-Za-z0-9_-]");
   if (!isUnixSeconds(input.now))
     throw new Error("now must be a Unix time in whole seconds");
-  const notAfter = input.notAfter ?? input.now + STATION_QR_LIFETIME_S;
-  if (!isUnixSeconds(notAfter) || notAfter <= input.now)
+  const full = input.now + STATION_QR_LIFETIME_S;
+  const notAfter = input.notAfter;
+  if (
+    notAfter !== undefined &&
+    (!isUnixSeconds(notAfter) || notAfter <= input.now)
+  )
     throw new Error("notAfter must be a Unix time in whole seconds after now");
+  // Cut short whenever the full 60 s would reach notAfter, and always to under 60 s.
+  const expiresAt =
+    notAfter === undefined || full < notAfter
+      ? full
+      : Math.min(notAfter, full - 1);
   const nonce = input.nonce ?? randomBytes(16).toString("base64url");
   if (!NONCE.test(nonce) || !decodeExact(nonce, 16))
     throw new Error("nonce must be 16 bytes in base64url");
@@ -176,7 +189,7 @@ export function issueStationQr(input: {
     session: input.session,
     nonce,
     issued_at: input.now,
-    expires_at: Math.min(input.now + STATION_QR_LIFETIME_S, notAfter),
+    expires_at: expiresAt,
   };
   const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString(
     "base64url",
@@ -252,9 +265,10 @@ export function verifyStationQr(
   const issuedMs = parsed.issued_at * 1000;
   if (options.nowMs < issuedMs - STATION_QR_CLOCK_SKEW_S * 1000)
     return reject("not_yet_valid");
-  // A full-length QR is accepted up to and including 60,000 ms after issue. A QR whose expiry
-  // was cut short by its session's end is refused from that end on, where the issuer's
-  // half-open session window has already moved to the next session.
+  // A full-length QR is accepted up to and including 60,000 ms after issue. A cut-short QR
+  // (expires_at < issued_at + 60) is refused from its expires_at on. The issuer cuts short
+  // every QR whose 60 s would reach its session's end, to that end or earlier, so none verifies
+  // at or after the instant the issuer's half-open session window moves on.
   const cutShort = parsed.expires_at < parsed.issued_at + STATION_QR_LIFETIME_S;
   const expiresMs = parsed.expires_at * 1000;
   if (
