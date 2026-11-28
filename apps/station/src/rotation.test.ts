@@ -135,8 +135,8 @@ test("the display shows a fresh QR from the API at 0 s, 30 s and 60 s", async ()
     session: "day-2",
     issuedAt: 1090,
     expiresAt: 1150,
-    // Fetched at 60 s: the earlier of its payload's expiry, 1150 s, and its 60 s window after the
-    // request left, less the 5 s skew.
+    // Fetched at 60 s: the earlier of its expires_at, 1150 s, and its 60 s window after the request
+    // left, less the 5 s skew.
     deadline: 60_000 + 60_000 - 5_000,
   });
 });
@@ -389,7 +389,7 @@ function payloadAnswer(
   }) as unknown as typeof fetch;
 }
 
-test("a QR whose payload gives 20 s carries the deadline 15 s after its request left, 5 s early, and the next fetch comes then", async () => {
+test("a fetched QR whose issued_at and expires_at are 20 s apart gets the deadline 15 s after its request left, 5 s early, and the next fetch comes then", async () => {
   const clock = fakeClock();
   const fetchedAt: number[] = [];
   const deadlines: number[] = [];
@@ -430,7 +430,7 @@ test("with a 2 s response delay, the deadline is counted from when the request l
   startRotation({
     fetchQr: (signal) => {
       calls++;
-      // The first answer takes 2 s and its payload gives 10 s; the next fetch hangs.
+      // The first answer takes 2 s, with issued_at and expires_at 10 s apart; the next fetch hangs.
       if (calls === 1)
         return new Promise<StationQr>((resolve) => {
           clock.setTimeout(
@@ -455,8 +455,8 @@ test("with a 2 s response delay, the deadline is counted from when the request l
   assert.deepEqual(deadlines, [{ at: 2000, deadline: 10_000 - 5_000 }]);
 });
 
-test("a full-length QR issued 2 minutes ago, by its payload, is not drawn, and the next fetch waits the retry delay", async () => {
-  // The page's clock reads T; the QR's payload gives T - 120 s and a 60 s window.
+test("a fetched QR with a 60 s window whose issued_at is 2 minutes ago is not drawn, and the next fetch waits the retry delay", async () => {
+  // The page's clock reads T; the fetched QR's issued_at is T - 120 s and its window 60 s.
   const T = 1_795_000_000;
   const clock = fakeClock(T * 1000);
   const shown: string[] = [];
@@ -525,7 +525,8 @@ test("the deadline and the next fetch come from the payload's times, not from th
 });
 
 test("a QR whose payload's window has passed when it arrives is not drawn, whatever the answer's other fields say", async () => {
-  // Signed for 1 s, arriving 2 s after the request left; the answer's expires_at claims 60 s.
+  // Its payload gives a 1 s window, and it arrives 2 s after the request left; the answer's
+  // expires_at claims 60 s.
   const clock = fakeClock();
   const shown: { at: number; kind: string }[] = [];
   let calls = 0;
@@ -556,7 +557,7 @@ test("a QR whose payload's window has passed when it arrives is not drawn, whate
   assert.deepEqual(shown, [{ at: 2000, kind: "refreshing" }]);
 });
 
-test("with the station's clock 2 s behind the API's, the QR stops showing 5 s before its window ends, still before the API's expiry", async () => {
+test("with the station's clock 2 s behind the API's, the deadline is 5 s before the window ends on the station's clock, T + 53 s, and T + 55 s on the API's", async () => {
   const T = 1_795_000_000;
   // The API signs at T for 60 s; the station's clock reads T - 2 s.
   const clock = fakeClock(T * 1000 - 2000);
@@ -611,4 +612,25 @@ test("the next fetch is timed from the clock after the QR is drawn", async () =>
   assert.deepEqual(delays, [10_000, 20_000]);
   await clock.advance(20_000);
   assert.deepEqual(fetchedAt, [0, 30_000]);
+});
+
+test("a QR that goes stale while it is drawn is not shown, and the next fetch waits the retry delay", async () => {
+  const clock = fakeClock();
+  const delays: number[] = [];
+  startRotation({
+    fetchQr: async () => response(1),
+    // The QR's window is 60 s, so its deadline is 55 s after the request left; drawing takes 56 s.
+    render: async (view) => {
+      if (view.kind === "qr") clock.jump(56_000);
+    },
+    now: () => clock.now,
+    setTimeout: (fn, ms) => {
+      delays.push(ms);
+      return clock.setTimeout(fn, ms);
+    },
+    clearTimeout: clock.clearTimeout,
+  });
+  await flush();
+  // The fetch timeout's 10 s, then the retry delay.
+  assert.deepEqual(delays, [10_000, RETRY_AFTER_MS]);
 });

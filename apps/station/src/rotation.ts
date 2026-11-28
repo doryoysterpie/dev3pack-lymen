@@ -5,8 +5,9 @@
 //
 // on the page's clock, where sentAt is when the request left. The 5 s is the verifier's skew,
 // within which the page assumes the station's clock agrees with the API's; it does not check
-// that. A QR past its deadline on arrival is not drawn, and the next fetch waits 5 s. A failed
-// fetch, or one with no answer in 10 s, shows why and is retried after 5 s.
+// that. A QR past its deadline on arrival is not drawn. A QR not shown, stale on arrival or by the
+// end of its draw, makes the next fetch wait 5 s. A failed fetch, or one with no answer in 10 s,
+// shows why and is retried after 5 s.
 
 /** One QR as the page shows it: the QR text and what its signed payload says. */
 export interface StationQr {
@@ -47,8 +48,10 @@ export function deadlineOf(sentAt: number, qr: StationQr): number {
 export interface RotationDeps {
   /** Fetches one QR. The rotation aborts `signal` when the fetch runs past FETCH_TIMEOUT_MS. */
   readonly fetchQr: (signal: AbortSignal) => Promise<StationQr>;
-  /** Shows a view; for a QR, resolves once it is drawn. */
-  readonly render: (view: StationView) => void | Promise<void>;
+  /** Shows a view. For a QR it resolves once drawn, false when the QR was not shown. */
+  readonly render: (
+    view: StationView,
+  ) => void | boolean | Promise<void | boolean>;
   /** The page's clock, in milliseconds since the Unix epoch, such as Date.now(). */
   readonly now: () => number;
   readonly setTimeout: (fn: () => void, ms: number) => unknown;
@@ -92,13 +95,15 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
         deps.render({ kind: "refreshing" });
         next = RETRY_AFTER_MS;
       } else {
-        await deps.render({ kind: "qr", ...res, deadline });
+        const shown = await deps.render({ kind: "qr", ...res, deadline });
         if (stopped) return;
-        // The next fetch is timed from the clock after the draw.
-        next = Math.max(
-          0,
-          Math.min(deadline, sentAt + ROTATION_S * 1000) - deps.now(),
-        );
+        // The next fetch is timed from the clock after the draw. A QR the page did not show,
+        // or whose deadline passed while it was drawn, is treated as stale on arrival.
+        const after = deps.now();
+        next =
+          shown === false || after >= deadline
+            ? RETRY_AFTER_MS
+            : Math.min(deadline, sentAt + ROTATION_S * 1000) - after;
       }
     } catch (err) {
       if (stopped) return;
