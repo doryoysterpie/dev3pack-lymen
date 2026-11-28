@@ -1,6 +1,21 @@
 <!doctype html>
 <html lang="en-CA">
   <head>
+    <script>
+      // E-03: the first thing on the page, before anything else loads or renders. It keeps the
+      // address, display token included, in window.limenStationAddress for the page module, and
+      // removes the token from the address bar and the current history entry.
+      (function () {
+        var href = window.location.href;
+        Object.defineProperty(window, "limenStationAddress", {
+          value: href,
+          configurable: true,
+        });
+        var bare = new URL(href);
+        bare.hash = "";
+        window.history.replaceState(null, "", bare.href);
+      })();
+    </script>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>limen station</title>
