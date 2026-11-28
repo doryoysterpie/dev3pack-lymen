@@ -4,12 +4,18 @@ The Expo React Native app with Mobile Wallet Adapter (D-02): the scanner, the QR
 
 ## What is here
 
-| Path                 | What it does                                                                                                                                    |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `App.tsx`            | Camera screen. It asks for camera access, reads QR codes with `expo-camera`, classifies the text and shows a result card with the scanned text. |
-| `src/qr/classify.ts` | QR type detection, a pure module: station, Solana Pay transfer request, Solana Pay transaction request, http or https URL, or other.            |
-| `src/qr/base58.ts`   | Base58 decoding, used to check that a Solana Pay recipient is a 32-byte public key.                                                             |
-| `src/qr/describe.ts` | Result-card text for each QR class, kept in one place for the copy rules.                                                                       |
+| Path                           | What it does                                                                                                                                    |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `App.tsx`                      | Camera screen. It asks for camera access, reads QR codes with `expo-camera`, classifies the text and shows a result card with the scanned text. |
+| `src/qr/classify.ts`           | QR type detection, a pure module: station, Solana Pay transfer request, Solana Pay transaction request, http or https URL, or other.            |
+| `src/qr/base58.ts`             | Base58 decoding, used to check that a Solana Pay recipient is a 32-byte public key.                                                             |
+| `src/qr/describe.ts`           | Result-card text for each QR class, kept in one place for the copy rules.                                                                       |
+| `src/pay/transfer.ts`          | Transfer request card fields, from the classifier's parsed fields, a pure module.                                                               |
+| `src/pay/recipient-lists.ts`   | Loads the organizer allowlist and the flagged list and gives a recipient its status.                                                            |
+| `src/pay/recipient-lists.json` | The devnet fixture lists the app bundles: the organizer key and the demo's flagged addresses.                                                   |
+| `src/pay/card-text.ts`         | Transfer card text.                                                                                                                             |
+| `src/result-card.ts`           | Picks the card for a scanned QR: the transfer card for a transfer request, the E-04 summary for anything else.                                  |
+| `src/ui/CardView.tsx`          | Renders a card.                                                                                                                                 |
 
 ## How a QR is classified
 
@@ -19,6 +25,14 @@ The Expo React Native app with Mobile Wallet Adapter (D-02): the scanner, the QR
 - **Other**: anything else.
 
 URLs are parsed with `whatwg-url-minimum`, the package Expo installs as the global `URL` on the device, so the Node tests run the parser the app runs.
+
+## Transfer request card (E-08)
+
+For a Solana Pay transfer request the card shows the recipient, the amount, the token (SOL, or an SPL token by its mint), any references, and the label, message and memo marked as written in the QR. Those three come from whoever made the QR, so the card quotes each on one line, writes any line break, control character or Unicode bidirectional control as its code point (a line break shows as `\u{000A}`), writes a backslash as `\\` and a quotation mark as `\"` so the text cannot close its own quotes and reads back to one input, and draws them boxed and monospaced, apart from limen's own status line. `src/pay/transfer.ts` does not parse the URL: it reads the fields and the problem `src/qr/classify.ts` returns, so the transfer request rules live in one place. The one rule it adds is the SPL token decimal check, which needs the mint's decimals; the app does not look those up, so an SPL token amount shows that its decimal places were not checked.
+
+The recipient's status comes from `src/pay/recipient-lists.json`, a devnet fixture list bundled with the app: **flagged** when the address is on its flagged list, **organizer** when it is on its organizer list, otherwise neither. A recipient on both is flagged. Flagged means only that the address is on that bundled list; the app checks no feed of real scam reports. The organizer list holds the devnet organizer public key Lane A made; the flagged list holds the fixture addresses the demo uses. `src/pay/shipped-lists.test.ts` loads that file, not test lists, owes every entry it ships, and checks the card for each.
+
+A malformed transfer request gets a card that names its problem, from the classifier's list.
 
 ## Tests
 
@@ -30,6 +44,8 @@ The script typechecks the app without Node types (`tsconfig.json`), typechecks t
 
 The E-04 done test is `src/qr/classify.test.ts`. It reads `fixtures/qr/e04-classify.json`: ten QR texts, two of them malformed Solana Pay URLs, each with the class it owes.
 
+The E-08 done test is `src/pay/transfer.test.ts`, which reads `fixtures/pay/e08-transfer.json` and asserts the full card result each URL owes, and `src/result-card.test.ts`, which asserts the card text for an organizer recipient and a flagged one.
+
 ## Not checked yet
 
-No device or emulator check has run. The camera, the permission prompt and QR decoding on a device are unverified until the Android emulator exists. `npx expo export --platform android` bundles the app, which shows that its imports resolve; it does not run the app.
+No device or emulator check has run. The camera, the permission prompt, QR decoding and the cards on a device are unverified until the Android emulator exists. `npx expo export --platform android` bundles the app, which shows that its imports resolve; it does not run the app.
