@@ -205,6 +205,23 @@ test("a pass with 64-character station and session IDs still fits in one transac
     size <= 1232,
     `serialized size ${size} is over the 1232-byte limit`,
   );
+  // At an address that already holds lamports, the top-up, allocate and assign still fit.
+  const funded = buildPassMintTransaction({
+    organizer: organizer.publicKey,
+    mint: mint.publicKey,
+    holder,
+    details: {
+      station: "s".repeat(64),
+      session: "t".repeat(64),
+      checkedInAt: 1_795_811_665,
+    },
+    lamports: 5_000_000,
+    funded: 1_000_000,
+  });
+  funded.recentBlockhash = Keypair.generate().publicKey.toBase58();
+  funded.sign(organizer, mint);
+  assert.equal(funded.instructions.length, tx.instructions.length + 2);
+  assert.ok(funded.serialize().length <= 1232);
 });
 
 test("station and session IDs over 64 bytes of UTF-8 are refused, before anything is sent", async () => {
@@ -284,12 +301,14 @@ const table =
 
 test("the module has one devnet connection: it exports nothing that makes one, and no helper takes a connection or an endpoint", async () => {
   const mod = await import("./pass-mint.ts");
-  // Exactly these functions: none makes a connection, and only devnetConnection returns one.
+  // Exactly these functions and the one error class: none makes a connection, and only
+  // devnetConnection returns one.
   assert.deepEqual(
     Object.keys(mod)
       .filter((name) => typeof mod[name as keyof typeof mod] === "function")
       .sort(),
     [
+      "MintAddressOccupiedError",
       "buildPassMintTransaction",
       "buildRevokeTransaction",
       "devnetConnection",
@@ -325,6 +344,7 @@ test("every request mintPass, passMintState and revokePass send goes to the devn
         calls.map((c) => c.method),
         [
           "getGenesisHash",
+          "getAccountInfo",
           "getMinimumBalanceForRentExemption",
           "getLatestBlockhash",
           "sendTransaction",
@@ -424,6 +444,7 @@ test("mintPass creates the pass at the mint keypair it is given", async () => {
         sent = Transaction.from(Buffer.from(String(params[0]), "base64"));
       return table({
         getGenesisHash: DEVNET_GENESIS_HASH,
+        getAccountInfo: accountInfoResult(null),
         getMinimumBalanceForRentExemption: 4_181_760,
         ...sendAnswers("5".repeat(88)),
       })(method, params);

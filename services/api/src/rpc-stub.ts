@@ -56,9 +56,13 @@ export async function withDevnetStub<T>(
   }
 }
 
-/** getAccountInfo's answer for an account owned by `owner` holding `data`, or for no account. */
+/**
+ * getAccountInfo's answer for an account owned by `owner` holding `data` and `lamports` (a
+ * million unless given), or for no account.
+ */
 export function accountInfoResult(
   account: { readonly owner: string; readonly data: Uint8Array } | null,
+  lamports = 1_000_000,
 ) {
   return {
     context: { slot: 1 },
@@ -68,7 +72,7 @@ export function accountInfoResult(
         : {
             data: [Buffer.from(account.data).toString("base64"), "base64"],
             executable: false,
-            lamports: 1_000_000,
+            lamports,
             owner: account.owner,
             rentEpoch: 0,
             space: account.data.length,

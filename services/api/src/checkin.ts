@@ -83,7 +83,10 @@ export interface PassMinter {
     },
   ): Promise<{ readonly signature: string }>;
   /** Reads the chain at `mint`: no account, the pass held by `wallet`, or a pass it does not hold. */
-  state(wallet: string, mint: string): Promise<"absent" | "minted" | "unheld">;
+  state(
+    wallet: string,
+    mint: string,
+  ): Promise<"absent" | "minted" | "unheld" | "occupied">;
 }
 
 /**
@@ -158,6 +161,17 @@ export function registrationsFrom(
 }
 
 /**
+ * The account at a check-in's mint address is one limen did not make, so no pass is minted over
+ * it and the check-in answers 502 mint_address_occupied, staying pending for an operator.
+ */
+export class MintAddressOccupied extends Error {
+  override name = "MintAddressOccupied";
+  constructor(mint: string) {
+    super(`mint address occupied: ${mint}`);
+  }
+}
+
+/**
  * E-06's pass mint on devnet, paid for and signed by the organizer key. It reaches devnet only
  * through pass-mint.ts's one connection, which no caller can replace; each mint and each chain
  * read first refuses a cluster whose genesis hash is not devnet's. E-06's code and
@@ -179,13 +193,20 @@ export function devnetMinter(organizer: OrganizerKey): PassMinter {
   return {
     async mint(wallet, seed, details) {
       const { web3, passes } = await loaded();
-      const minted = await passes.mintPass(
-        web3.Keypair.fromSecretKey(organizer.secretKeyBytes()),
-        new web3.PublicKey(wallet),
-        details,
-        web3.Keypair.fromSeed(seed),
-      );
-      return { signature: minted.signature };
+      const mintKey = web3.Keypair.fromSeed(seed);
+      try {
+        const minted = await passes.mintPass(
+          web3.Keypair.fromSecretKey(organizer.secretKeyBytes()),
+          new web3.PublicKey(wallet),
+          details,
+          mintKey,
+        );
+        return { signature: minted.signature };
+      } catch (err) {
+        if (err instanceof passes.MintAddressOccupiedError)
+          throw new MintAddressOccupied(mintKey.publicKey.toBase58());
+        throw err;
+      }
     },
     async state(wallet, mint) {
       const { web3, passes } = await loaded();
@@ -350,6 +371,7 @@ const refuse = (
     | "already_checked_in"
     | "pass_revoked"
     | "mint_failed"
+    | "mint_address_occupied"
     | BindRefusal,
   extra:
     | { readonly field: RequestField }
@@ -501,12 +523,14 @@ interface Reservation {
 
 /**
  * Brings a pending reservation to a pass. For a reservation an earlier request made, the chain is
- * read first: a pass already held by the wallet is recorded as done without minting, and any
- * other account at the address, a pass issued there and since burned, is recorded revoked and
- * answered 409, never minted again. Only an empty address is minted to, at the reservation's
- * address. Any failure leaves the reservation pending, never deleted, and
- * answers 502; the next request for this check-in reads the chain again. When two requests both
- * reach completion, only the one that moves the row from pending to done answers 201.
+ * read first (passMintState): a pass the wallet holds is recorded as done without minting; a pass
+ * issued at the address, an initialized Token-2022 mint, that the wallet does not hold is
+ * recorded revoked and answered 409, never minted again; and any other account there, one limen
+ * did not make, answers 502 mint_address_occupied and stays pending. An empty address, or one
+ * that holds only lamports anyone could have sent, is minted to. Any failure leaves the
+ * reservation pending, never deleted, and answers 502; the next request for this check-in reads
+ * the chain again. When two requests both reach completion, only the one that moves the row from
+ * pending to done answers 201.
  */
 async function completePass(
   deps: CheckinDeps,
@@ -540,8 +564,8 @@ async function completePass(
     if (reservation.earlier === true) {
       const state = await deps.minter.state(wallet, mint);
       if (state === "minted") return done(null);
-      // An account at the derived address means a pass was issued there, burned or not, so the
-      // check-in is never retried. The wallet does not hold it, so it was revoked.
+      // An initialized Token-2022 mint at the derived address is a pass issued there, burned or
+      // not, so the check-in is never retried. The wallet does not hold it, so it was revoked.
       if (state === "unheld") {
         deps.db
           .prepare(
@@ -550,6 +574,8 @@ async function completePass(
           .run(reservation.id);
         return refuse(409, "pass_revoked");
       }
+      // An account limen did not make: the row stays pending, for an operator.
+      if (state === "occupied") return refuse(502, "mint_address_occupied");
     }
     const { signature } = await deps.minter.mint(wallet, seed, {
       station: reservation.station,
@@ -557,7 +583,9 @@ async function completePass(
       checkedInAt: reservation.checkedInAt,
     });
     return done(signature);
-  } catch {
+  } catch (err) {
+    if (err instanceof MintAddressOccupied)
+      return refuse(502, "mint_address_occupied");
     return refuse(502, "mint_failed");
   }
 }

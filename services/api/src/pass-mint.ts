@@ -24,7 +24,9 @@ import {
   ExtensionType,
   getAccount,
   getAssociatedTokenAddressSync,
-  getMint,
+  type Account,
+  type Mint,
+  unpackMint,
   getMintLen,
   LENGTH_SIZE,
   TOKEN_2022_PROGRAM_ID,
@@ -150,20 +152,45 @@ export function buildPassMintTransaction(input: {
   holder: PublicKey;
   details: PassDetails;
   lamports: number;
+  /**
+   * Lamports already at the mint address, as a System-owned account with no data that anyone's
+   * transfer can make. When there are any, the account is topped up, allocated and assigned,
+   * each signed by the mint keypair, instead of created, which a funded address would refuse.
+   */
+  funded?: number;
 }): Transaction {
   const { organizer, mint, holder, details, lamports } = input;
+  const funded = input.funded ?? 0;
   const programId = TOKEN_2022_PROGRAM_ID;
+  const space = getMintLen(PASS_EXTENSIONS);
   const tokenAccount = passTokenAccount(mint, holder);
   const tx = new Transaction();
   tx.feePayer = organizer;
+  if (funded === 0) {
+    tx.add(
+      SystemProgram.createAccount({
+        fromPubkey: organizer,
+        newAccountPubkey: mint,
+        space,
+        lamports,
+        programId,
+      }),
+    );
+  } else {
+    if (lamports > funded)
+      tx.add(
+        SystemProgram.transfer({
+          fromPubkey: organizer,
+          toPubkey: mint,
+          lamports: lamports - funded,
+        }),
+      );
+    tx.add(
+      SystemProgram.allocate({ accountPubkey: mint, space }),
+      SystemProgram.assign({ accountPubkey: mint, programId }),
+    );
+  }
   tx.add(
-    SystemProgram.createAccount({
-      fromPubkey: organizer,
-      newAccountPubkey: mint,
-      space: getMintLen(PASS_EXTENSIONS),
-      lamports,
-      programId,
-    }),
     createInitializeNonTransferableMintInstruction(mint, programId),
     createInitializePermanentDelegateInstruction(mint, organizer, programId),
     createInitializeMetadataPointerInstruction(
@@ -300,8 +327,28 @@ async function sendAndConfirm(
 }
 
 /**
+ * The account at a pass's mint address is one limen did not make: neither empty, nor a
+ * System-owned account with no data (which anyone's transfer can make), nor an initialized
+ * Token-2022 mint. Nothing is minted over it; an operator looks at it.
+ */
+export class MintAddressOccupiedError extends Error {
+  override name = "MintAddressOccupiedError";
+  constructor(mint: PublicKey) {
+    super(
+      `mint address occupied: ${mint.toBase58()} holds an account limen did not make`,
+    );
+  }
+}
+
+/** True for a System-owned account with no data: the account anyone's transfer can make. */
+const fundedOnly = (info: { owner: PublicKey; data: Buffer }) =>
+  info.owner.equals(SystemProgram.programId) && info.data.length === 0;
+
+/**
  * Mints one pass to `holder` on devnet, at `mint`'s address: a new keypair unless one is given,
- * as E-05 gives one derived per check-in so a retry targets the same address. Returns the mint,
+ * as E-05 gives one derived per check-in so a retry targets the same address. The address may be
+ * empty or hold only lamports anyone could have sent; any other account there throws
+ * MintAddressOccupiedError, and nothing is sent. Returns the mint,
  * the holder's token account and the signature. Over-long details are refused before the cluster
  * is asked anything, and another cluster is refused before anything is sent.
  */
@@ -314,6 +361,9 @@ export async function mintPass(
   const space = passAccountLen(details);
   const connection = devnetConnection();
   await requireDevnet(connection);
+  const existing = await connection.getAccountInfo(mint.publicKey, "confirmed");
+  if (existing !== null && !fundedOnly(existing))
+    throw new MintAddressOccupiedError(mint.publicKey);
   const lamports = await connection.getMinimumBalanceForRentExemption(space);
   const tx = buildPassMintTransaction({
     organizer: organizer.publicKey,
@@ -321,6 +371,7 @@ export async function mintPass(
     holder,
     details,
     lamports,
+    funded: existing?.lamports ?? 0,
   });
   const signature = await sendAndConfirm(tx, [organizer, mint]);
   return {
@@ -331,49 +382,54 @@ export async function mintPass(
 }
 
 /**
- * Where a pass stands on devnet, read without sending anything: "absent" when no account exists
- * at `mint`; "minted" when it is a Token-2022 mint with decimals 0 and a supply of one, and
- * `holder`'s associated token account, holding that mint for that owner, holds the one token; and
- * "unheld" for any other account there. Only the holder of the mint keypair can create an account
- * at its address, so "unheld" means a pass was issued there that `holder` does not hold: for a
- * check-in's wallet, a pass since burned. A request that fails is thrown, not read as a state.
- * Another cluster is refused first.
+ * Where a pass stands on devnet, read without sending anything. A pass was issued at `mint` only
+ * if the account there is owned by Token-2022 and is an initialized mint:
+ *   - "absent": no account, or a System-owned account with no data, which anyone's transfer can
+ *     make, so no pass was issued and one can be minted there;
+ *   - "minted": an issued pass with decimals 0 and a supply of one, whose one token `holder`'s
+ *     associated token account, holding that mint for that owner, holds;
+ *   - "unheld": an issued pass that `holder` does not hold: for a check-in's wallet, one burned;
+ *   - "occupied": any other account, which limen did not make.
+ * A request that fails is thrown, not read as a state. Another cluster is refused first.
  */
 export async function passMintState(
   mint: PublicKey,
   holder: PublicKey,
-): Promise<"absent" | "minted" | "unheld"> {
+): Promise<"absent" | "minted" | "unheld" | "occupied"> {
   const connection = devnetConnection();
   await requireDevnet(connection);
   const info = await connection.getAccountInfo(mint, "confirmed");
-  if (info === null) return "absent";
+  if (info === null || fundedOnly(info)) return "absent";
+  if (!info.owner.equals(TOKEN_2022_PROGRAM_ID)) return "occupied";
+  let state: Mint;
   try {
-    const state = await getMint(
-      connection,
-      mint,
-      "confirmed",
-      TOKEN_2022_PROGRAM_ID,
-    );
-    const held = await getAccount(
+    state = unpackMint(mint, info, TOKEN_2022_PROGRAM_ID);
+  } catch (err) {
+    // spl-token's refusals say the account is no mint; any other error is no fact.
+    if (err instanceof TokenError) return "occupied";
+    throw err;
+  }
+  if (!state.isInitialized) return "occupied";
+  let held: Account;
+  try {
+    held = await getAccount(
       connection,
       passTokenAccount(mint, holder),
       "confirmed",
       TOKEN_2022_PROGRAM_ID,
     );
-    return state.supply === 1n &&
-      state.decimals === 0 &&
-      held.mint.equals(mint) &&
-      held.owner.equals(holder) &&
-      held.amount === 1n
-      ? "minted"
-      : "unheld";
   } catch (err) {
-    // spl-token's refusals are facts about the accounts there: missing, not Token-2022's, or not
-    // a mint or token account. Any other error, such as a failed request, is no fact, so it is
-    // thrown rather than read as a state.
+    // A missing or foreign token account is a fact: the holder does not hold the pass.
     if (err instanceof TokenError) return "unheld";
     throw err;
   }
+  return state.supply === 1n &&
+    state.decimals === 0 &&
+    held.mint.equals(mint) &&
+    held.owner.equals(holder) &&
+    held.amount === 1n
+    ? "minted"
+    : "unheld";
 }
 
 /**

@@ -28,6 +28,7 @@ import {
   Keypair,
   PublicKey,
   SystemInstruction,
+  SystemProgram,
   Transaction,
 } from "@solana/web3.js";
 import { FailedTransactionMetadata, LiteSVM } from "litesvm";
@@ -37,6 +38,7 @@ import {
   checkinMessage,
   devnetMinter,
   mintAddressFromSeed,
+  MintAddressOccupied,
   mintSeed,
   registrationsFrom,
   walletKeyAcceptable,
@@ -55,6 +57,7 @@ import {
   passTokenAccount,
 } from "./pass-mint.ts";
 import { accountInfoResult, sendAnswers, withDevnetStub } from "./rpc-stub.ts";
+import { svmRpc } from "./rpc-svm.ts";
 import {
   bindRegistration,
   importRegistrations,
@@ -310,6 +313,8 @@ function mintDouble() {
   let next: "ok" | "fail" | "land-then-fail" = "ok";
   let confirmation: (() => Promise<void>) | null = null;
   let landing: (() => Promise<void>) | null = null;
+  // Addresses an account limen did not make occupies.
+  const occupied = new Set<string>();
   const minter: PassMinter = {
     async mint(wallet, seed, details) {
       const mint = mintAddressFromSeed(seed);
@@ -317,6 +322,7 @@ function mintDouble() {
       const mode = next;
       next = "ok";
       if (mode === "fail") throw new Error("devnet unavailable");
+      if (occupied.has(mint)) throw new MintAddressOccupied(mint);
       if (landing !== null) await landing();
       if (chain.has(mint)) throw new Error("account already in use");
       chain.set(mint, wallet);
@@ -326,6 +332,7 @@ function mintDouble() {
       return { signature };
     },
     async state(wallet, mint) {
+      if (occupied.has(mint)) return "occupied";
       const holder = chain.get(mint);
       if (holder === undefined) return "absent";
       return holder === wallet ? "minted" : "unheld";
@@ -334,6 +341,7 @@ function mintDouble() {
   return {
     calls,
     chain,
+    occupied,
     failNextMint: () => {
       next = "fail";
     },
@@ -897,6 +905,83 @@ const chainAnswer =
       info === null ? null : { owner: info.owner.toBase58(), data: info.data },
     );
   };
+
+test("a stranger's transfer to the derived mint address does not stop the pass: the first check-in and a pending one's retry both mint it", async () => {
+  for (const pending of [false, true]) {
+    const { db, deps, alice } = setup();
+    const dir = mkdtempSync(join(tmpdir(), "limen-checkin-"));
+    const keyPath = join(dir, "organizer.json");
+    writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
+    const mint = passAddress("day-2", "LMN-0001");
+    const svm = new LiteSVM();
+    svm.airdrop(
+      Keypair.fromSecretKey(Uint8Array.from(RFC_KEYPAIR)).publicKey,
+      10_000_000_000n,
+    );
+    // Anyone can fund the address: it then holds a System-owned account with no data.
+    const stranger = Keypair.generate();
+    svm.airdrop(stranger.publicKey, 10_000_000_000n);
+    const gift = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: stranger.publicKey,
+        toPubkey: new PublicKey(mint),
+        lamports: 1_000_000,
+      }),
+    );
+    gift.recentBlockhash = svm.latestBlockhash();
+    gift.sign(stranger);
+    assert.ok(
+      !(svm.sendTransaction(gift) instanceof FailedTransactionMetadata),
+    );
+    svm.expireBlockhash();
+    if (pending) {
+      assert.equal(
+        deps.registrations.bind("LMN-0001", alice.address, T).ok,
+        true,
+      );
+      db.prepare(
+        "INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, mint, mint_status, created_at) VALUES ('day-2', 'st-front', ?, ?, 'n', ?, 'pending', ?)",
+      ).run(regHashOf("LMN-0001"), alice.address, mint, T);
+    }
+    try {
+      const minter = devnetMinter(loadOrganizerKey(keyPath));
+      await withDevnetStub(svmRpc(svm), async () => {
+        const answer = pending
+          ? await retryAt({ ...deps, minter }, alice, T + 12)
+          : await checkInAt(
+              { ...deps, minter },
+              request(alice, "LMN-0001"),
+              T + 5,
+            );
+        assert.equal(answer.status, 201, JSON.stringify(answer.body));
+        assert.equal(answer.body.mint, mint);
+      });
+      assert.deepEqual(mintRows(db), [{ mint, mint_status: "done" }]);
+      const held = svm.getAccount(
+        passTokenAccount(new PublicKey(mint), new PublicKey(alice.address)),
+      );
+      assert.ok(held !== null, "the wallet holds the pass");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("an account limen did not make at the mint address answers 502 mint_address_occupied and leaves the row pending, never revoked", async () => {
+  const { db, deps, alice, minting } = setup();
+  const mint = passAddress("day-2", "LMN-0001");
+  minting.occupied.add(mint);
+  // The first check-in finds it as it mints; a later request finds it as it reads the chain.
+  for (const answer of [
+    await checkInAt(deps, request(alice, "LMN-0001"), T + 5),
+    await retryAt(deps, alice, T + 12),
+  ])
+    assert.deepEqual(answer, {
+      status: 502,
+      body: { error: "mint_address_occupied" },
+    });
+  assert.deepEqual(mintRows(db), [{ mint, mint_status: "pending" }]);
+});
 
 test("recovery decides from the reservation's derived mint in the in-process VM: issued and burned is revoked, issued and held is done, and neither mints", async () => {
   for (const burned of [true, false]) {
@@ -1646,6 +1731,7 @@ test("the running API mints a check-in through devnetMinter and mintPass, on its
           sent = Transaction.from(Buffer.from(String(params[0]), "base64"));
         const answers: Record<string, unknown> = {
           getGenesisHash: DEVNET_GENESIS_HASH,
+          getAccountInfo: accountInfoResult(null),
           getMinimumBalanceForRentExemption: 4_181_760,
           ...sendAnswers(signature),
         };
@@ -1679,11 +1765,13 @@ test("the running API mints a check-in through devnetMinter and mintPass, on its
             },
           ],
         );
-        // The genesis check, then one transaction, sent and confirmed over HTTP.
+        // The genesis check, the read of the mint address, then one transaction, sent and
+        // confirmed over HTTP.
         assert.deepEqual(
           calls.map((c) => c.method),
           [
             "getGenesisHash",
+            "getAccountInfo",
             "getMinimumBalanceForRentExemption",
             "getLatestBlockhash",
             "sendTransaction",
@@ -1827,6 +1915,7 @@ test("after a restart that left a check-in pending, the minter's first use is th
             "getGenesisHash",
             "getAccountInfo",
             "getGenesisHash",
+            "getAccountInfo",
             "getMinimumBalanceForRentExemption",
             "getLatestBlockhash",
             "sendTransaction",

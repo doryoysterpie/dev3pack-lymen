@@ -21,6 +21,7 @@ import {
 import {
   Keypair,
   PublicKey,
+  SystemProgram,
   Transaction,
   type TransactionInstruction,
 } from "@solana/web3.js";
@@ -30,6 +31,7 @@ import {
   buildPassMintTransaction,
   buildRevokeTransaction,
   DEVNET_GENESIS_HASH,
+  mintPass,
   passAccountLen,
   passMintState,
   passTokenAccount,
@@ -39,6 +41,7 @@ import {
   withDevnetStub,
   type RpcAnswer,
 } from "./rpc-stub.ts";
+import { svmRpc } from "./rpc-svm.ts";
 
 const DETAILS = {
   station: "st-front",
@@ -338,4 +341,89 @@ test("in-process SVM: a second mint at the same mint keypair fails at createAcco
   );
   assert.equal(mintState(svm, mint).mint.supply, 1n);
   assert.equal(balance(svm, mint, holder.publicKey), 1n);
+});
+
+/** A chain with a funded organizer and no pass yet, and the keypair a pass would be minted at. */
+function emptyChain() {
+  const svm = new LiteSVM();
+  const organizer = Keypair.generate();
+  svm.airdrop(organizer.publicKey, 10_000_000_000n);
+  return {
+    svm,
+    organizer,
+    mintKey: Keypair.generate(),
+    holder: Keypair.generate(),
+  };
+}
+
+test("in-process SVM: a stranger's transfer to a pass's mint address leaves it absent, and mintPass still mints the pass there", async () => {
+  const { svm, organizer, mintKey, holder } = emptyChain();
+  // Anyone can send SOL to an address: that makes a System-owned account there, with no data.
+  const stranger = Keypair.generate();
+  svm.airdrop(stranger.publicKey, 10_000_000_000n);
+  const gift = send(
+    svm,
+    stranger,
+    [],
+    SystemProgram.transfer({
+      fromPubkey: stranger.publicKey,
+      toPubkey: mintKey.publicKey,
+      lamports: 1_000_000,
+    }),
+  );
+  assert.ok(!(gift instanceof FailedTransactionMetadata));
+  const funded = svm.getAccount(mintKey.publicKey);
+  assert.ok(funded !== null);
+  assert.equal(funded.owner.toBase58(), SystemProgram.programId.toBase58());
+  assert.equal(funded.data.length, 0);
+  await withDevnetStub(svmRpc(svm), async () => {
+    assert.equal(
+      await passMintState(mintKey.publicKey, holder.publicKey),
+      "absent",
+    );
+    await mintPass(organizer, holder.publicKey, DETAILS, mintKey);
+    assert.equal(
+      await passMintState(mintKey.publicKey, holder.publicKey),
+      "minted",
+    );
+  });
+  assert.equal(balance(svm, mintKey.publicKey, holder.publicKey), 1n);
+  assert.equal(mintState(svm, mintKey.publicKey).mint.supply, 1n);
+});
+
+test("in-process SVM: an account at the mint address that is no initialized Token-2022 mint is occupied, and mintPass refuses it", async () => {
+  for (const owner of [
+    "another program",
+    "Token-2022, uninitialized",
+  ] as const) {
+    const { svm, organizer, mintKey, holder } = emptyChain();
+    // Only the keypair's holder could make these, as with a leaked key.
+    const made = send(
+      svm,
+      organizer,
+      [mintKey],
+      SystemProgram.createAccount({
+        fromPubkey: organizer.publicKey,
+        newAccountPubkey: mintKey.publicKey,
+        space: 82,
+        lamports: Number(svm.minimumBalanceForRentExemption(82n)),
+        programId:
+          owner === "another program"
+            ? Keypair.generate().publicKey
+            : TOKEN_2022_PROGRAM_ID,
+      }),
+    );
+    assert.ok(!(made instanceof FailedTransactionMetadata), owner);
+    await withDevnetStub(svmRpc(svm), async () => {
+      assert.equal(
+        await passMintState(mintKey.publicKey, holder.publicKey),
+        "occupied",
+        owner,
+      );
+      await assert.rejects(
+        mintPass(organizer, holder.publicKey, DETAILS, mintKey),
+        /^MintAddressOccupiedError: /,
+      );
+    });
+  }
 });
