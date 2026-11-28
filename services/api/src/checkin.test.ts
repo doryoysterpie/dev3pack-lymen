@@ -384,7 +384,6 @@ test("a malformed request is refused by field", async () => {
   const cases: [unknown, string][] = [
     [null, "body"],
     [[good], "body"],
-    [{ ...good, extra: 1 }, "extra"],
     [{ ...good, qr: "" }, "qr"],
     [{ ...good, wallet: "wallet-alice\nstation: other" }, "wallet"],
     [{ ...good, wallet: "wallet-unknown" }, "wallet"],
@@ -397,6 +396,35 @@ test("a malformed request is refused by field", async () => {
       await checkInAt(deps, body, T + 5),
       { status: 400, body: { error: "invalid_request", field } },
       field,
+    );
+  }
+});
+
+test("a registration ID sent in a key or in a value does not appear in the response", async () => {
+  const { deps, alice } = setup();
+  const good = request(alice, "LMN-0001");
+  // A key that is not one of the request's four fields gets one fixed answer, with no name.
+  assert.deepEqual(await checkInAt(deps, { ...good, "LMN-0002": 1 }, T + 5), {
+    status: 400,
+    body: { error: "invalid_request", reason: "unexpected_field" },
+  });
+  const unknown = request(alice, "LMN-9999");
+  const bodies: [string, unknown][] = [
+    ["LMN-0002", { ...good, "LMN-0002": 1 }],
+    ["LMN-0002", { "LMN-0002": good.qr }],
+    ["LMN-0002", { ...good, qr: "LMN-0002" }],
+    ["LMN-0002", { ...good, wallet: "LMN-0002" }],
+    ["LMN-0002", { ...good, registration_id: "LMN-0002\n" }],
+    ["LMN-0002", { ...good, signature: "LMN-0002" }],
+    // A well-formed, correctly signed ID that is not imported.
+    ["LMN-9999", unknown],
+  ];
+  for (const [id, body] of bodies) {
+    const answer = await checkInAt(deps, body, T + 5);
+    assert.equal(answer.status >= 400, true);
+    assert.ok(
+      !JSON.stringify(answer.body).includes(id),
+      `${JSON.stringify(answer.body)} carries ${id}`,
     );
   }
 });

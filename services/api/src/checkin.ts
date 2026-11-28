@@ -35,7 +35,19 @@ import {
   isWalletAddress,
   registrationForWallet,
 } from "./registration.ts";
-import { verifyStationQr, type StationPayload } from "./station-qr.ts";
+import {
+  verifyStationQr,
+  type StationPayload,
+  type StationQrRejection,
+} from "./station-qr.ts";
+
+/** The reasons E-07's bindRegistration gives for refusing a binding. */
+export type BindRefusal =
+  | "invalid_registration_id"
+  | "invalid_wallet"
+  | "unknown_registration"
+  | "registration_bound_to_other_wallet"
+  | "wallet_bound_to_other_registration";
 
 /** What E-05 needs from E-07. Each method names the E-07 function that backs it. */
 export interface CheckinRegistrations {
@@ -50,7 +62,7 @@ export interface CheckinRegistrations {
     now: number,
   ):
     | { readonly ok: true; readonly regHash: string }
-    | { readonly ok: false; readonly reason: string };
+    | { readonly ok: false; readonly reason: BindRefusal };
 }
 
 /** What E-05 needs from E-06 (E-06: mintPass). */
@@ -153,7 +165,15 @@ interface CheckinRequest {
   readonly signature: Buffer;
 }
 
-const REQUEST_KEYS = new Set(["qr", "wallet", "registration_id", "signature"]);
+/** The fields a refusal may name. A response names no other field and carries no client string. */
+type RequestField = "body" | "qr" | "wallet" | "registration_id" | "signature";
+
+const REQUEST_KEYS: ReadonlySet<string> = new Set<RequestField>([
+  "qr",
+  "wallet",
+  "registration_id",
+  "signature",
+]);
 const MAX_FIELD_CHARS = 1024;
 // DER header of an X.509 SubjectPublicKeyInfo Ed25519 public key (RFC 8410).
 const SPKI_ED25519_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
@@ -178,12 +198,16 @@ export function checkinMessage(p: {
 
 function parseRequest(
   body: unknown,
-): { ok: true; req: CheckinRequest } | { ok: false; field: string } {
+):
+  | { ok: true; req: CheckinRequest }
+  | { ok: false; field: RequestField }
+  | { ok: false; field: null } {
   if (typeof body !== "object" || body === null || Array.isArray(body))
     return { ok: false, field: "body" };
   const b = body as Record<string, unknown>;
+  // A key outside the four fields is refused without naming it.
   for (const key of Object.keys(b))
-    if (!REQUEST_KEYS.has(key)) return { ok: false, field: key };
+    if (!REQUEST_KEYS.has(key)) return { ok: false, field: null };
   const text = (v: unknown) =>
     typeof v === "string" && v.length > 0 && v.length <= MAX_FIELD_CHARS;
   if (!text(b.qr)) return { ok: false, field: "qr" };
@@ -224,10 +248,27 @@ function walletSigned(
   }
 }
 
+/**
+ * A refusal body, built only from fixed codes: the error, a field from RequestField, and a
+ * reason from the station QR verifier or "unexpected_field". Nothing the client sent is copied in.
+ */
 const refuse = (
   status: number,
-  error: string,
-  extra: Record<string, unknown> = {},
+  error:
+    | "invalid_request"
+    | "station_qr_expired"
+    | "station_qr_invalid"
+    | "unknown_station"
+    | "session_closed"
+    | "bad_wallet_signature"
+    | "no_registration_binding"
+    | "already_checked_in"
+    | "mint_failed"
+    | BindRefusal,
+  extra:
+    | { readonly field: RequestField }
+    | { readonly reason: StationQrRejection | "unexpected_field" }
+    | Record<string, never> = {},
 ): CheckinOutcome => ({
   status,
   body: { error, ...extra },
@@ -246,7 +287,9 @@ export async function checkIn(
   const now = Math.floor(nowMs / 1000);
   const parsed = parseRequest(body);
   if (!parsed.ok)
-    return refuse(400, "invalid_request", { field: parsed.field });
+    return parsed.field === null
+      ? refuse(400, "invalid_request", { reason: "unexpected_field" })
+      : refuse(400, "invalid_request", { field: parsed.field });
   const req = parsed.req;
 
   const qr = verifyStationQr(req.qr, { allowlist: deps.allowlist, nowMs });
