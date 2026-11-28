@@ -145,54 +145,92 @@ test("a seed whose session overlaps one already in the database is refused, and 
   );
 });
 
-test("a seed may not move the end of a session that has started, or starts within 60 s", () => {
+test("once a session has started, or starts within 60 s, a seed may change it only by moving its end later", () => {
   const db = openDatabase(":memory:");
   seedEvent(db, { stations: [], sessions: [session("day-1", 1000, 2000)] }, 1);
-  // At 1500 day-1 has started: QRs already issued for it carry expiry times cut to its end at
-  // 2000, so an earlier end would leave them valid after it.
-  for (const ends of [1800, 2500]) {
+  const refused = (change: ReturnType<typeof session>, now: number) =>
     assert.throws(
-      () =>
-        seedEvent(
-          db,
-          { stations: [], sessions: [session("day-1", 1000, ends)] },
-          1500,
-        ),
+      () => seedEvent(db, { stations: [], sessions: [change] }, now),
       {
         message:
-          "seed sessions: day-1 has started, or starts within 60 s, so its end cannot move",
+          "seed sessions: day-1 has started, or starts within 60 s, so it may only change by ending later",
       },
     );
-  }
+  // At 1500 day-1 has started.
+  refused(session("day-1", 1000, 1800), 1500); // an earlier end
+  refused(session("day-1", 1100, 2000), 1500); // a moved start
+  refused({ ...session("day-1", 1000, 2000), name: "Day one" }, 1500); // a new name
   assert.deepEqual(sessionRows(db), [
     { id: "day-1", starts_at: 1000, ends_at: 2000 },
   ]);
-  // Its name may still change, and its end stays where it is.
+  // The same row again changes nothing, and a later end is allowed.
   seedEvent(
     db,
-    {
-      stations: [],
-      sessions: [{ ...session("day-1", 1000, 2000), name: "Day one" }],
-    },
+    { stations: [], sessions: [session("day-1", 1000, 2000)] },
     1500,
   );
-  // 59 s before it starts the end is already fixed; 60 s before, it may still move.
+  seedEvent(
+    db,
+    { stations: [], sessions: [session("day-1", 1000, 2500)] },
+    1500,
+  );
+  assert.deepEqual(sessionRows(db), [
+    { id: "day-1", starts_at: 1000, ends_at: 2500 },
+  ]);
+  // 59 s before it starts the session is fixed; 60 s before, it may still change.
+  refused(session("day-1", 1000, 1900), 941);
+  seedEvent(
+    db,
+    { stations: [], sessions: [session("day-1", 1100, 1900)] },
+    940,
+  );
+  assert.deepEqual(sessionRows(db), [
+    { id: "day-1", starts_at: 1100, ends_at: 1900 },
+  ]);
+});
+
+test("the rescheduling probe: moving a live session's start later while adding a session over its old window is refused", () => {
+  const T0 = 10_000;
+  const db = openDatabase(":memory:");
+  seedEvent(
+    db,
+    { stations: [], sessions: [session("s1", T0 - 100, T0 + 600)] },
+    T0 - 200,
+  );
+  // At T0, s1 is live. The guard reads s1 as stored, not as the seed would leave it.
   assert.throws(
     () =>
       seedEvent(
         db,
-        { stations: [], sessions: [session("day-1", 1000, 1900)] },
-        941,
+        {
+          stations: [],
+          sessions: [
+            session("s1", T0 + 300, T0 + 600),
+            session("s2", T0 - 50, T0 + 200),
+          ],
+        },
+        T0,
       ),
-    /day-1 has started, or starts within 60 s, so its end cannot move/,
+    /s1 has started, or starts within 60 s, so it may only change by ending later/,
   );
-  seedEvent(
-    db,
-    { stations: [], sessions: [session("day-1", 1000, 1900)] },
-    940,
+  // Listing s1 twice does not help: each entry is checked against the stored row.
+  assert.throws(
+    () =>
+      seedEvent(
+        db,
+        {
+          stations: [],
+          sessions: [
+            session("s1", T0 - 100, T0 + 600),
+            session("s1", T0 + 300, T0 + 600),
+          ],
+        },
+        T0,
+      ),
+    /s1 has started, or starts within 60 s, so it may only change by ending later/,
   );
   assert.deepEqual(sessionRows(db), [
-    { id: "day-1", starts_at: 1000, ends_at: 1900 },
+    { id: "s1", starts_at: T0 - 100, ends_at: T0 + 600 },
   ]);
 });
 
