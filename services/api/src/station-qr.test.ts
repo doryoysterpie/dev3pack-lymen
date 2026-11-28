@@ -527,3 +527,43 @@ test("expectedStation and expectedSession are optional: absent, nothing is check
       String(expectedSession),
     );
 });
+
+test("a payload re-spelled in non-canonical base64url, and signed as spelled, is rejected as malformed", () => {
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  let incompleteGroups = 0;
+  let paddingBits = 0;
+  // Three session names, so the payload's length is each of 0, 1 and 2 bytes past a multiple of 3.
+  for (const session of ["day-2", "day-22", "day-222"]) {
+    const payload = issueStationQr({
+      station: "st-front",
+      session,
+      now: T,
+      signer: ORGANIZER,
+      nonce: NONCE,
+    }).text.split(".")[1]!;
+    const bytes = Buffer.from(payload, "base64url");
+    const variants = [
+      // An incomplete final group: one character past a whole group, which decoding drops.
+      ...[...alphabet].map((c) => payload + c),
+      // The last character's unused low bits set.
+      ...[...alphabet].map((c) => payload.slice(0, -1) + c),
+    ].filter((v) => v !== payload && Buffer.from(v, "base64url").equals(bytes));
+    for (const variant of variants) {
+      const message = `limen:station:v1.${variant}`;
+      const signature = sign(
+        null,
+        Buffer.from(message, "ascii"),
+        ORGANIZER.privateKey,
+      ).toString("base64url");
+      assert.equal(
+        reasonOf(`${message}.${signerId(ORGANIZER.publicKey)}.${signature}`),
+        "malformed",
+        variant.slice(-6),
+      );
+      if (variant.length % 4 === 1) incompleteGroups++;
+      else paddingBits++;
+    }
+  }
+  assert.ok(incompleteGroups > 0 && paddingBits > 0, "both kinds were tried");
+});
