@@ -17,6 +17,29 @@ const FIXTURES = JSON.parse(
   ),
 ) as Record<string, Record<string, unknown>>;
 
+/** A summary in the pre-flight report's shape (E-09 toReport) with one transfer of `lamports`. */
+const preflightReport = (lamports: string) => ({
+  kind: "ready",
+  feePayerSet: false,
+  summary: {
+    effects: [
+      {
+        kind: "sol-out",
+        instruction: 0,
+        to: { address: "FZegoJg97QC3nCnjTqW473XZK2osgy2xX5vRq8zccu2o" },
+        lamports,
+        reason: "transfer",
+      },
+    ],
+    others: [],
+    undecoded: [],
+    signers: { feePayer: "user", others: [], unsigned: true },
+    unresolvedAccounts: 0,
+  },
+  simulation: { status: "ran", err: null, changes: [] },
+  blocks: [],
+});
+
 const db = openDatabase(":memory:");
 const servers: Server[] = [];
 let base = "";
@@ -44,7 +67,7 @@ before(async () => {
       reports: {
         now: () => 1_795_000_600,
         resimulator: async () => ({
-          summary: { kind: "transaction", effects: [] },
+          summary: preflightReport("1"),
           drainPattern: false,
         }),
       },
@@ -91,7 +114,13 @@ test("POST /reports stores the fixture bundle as sighting 1 with no case and no 
 });
 
 test("with a re-simulator set, the response says whether the stored bytes re-simulated to the stored summary", async () => {
-  const res = await post(resimBase, JSON.stringify(FIXTURES.drainer_device_2));
+  const res = await post(
+    resimBase,
+    JSON.stringify({
+      ...FIXTURES.drainer_device_2,
+      summary: preflightReport("1500000001"),
+    }),
+  );
   assert.equal(res.status, 201);
   assert.deepEqual(await res.json(), {
     sighting_id: 1,

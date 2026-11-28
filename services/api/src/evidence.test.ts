@@ -51,6 +51,67 @@ function failedField(body: unknown, now: number = NOW): string {
 const RECIPIENT = "FZegoJg97QC3nCnjTqW473XZK2osgy2xX5vRq8zccu2o";
 const VICTIM_1 = "4FLJyfdzkWbs2yhhpymoZkudtsuJ3S8A8ft81gTWAPRa";
 
+/** The outcome of a simulation that ran without an error. */
+const RAN = {
+  status: "ran",
+  err: null,
+  changes: [
+    { kind: "sol", account: "user", before: "5000000000", after: "9995000" },
+  ],
+};
+
+/**
+ * A summary in the pre-flight report's shape (E-09 toReport): the decoded instructions in
+ * `summary`, beside whether limen set the fee payer, the simulation's outcome, and what that
+ * outcome and the signers mean for signing.
+ */
+function preflightReport(
+  lamports: string,
+  rest: {
+    feePayerSet?: boolean;
+    cosigners?: { address: string; signed: boolean }[];
+    simulation?: unknown;
+    blocks?: string[];
+  } = {},
+) {
+  return {
+    kind: "ready",
+    feePayerSet: rest.feePayerSet ?? false,
+    summary: {
+      effects: [
+        {
+          kind: "sol-out",
+          instruction: 0,
+          to: { address: RECIPIENT },
+          lamports,
+          reason: "transfer",
+        },
+      ],
+      others: [],
+      undecoded: [],
+      signers: {
+        feePayer: "user",
+        others: rest.cosigners ?? [],
+        unsigned: true,
+      },
+      unresolvedAccounts: 0,
+    },
+    simulation: rest.simulation ?? RAN,
+    blocks: rest.blocks ?? [],
+  };
+}
+
+/** The same JSON value with every object's keys in reverse order. */
+function reversedKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(reversedKeys);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .reverse()
+      .map(([key, inner]) => [key, reversedKeys(inner)]),
+  );
+}
+
 test("a stored fixture report loads back with every owed bundle field and no wallet field", () => {
   const db = openDatabase(":memory:");
   const body = fixture("drainer_device_1");
@@ -204,24 +265,18 @@ test("canonical JSON sorts object keys at every depth and keeps array order", ()
 
 test("re-simulation receives exactly the stored bytes and records whether the summary matches", async () => {
   const db = openDatabase(":memory:");
-  const body = fixture("drainer_device_1");
+  const stored = preflightReport("4990000000");
+  const body: Body = { ...fixture("drainer_device_1"), summary: stored };
   const id = storeReport(db, parsed(body), 1);
-  const stored = structuredClone(body.summary) as {
-    kind: string;
-    effects: Record<string, string>[];
-  };
   const seen: string[] = [];
 
-  // The same summary with its keys in another order matches.
+  // The same summary with its keys in another order, at every depth, matches.
   const reordered = await resimulateBundle(
     db,
     id,
     async (tx) => {
       seen.push(Buffer.from(tx).toString("base64"));
-      return {
-        summary: { effects: stored.effects, kind: stored.kind },
-        drainPattern: true,
-      };
+      return { summary: reversedKeys(stored), drainPattern: true };
     },
     10,
   );
@@ -235,8 +290,7 @@ test("re-simulation receives exactly the stored bytes and records whether the su
   });
 
   // A summary with one changed amount does not match, and the record says so.
-  const changed = structuredClone(stored);
-  changed.effects[0].lamports = "1";
+  const changed = preflightReport("1");
   const differs = await resimulateBundle(
     db,
     id,
@@ -317,34 +371,9 @@ test("a re-simulation that never answers counts as failed after the time limit",
 });
 
 test("a re-simulation matches on the decoded instructions, not on drifting balances (owner ruling 7a)", async () => {
-  // A summary in the pre-flight report's shape: decoded instructions, then the simulation's
-  // balance changes, which drift as account state moves.
-  const report = (lamports: string, before: string, after: string) => ({
-    kind: "ready",
-    summary: {
-      effects: [
-        {
-          kind: "sol-out",
-          instruction: 0,
-          to: { address: RECIPIENT },
-          lamports,
-          reason: "transfer",
-        },
-      ],
-      others: [],
-      undecoded: [],
-      signers: { feePayer: "user", others: [], unsigned: true },
-      unresolvedAccounts: 0,
-    },
-    simulation: {
-      status: "ran",
-      err: null,
-      changes: [{ kind: "sol", account: "user", before, after }],
-    },
-    blocks: [],
-  });
+  // The simulation's balance changes drift as account state moves.
   const db = openDatabase(":memory:");
-  const stored = report("4990000000", "5000000000", "9995000");
+  const stored = preflightReport("4990000000");
   const id = storeReport(
     db,
     parsed({ ...fixture("drainer_device_1"), summary: stored }),
@@ -352,7 +381,14 @@ test("a re-simulation matches on the decoded instructions, not on drifting balan
   );
 
   // Same instructions, different balances: the wallet held less when the server re-simulated.
-  const drifted = report("4990000000", "2000000000", "0");
+  const drifted = preflightReport("4990000000", {
+    simulation: {
+      ...RAN,
+      changes: [
+        { kind: "sol", account: "user", before: "2000000000", after: "0" },
+      ],
+    },
+  });
   const same = await resimulateBundle(
     db,
     id,
@@ -367,7 +403,7 @@ test("a re-simulation matches on the decoded instructions, not on drifting balan
   });
 
   // One decoded instruction changed: a different amount leaves the wallet.
-  const changed = report("1", "5000000000", "9995000");
+  const changed = preflightReport("1");
   const differs = await resimulateBundle(
     db,
     id,
@@ -382,20 +418,93 @@ test("a re-simulation matches on the decoded instructions, not on drifting balan
   });
 });
 
-test("the decoded part drops only the top-level simulation", () => {
+test("a report whose request left the fee payer unset matches the replay of its stored bytes (owner ruling 7a)", async () => {
+  // The app stores the transaction it rebuilt with the wallet as fee payer, so its report says
+  // limen set the fee payer, while the server's replay of those stored bytes finds it already set.
+  const db = openDatabase(":memory:");
+  const id = storeReport(
+    db,
+    parsed({
+      ...fixture("drainer_device_1"),
+      summary: preflightReport("4990000000", { feePayerSet: true }),
+    }),
+    1,
+  );
+  const replay = preflightReport("4990000000", { feePayerSet: false });
+  const outcome = await resimulateBundle(
+    db,
+    id,
+    async () => ({ summary: replay, drainPattern: true }),
+    10,
+  );
+  assert.equal(outcome.status === "resimulated" && outcome.matches, true);
+  assert.deepEqual(loadBundle(db, id)?.resimulation, {
+    at: 10,
+    matches: true,
+    drainPattern: true,
+  });
+});
+
+test("a replay whose simulation failed matches when its decoded instructions are the same (owner ruling 7a)", async () => {
+  // simulation-failed comes from the simulation's outcome, here an account state that moved
+  // between the report and the replay, not from the decoded instructions.
+  const db = openDatabase(":memory:");
+  const id = storeReport(
+    db,
+    parsed({
+      ...fixture("drainer_device_1"),
+      summary: preflightReport("4990000000"),
+    }),
+    1,
+  );
+  const failed = preflightReport("4990000000", {
+    simulation: {
+      status: "ran",
+      err: { InstructionError: [0, { Custom: 1 }] },
+      changes: [],
+    },
+    blocks: ["simulation-failed"],
+  });
+  const outcome = await resimulateBundle(
+    db,
+    id,
+    async () => ({ summary: failed, drainPattern: true }),
+    10,
+  );
+  assert.equal(outcome.status === "resimulated" && outcome.matches, true);
+
+  // cosigner-missing comes from the decoded signers, so a replay that finds another signature
+  // missing does not match.
+  const cosigner = preflightReport("4990000000", {
+    cosigners: [{ address: VICTIM_1, signed: false }],
+    blocks: ["cosigner-missing"],
+  });
+  const differs = await resimulateBundle(
+    db,
+    id,
+    async () => ({ summary: cosigner, drainPattern: true }),
+    11,
+  );
+  assert.equal(differs.status === "resimulated" && differs.matches, false);
+});
+
+test("the decoded part keeps only the report's kind and summary", () => {
   assert.deepEqual(
     decodedPart({
       kind: "ready",
-      summary: { simulation: 1 },
+      feePayerSet: true,
+      summary: { simulation: 1, blocks: [] },
       simulation: 2,
-      blocks: [],
+      blocks: ["simulation-failed"],
     }),
-    { kind: "ready", summary: { simulation: 1 }, blocks: [] },
+    { kind: "ready", summary: { simulation: 1, blocks: [] } },
   );
-  assert.deepEqual(decodedPart({ kind: "malformed", problem: "truncated" }), {
-    kind: "malformed",
-    problem: "truncated",
-  });
+  // A refusal has no summary, so it compares on its kind alone, with no undefined field left
+  // for canonical JSON to refuse.
+  assert.equal(
+    canonicalJson(decodedPart({ kind: "malformed", problem: "truncated" })),
+    '{"kind":"malformed"}',
+  );
   assert.equal(decodedPart(null), null);
 });
 

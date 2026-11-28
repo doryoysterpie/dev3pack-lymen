@@ -107,9 +107,13 @@ export function canonicalJson(value: unknown): string {
 
 /**
  * The part of a summary a re-simulation must reproduce for the bundle to match (owner ruling 7a):
- * the decoded instructions, not the simulation's balance changes, which drift as account state
- * moves. For the pre-flight report shape { kind, summary, simulation, blocks } this drops the
- * top-level `simulation` field and keeps the rest.
+ * the decoded instructions. For the pre-flight report shape
+ * { kind, feePayerSet, summary, simulation, blocks } this keeps `kind` and `summary` only. It
+ * drops `simulation`, whose balance changes drift as account state moves; `blocks`, whose
+ * simulation-not-run and simulation-failed come from the simulation's outcome; and
+ * `feePayerSet`, which the app's report sets when limen rebuilt the request with the wallet as
+ * fee payer, while a replay of the stored, rebuilt bytes finds the fee payer already set. A
+ * report with no `summary`, such as a refusal, compares on its kind alone.
  */
 export function decodedPart(summary: unknown): unknown {
   if (
@@ -119,11 +123,13 @@ export function decodedPart(summary: unknown): unknown {
   ) {
     return summary;
   }
-  const rest: Record<string, unknown> = {
-    ...(summary as Record<string, unknown>),
-  };
-  delete rest.simulation;
-  return rest;
+  const kept: Record<string, unknown> = {};
+  for (const key of ["kind", "summary"]) {
+    if (Object.hasOwn(summary, key)) {
+      kept[key] = (summary as Record<string, unknown>)[key];
+    }
+  }
+  return kept;
 }
 
 /** The stored device hash: SHA-256 of a fixed prefix and the app's install-scoped device ID. */
