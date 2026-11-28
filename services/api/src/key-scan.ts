@@ -1,9 +1,11 @@
 // Finds private-key material by content (E-03): PEM private-key headers, PKCS#8 DER prefixes in
-// raw bytes, JSON arrays of 64 byte values, and base58 strings that decode to 64 bytes. CI runs it
-// over every tracked file, and any hit fails the run (key-scan.test.ts):
+// raw bytes, and Solana keypairs, 64 bytes as a JSON array or in base58 whose last 32 bytes are the
+// Ed25519 public key of the first 32. CI runs it over every tracked file, and any hit fails the run
+// (key-scan.test.ts):
 //
 //   node services/api/src/key-scan.ts
 import { spawnSync } from "node:child_process";
+import { createPrivateKey, createPublicKey } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -37,12 +39,32 @@ export function base58(bytes: Uint8Array): string {
   return out;
 }
 
-/** How many bytes base58 `text` decodes to. */
-function base58Length(text: string): number {
+/** The bytes base58 `text` decodes to. */
+function fromBase58(text: string): Buffer {
   let n = 0n;
   for (const c of text) n = n * 58n + BigInt(ALPHABET.indexOf(c));
   const zeros = text.length - text.replace(/^1+/, "").length;
-  return zeros + (n === 0n ? 0 : Math.ceil(n.toString(16).length / 2));
+  const hex = n === 0n ? "" : n.toString(16);
+  return Buffer.concat([
+    Buffer.alloc(zeros),
+    Buffer.from(hex.length % 2 === 0 ? hex : `0${hex}`, "hex"),
+  ]);
+}
+
+const PKCS8_ED25519 = Buffer.from("302e020100300506032b657004220420", "hex");
+
+/** True when `bytes` is 64 bytes whose last 32 are the Ed25519 public key of the first 32. */
+function isKeypair(bytes: Buffer): boolean {
+  if (bytes.length !== 64) return false;
+  const key = createPrivateKey({
+    key: Buffer.concat([PKCS8_ED25519, bytes.subarray(0, 32)]),
+    format: "der",
+    type: "pkcs8",
+  });
+  const pub = createPublicKey(key)
+    .export({ format: "der", type: "spki" })
+    .subarray(-32);
+  return pub.equals(bytes.subarray(32));
 }
 
 /** The kinds of private-key material in `bytes`, each named once. */
@@ -52,16 +74,13 @@ export function keyMaterialIn(bytes: Buffer): string[] {
   if (PEM.test(text)) found.add("pem-private-key");
   if (DER_PREFIXES.some((prefix) => bytes.includes(prefix)))
     found.add("pkcs8-der");
-  for (const m of text.matchAll(JSON_64))
-    if (
-      m[0]
-        .slice(1, -1)
-        .split(",")
-        .every((n) => Number(n) <= 255)
-    )
-      found.add("json-64-byte-array");
+  for (const m of text.matchAll(JSON_64)) {
+    const values = m[0].slice(1, -1).split(",").map(Number);
+    if (values.every((n) => n <= 255) && isKeypair(Buffer.from(values)))
+      found.add("json-keypair");
+  }
   for (const m of text.matchAll(BASE58_RUN))
-    if (base58Length(m[0]) === 64) found.add("base58-64-bytes");
+    if (isKeypair(fromBase58(m[0]))) found.add("base58-keypair");
   return [...found];
 }
 
