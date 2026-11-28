@@ -93,7 +93,7 @@ function render(view: StationView): void {
   );
 }
 
-/** Starts the rotation for `station` with `token`, which lives only in this closure. */
+/** Starts the rotation for `station` with `token`, kept in this closure. */
 function show(station: string, token: string): void {
   startRotation({
     fetchQr: (signal) =>

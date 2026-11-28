@@ -75,7 +75,7 @@ function fakeClock(start = 0) {
           .sort((a, b) => a[1].at - b[1].at)[0];
         if (due === undefined) break;
         timers.delete(due[0]);
-        // A jump during a step is not undone: the clock only moves forward.
+        // A jump during a step is not undone: the clock does not move back.
         now = Math.max(now, due[1].at);
         due[1].fn();
         await flush();
