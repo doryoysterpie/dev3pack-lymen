@@ -217,6 +217,15 @@ test("the revoke transaction burns the holder's one token with the organizer as 
   assert.equal(burn.data.decimals, 0);
 });
 
+test("DEVNET_GENESIS_HASH is devnet's genesis hash", () => {
+  // getGenesisHash read from api.devnet.solana.com on 2026-11-28. The other tests build their
+  // stand-in connections from the constant, so only this literal catches a wrong value in it.
+  assert.equal(
+    DEVNET_GENESIS_HASH,
+    "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+  );
+});
+
 test("a cluster whose genesis hash is not devnet's is refused", async () => {
   const fake = (hash: string) => () =>
     ({ getGenesisHash: async () => hash }) as unknown as Connection;
