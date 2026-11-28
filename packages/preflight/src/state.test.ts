@@ -25,6 +25,13 @@ function token(owner: string, amount: number, length = 165): Uint8Array {
   return data;
 }
 
+/** A Token-2022 account with extensions: past 165 bytes, the Account type byte. */
+function token2022(owner: string, amount: number): Uint8Array {
+  const data = token(owner, amount, 200);
+  data[165] = 2;
+  return data;
+}
+
 const state = (
   owner: string,
   data: Uint8Array,
@@ -37,7 +44,7 @@ const state = (
 
 describe("account data readers", () => {
   it("reads a token account and refuses short data or a bad delegate tag", () => {
-    assert.deepEqual(parseTokenAccount(token(USER, 7)), {
+    assert.deepEqual(parseTokenAccount(TOKEN_PROGRAM, token(USER, 7)), {
       mint: MINT,
       owner: USER,
       amount: "7",
@@ -45,14 +52,93 @@ describe("account data readers", () => {
       delegatedAmount: "0",
       closeAuthority: null,
     });
-    assert.equal(parseTokenAccount(token(USER, 7, 164)), null);
+    assert.equal(parseTokenAccount(TOKEN_PROGRAM, token(USER, 7, 164)), null);
     const badTag = token(USER, 7);
     badTag[72] = 2;
-    assert.equal(parseTokenAccount(badTag), null);
+    assert.equal(parseTokenAccount(TOKEN_PROGRAM, badTag), null);
   });
 
-  it("reads a Token-2022 account by its first 165 bytes", () => {
-    assert.equal(parseTokenAccount(token(USER, 9, 200))?.amount, "9");
+  it("reads a Token-2022 account with extensions by its account type byte", () => {
+    const withExtensions = token(USER, 9, 200);
+    withExtensions[165] = 2;
+    assert.equal(
+      parseTokenAccount(TOKEN_2022_PROGRAM, withExtensions)?.amount,
+      "9",
+    );
+    assert.equal(
+      parseTokenAccount(TOKEN_2022_PROGRAM, token(USER, 9))?.amount,
+      "9",
+    );
+  });
+
+  // re-audit 2, item 3: the layout each program unpacks (solana-program/token
+  // 38de8d1, interface/src/state.rs:131 to 149 and :265 to 292;
+  // solana-program/token-2022 efe55b4, interface/src/extension/mod.rs:275 to
+  // 281, :316 to 337, :562 to 572 and :974 to 984).
+  it("refuses every account the programs would not unpack as one", () => {
+    const variant = (
+      change: (data: Uint8Array) => void,
+      length = 165,
+    ): Uint8Array => {
+      const data = token(USER, 9, length);
+      change(data);
+      return data;
+    };
+    const refused: ReadonlyArray<readonly [string, string, Uint8Array]> = [
+      ["Token, 166 bytes", TOKEN_PROGRAM, token(USER, 9, 166)],
+      [
+        "Token, 200 bytes with a type byte",
+        TOKEN_PROGRAM,
+        variant((d) => (d[165] = 2), 200),
+      ],
+      ["Token-2022, 164 bytes", TOKEN_2022_PROGRAM, token(USER, 9, 164)],
+      [
+        "Token-2022, the Multisig length",
+        TOKEN_2022_PROGRAM,
+        variant((d) => (d[165] = 2), 355),
+      ],
+      [
+        "Token-2022, a Mint type byte",
+        TOKEN_2022_PROGRAM,
+        variant((d) => (d[165] = 1), 200),
+      ],
+      [
+        "Token-2022, no type byte",
+        TOKEN_2022_PROGRAM,
+        variant((d) => (d[165] = 0), 200),
+      ],
+      ["uninitialized", TOKEN_PROGRAM, variant((d) => (d[108] = 0))],
+      ["an unknown state", TOKEN_PROGRAM, variant((d) => (d[108] = 3))],
+      ["a delegate tag of 2", TOKEN_PROGRAM, variant((d) => (d[72] = 2))],
+      [
+        "a delegate tag with a high byte",
+        TOKEN_2022_PROGRAM,
+        variant((d) => (d[75] = 1)),
+      ],
+      ["an is_native tag of 2", TOKEN_PROGRAM, variant((d) => (d[109] = 2))],
+      [
+        "a close authority tag of 2",
+        TOKEN_PROGRAM,
+        variant((d) => (d[129] = 2)),
+      ],
+      ["not a token program's", SYSTEM_PROGRAM, token(USER, 9)],
+    ];
+    for (const [name, program, data] of refused) {
+      assert.equal(parseTokenAccount(program, data), null, name);
+    }
+    // Frozen and wrapped SOL are still token accounts.
+    assert.ok(
+      parseTokenAccount(
+        TOKEN_PROGRAM,
+        variant((d) => (d[108] = 2)),
+      ),
+    );
+    assert.ok(
+      parseTokenAccount(
+        TOKEN_PROGRAM,
+        variant((d) => (d[109] = 1)),
+      ),
+    );
   });
 
   it("refuses lookup table data with the wrong tag or a partial address", () => {
@@ -106,8 +192,8 @@ describe("balance changes", () => {
     const changes = balanceChanges(
       USER,
       [USER, ACCOUNT],
-      [null, state(TOKEN_2022_PROGRAM, token(USER, 5, 200))],
-      [null, state(TOKEN_2022_PROGRAM, token(OTHER, 5, 200))],
+      [null, state(TOKEN_2022_PROGRAM, token2022(USER, 5))],
+      [null, state(TOKEN_2022_PROGRAM, token2022(OTHER, 5))],
       {
         keys: [USER, ACCOUNT, TOKEN_2022_PROGRAM],
         pre: ["0", "1", "1"],

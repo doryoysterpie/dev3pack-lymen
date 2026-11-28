@@ -107,7 +107,7 @@ function tokenBalances(
     const state = stateOf(address);
     if (state === null || !isTokenProgram(state.owner)) return [];
     const data = decodeBase64(state.data[0]);
-    const account = data === null ? null : parseTokenAccount(data);
+    const account = data === null ? null : parseTokenAccount(state.owner, data);
     if (account === null) return [];
     return [
       {

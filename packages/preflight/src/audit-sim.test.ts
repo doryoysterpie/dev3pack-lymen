@@ -14,6 +14,7 @@ import { preflight, preflightTransaction } from "./preflight.ts";
 import {
   DEVNET_GENESIS_HASH,
   SYSTEM_PROGRAM,
+  TOKEN_2022_PROGRAM,
   TOKEN_PROGRAM,
 } from "./programs.ts";
 import { endpointFor, recordedEndpoint } from "../test-support/recorded.ts";
@@ -1712,6 +1713,69 @@ describe("hunt: only the read before the run shows a token account is the wallet
     assert.deepEqual(result.userTokenAccounts, []);
     assert.deepEqual(result.userAuthorizedTokenAccounts, [K.userTokenAccount]);
   });
+});
+
+describe("re-audit 2, item 3: only an account the program would unpack is a token account", () => {
+  // An unknown program that reaches the Token program, with the wallet's
+  // token account writable, so it is read.
+  const call = () =>
+    build([
+      new web3.TransactionInstruction({
+        programId: key(K.unknownProgram),
+        keys: [
+          { pubkey: user, isSigner: true, isWritable: true },
+          { pubkey: tokenAccount, isSigner: false, isWritable: true },
+          {
+            pubkey: new web3.PublicKey(TOKEN_PROGRAM),
+            isSigner: false,
+            isWritable: false,
+          },
+        ],
+        data: Buffer.from([1]),
+      }),
+    ]);
+  const malformed = (
+    change: (data: Uint8Array) => void,
+    length = 165,
+    program = TOKEN_PROGRAM,
+  ) => {
+    const data = new Uint8Array(length);
+    data.set(decodePublicKey(K.mint) ?? new Uint8Array(32), 0);
+    data.set(decodePublicKey(USER) ?? new Uint8Array(32), 32);
+    data[64] = 9;
+    data[108] = 1;
+    change(data);
+    return {
+      lamports: 2_039_280,
+      owner: program,
+      data: [encodeBase64(data), "base64"] as const,
+    };
+  };
+  for (const [name, account] of [
+    ["uninitialized", malformed((d) => (d[108] = 0))],
+    ["a Token account of 166 bytes", malformed(() => {}, 166)],
+    [
+      "a Token-2022 account whose type byte is a Mint's",
+      malformed((d) => (d[165] = 1), 200, TOKEN_2022_PROGRAM),
+    ],
+    ["an is_native tag of 2", malformed((d) => (d[109] = 2))],
+  ] as const) {
+    it(`${name} is not the wallet's token account`, async () => {
+      const result = await preflight(
+        recordedEndpoint({
+          accounts: {
+            [USER]: system(5_000_000_000) as never,
+            [K.userTokenAccount]: account as never,
+          },
+          simulation: { err: null, accounts: {} },
+        }),
+        encodeBase64(call()),
+        USER,
+      );
+      assert.ok(result.kind === "ready");
+      assert.deepEqual(result.userTokenAccounts, []);
+    });
+  }
 });
 
 describe("audit 9: the report JSON and the blockhash", () => {
