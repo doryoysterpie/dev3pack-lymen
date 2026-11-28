@@ -1,40 +1,39 @@
-// Role markers for the user's wallet and its token accounts, and the scrub of
-// addresses from text the RPC wrote (E-09). Pure module.
+// Role markers in place of addresses, and the scrub of addresses from text
+// the RPC wrote (E-09). Pure module.
 //
 // A summary never carries the user's address as text: wherever it would
 // appear, the summary writes "user". A report goes further (preflight.ts,
-// toReport): it writes "user token account 1", "user token account 2" and so
-// on for the wallet's token accounts, and the reason a simulation is not used,
-// or the error it ran into, has every address in it replaced. So the app and a
-// server produce the same report for the same bytes, and a report names
-// neither the wallet nor one of the token accounts limen found to be its own.
+// toReport; the owner's ruling 20a): it carries no address but the six known
+// programs in REPORT_PROGRAMS. Every other address becomes a role marker:
+// "account N" for the account at index N of the message's account list,
+// "lookup table N" for the table at index N of its lookups, and "address N",
+// from 1 in the order first met, for any other, such as a new authority an
+// instruction's data names. The reason a simulation is not used, or the
+// error it ran into, has every address in it replaced. So the app and a
+// server produce the same report for the same bytes.
 
 import { decodePublicKey } from "./base58.ts";
+import {
+  ASSOCIATED_TOKEN_PROGRAM,
+  COMPUTE_BUDGET_PROGRAM,
+  MEMO_PROGRAM,
+  SYSTEM_PROGRAM,
+  TOKEN_2022_PROGRAM,
+  TOKEN_PROGRAM,
+} from "./programs.ts";
 
 /** What a summary writes in place of the user's wallet address. */
 export const USER_MARKER = "user";
 
-/** A report writes this, then a number from 1, for each wallet token account. */
-export const USER_TOKEN_ACCOUNT_MARKER = "user token account";
-
-/**
- * A report writes this, then a number from 1, for each other token account a
- * token instruction acts on with the wallet as its signing authority, owner
- * or delegate, where nothing shows the wallet owns it; and, when no account
- * was read, for the destination of such a transfer, which could be another
- * of the wallet's token accounts.
- */
-export const USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER =
-  "user-authorized token account";
-
-/**
- * A report writes this, then a number from 1, for every other account in the
- * account list of an instruction the wallet signs (summary.ts,
- * walletSignedAccounts), whatever its position: any could be one of the
- * wallet's accounts. The stored transaction bytes still name each one.
- */
-export const WALLET_SIGNED_ACCOUNT_MARKER =
-  "account in a wallet-signed instruction";
+/** The only addresses a report may carry: these programs' IDs. */
+export const REPORT_PROGRAMS: ReadonlySet<string> = new Set([
+  SYSTEM_PROGRAM,
+  TOKEN_PROGRAM,
+  TOKEN_2022_PROGRAM,
+  ASSOCIATED_TOKEN_PROGRAM,
+  COMPUTE_BUDGET_PROGRAM,
+  MEMO_PROGRAM,
+]);
 
 /** What scrubAddresses writes in place of an address. */
 export const SCRUBBED = "an address";
@@ -100,5 +99,30 @@ export function scrubAddresses<T>(value: T): T {
 export function scrubWithin<T>(value: T, addresses: readonly string[]): T {
   return mapStrings(value, (text) =>
     addresses.reduce((out, address) => out.split(address).join(SCRUBBED), text),
+  );
+}
+
+/**
+ * value with every address replaced by its role marker: markers.get(address)
+ * when it has one, and otherwise "address N", from 1 in the order first met.
+ * An address in REPORT_PROGRAMS, and base58 text that is not a public key,
+ * stay as they are. Every string of a plain JSON value is read, keys
+ * included.
+ */
+export function withRoleMarkers<T>(
+  value: T,
+  markers: ReadonlyMap<string, string>,
+): T {
+  const others = new Map<string, string>();
+  return mapStrings(value, (text) =>
+    text.replace(BASE58_RUN, (run) => {
+      if (REPORT_PROGRAMS.has(run)) return run;
+      const known = markers.get(run) ?? others.get(run);
+      if (known !== undefined) return known;
+      if (run.length < 32 || decodePublicKey(run) === null) return run;
+      const marker = `address ${others.size + 1}`;
+      others.set(run, marker);
+      return marker;
+    }),
   );
 }

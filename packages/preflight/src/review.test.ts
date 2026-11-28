@@ -432,49 +432,6 @@ describe("n3: which token accounts a report marks as the wallet's", () => {
     return JSON.stringify(result.summary);
   };
 
-  it("an account the wallet owns only after the simulation, named in a decoded transfer", async () => {
-    // An undecoded program creates the account; a decoded transfer from the
-    // wallet's other token account then names it as the destination.
-    const other = key(K.userToken2022Account);
-    const result = await preflightTransaction(
-      build([
-        unknown([writable(tokenAccount)]),
-        spl.createTransferInstruction(other, tokenAccount, user, BigInt(1)),
-      ]),
-      {
-        endpoint: recordedEndpoint({
-          accounts: {
-            [USER]: wallet(5_000_000_000),
-            [K.userToken2022Account]: token({ amount: BigInt(9) }),
-          },
-          simulation: {
-            err: null,
-            accounts: {
-              [USER]: wallet(4_997_955_720),
-              [K.userToken2022Account]: token({ amount: BigInt(8) }),
-              [K.userTokenAccount]: token({ amount: BigInt(1) }),
-            },
-          },
-        }),
-        user: USER,
-      },
-    );
-    assert.ok(result.summary.kind === "ready");
-    const json = JSON.stringify(result.summary);
-    assert.equal(json.includes(K.userTokenAccount), false);
-    assert.equal(json.includes(K.userToken2022Account), false);
-    const out = result.summary.summary.effects.find(
-      (effect) => effect.kind === "token-out",
-    );
-    assert.ok(out !== undefined && out.kind === "token-out");
-    // Only the run's state after shows the wallet owns it, and no read
-    // confirms it, so it is marked as user-authorized.
-    assert.ok(
-      "address" in out.destination &&
-        out.destination.address.startsWith("user-authorized token account "),
-    );
-  });
-
   it("with no simulation: an associated token account created for the wallet", async () => {
     const ata = spl.getAssociatedTokenAddressSync(mint, user);
     const json = await reportOf(

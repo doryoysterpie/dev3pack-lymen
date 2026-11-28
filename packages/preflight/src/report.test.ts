@@ -105,28 +105,6 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
     });
   }
 
-  it("with no read, marks a token account the wallet approves from as user-authorized, not as the wallet's", async () => {
-    const c = fixture.cases.find((entry) => entry.name.startsWith("drainer:"));
-    assert.ok(c !== undefined);
-    const offline: Fetch = async () => {
-      throw new Error("offline");
-    };
-    const result = await preflightTransaction(decodeBase64(c.transaction)!, {
-      endpoint: endpointFor(offline, "x"),
-      user: fixture.user,
-    });
-    assert.ok(result.summary.kind === "ready");
-    assert.equal(result.summary.simulation.status, "not-run");
-    const approve = result.summary.summary.effects.find(
-      (effect) => effect.kind === "delegate-approved",
-    );
-    assert.ok(approve !== undefined && approve.kind === "delegate-approved");
-    assert.deepEqual(approve.account, {
-      address: "user-authorized token account 1",
-    });
-    assert.equal(JSON.stringify(result).includes(K.userTokenAccount), false);
-  });
-
   it("scrubs addresses from the RPC's error text and from the runtime error", async () => {
     const c = fixture.cases.find((entry) => entry.name.startsWith("drainer:"));
     assert.ok(c !== undefined);
@@ -188,4 +166,48 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
     });
     assert.equal(JSON.stringify(failed).includes(fixture.user), false);
   });
+});
+
+describe("ruling 20a, item 3: a report names no address but six known programs", () => {
+  // System, SPL Token, Token-2022, associated token, Compute Budget, Memo.
+  const allowed = new Set([
+    "11111111111111111111111111111111",
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+    "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+    "ComputeBudget111111111111111111111111111111",
+    "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+  ]);
+  /** Every run of base58 text in the JSON that is a public key. */
+  const addressesIn = (json: string): string[] =>
+    (json.match(/[1-9A-HJ-NP-Za-km-z]{32,}/g) ?? []).filter(
+      (run) => decodePublicKey(run) !== null,
+    );
+  const offline = endpointFor(async () => {
+    throw new Error("offline");
+  }, "x");
+  const withRun = recordedEndpoint({
+    accounts: {
+      [fixture.user]: sol(5_000_000_000),
+    },
+    simulation: { err: null, accounts: {} },
+  });
+
+  for (const c of fixture.cases) {
+    it(`${c.name}: only allowed program IDs, offline and with a run`, async () => {
+      const bytes = decodeBase64(c.transaction);
+      assert.ok(bytes !== null);
+      const parsed = parseTransaction(bytes);
+      const user = parsed.ok ? parsed.transaction.message.staticKeys[0] : "";
+      for (const endpoint of [offline, withRun]) {
+        const result = await preflightTransaction(bytes, { endpoint, user });
+        const found = addressesIn(JSON.stringify(result));
+        assert.deepEqual(
+          found.filter((address) => !allowed.has(address)),
+          [],
+          c.name,
+        );
+      }
+    });
+  }
 });
