@@ -1574,6 +1574,139 @@ describe("re-audit A2: the report says which fields come from a read", () => {
   });
 });
 
+describe("hunt: the public interface refuses what it cannot use, and never throws", () => {
+  const recorded = recordedRpc({
+    accounts: { [USER]: system(5_000_000_000) as never },
+    simulation: {
+      err: null,
+      accounts: { [USER]: system(4_999_995_000) as never },
+    },
+  });
+  const sent = () => encodeBase64(build([transfer()]));
+
+  it("a read with more or fewer accounts than asked is not used", async () => {
+    for (const reshape of [
+      (states: unknown[]) => states.slice(0, -1),
+      (states: unknown[]) => [...states, null],
+      () => [],
+    ]) {
+      const result = await preflight(
+        {
+          ...recorded,
+          getAccounts: async (addresses) =>
+            reshape(await recorded.getAccounts(addresses)) as never,
+        },
+        sent(),
+        USER,
+      );
+      assert.ok(result.kind === "ready");
+      assert.deepEqual(result.simulation, {
+        status: "not-run",
+        reason: "the RPC did not return the accounts asked",
+      });
+    }
+  });
+
+  it("account data that is not bytes is not used", async () => {
+    const result = await preflight(
+      {
+        ...recorded,
+        getAccounts: async (addresses) =>
+          addresses.map((address) =>
+            address === USER
+              ? {
+                  lamports: "5000000000",
+                  owner: SYSTEM_PROGRAM,
+                  data: "x".repeat(200) as never,
+                }
+              : null,
+          ),
+      },
+      sent(),
+      USER,
+    );
+    assert.ok(result.kind === "ready");
+    assert.deepEqual(result.simulation, {
+      status: "not-run",
+      reason: "an account's data is not bytes",
+    });
+  });
+
+  it("a custom Rpc's replacement blockhash that is not a hash is not kept", async () => {
+    for (const replacementBlockhash of [5, "not a hash", {}]) {
+      const result = await preflight(
+        {
+          ...recorded,
+          simulate: async (base64, addresses) => ({
+            ...(await recorded.simulate(base64, addresses)),
+            replacementBlockhash: replacementBlockhash as never,
+          }),
+        },
+        sent(),
+        USER,
+      );
+      assert.ok(result.kind === "ready");
+      assert.equal(result.simulation.status, "ran");
+      assert.deepEqual(result.simulatedAt, { slot: 0, blockhash: null });
+    }
+  });
+
+  it("an Rpc whose error cannot be read as text still gives a ready result", async () => {
+    const unreadable = new Error("x");
+    Object.defineProperty(unreadable, "message", {
+      get() {
+        throw new Error("no message");
+      },
+    });
+    for (const thrown of [
+      unreadable,
+      {
+        toString() {
+          throw new Error("no text");
+        },
+      },
+    ]) {
+      const result = await preflight(
+        {
+          ...recorded,
+          simulate: async () => {
+            throw thrown;
+          },
+        },
+        sent(),
+        USER,
+      );
+      assert.ok(result.kind === "ready");
+      assert.deepEqual(result.simulation, {
+        status: "not-run",
+        reason: "the RPC failed with an error limen cannot read",
+      });
+    }
+  });
+
+  it("a transaction that is not text, or not bytes, is refused", async () => {
+    for (const value of [{ length: 4 }, 12345, null, undefined]) {
+      assert.deepEqual(await preflight(recorded, value as never, USER), {
+        kind: "malformed",
+        problem: "not-base64",
+      });
+    }
+    for (const value of ["abc", null, 5, [1, 2, 3]]) {
+      assert.deepEqual(
+        await preflightTransaction(value as never, {
+          rpc: recorded,
+          user: USER,
+        }),
+        {
+          summary: { kind: "malformed", problem: "not-bytes" },
+          drainPattern: false,
+          simulatedAt: null,
+        },
+      );
+    }
+  });
+});
+
 describe("audit 9: the report JSON and the blockhash", () => {
   const offline = () =>
     jsonRpc(async () => {

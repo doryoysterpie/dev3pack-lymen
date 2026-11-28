@@ -104,7 +104,8 @@ export type SignBlock =
 export type Preflight =
   | {
       readonly kind: "malformed";
-      readonly problem: WireProblem | "not-base64" | "bad-lookup-index";
+      readonly problem:
+        WireProblem | "not-base64" | "not-bytes" | "bad-lookup-index";
     }
   | { readonly kind: "not-devnet" }
   | { readonly kind: "user-not-fee-payer"; readonly feePayer: string }
@@ -180,11 +181,43 @@ function lookupProblem(
  */
 function validStates(
   states: readonly (AccountState | null)[],
+  asked?: number,
 ): readonly (AccountState | null)[] {
-  if (!states.every((state) => state === null || isPublicKey(state.owner))) {
+  if (
+    !Array.isArray(states) ||
+    (asked !== undefined && states.length !== asked)
+  ) {
+    throw new Error("the RPC did not return the accounts asked");
+  }
+  if (!states.every((state) => state === null || isPublicKey(state?.owner))) {
     throw new Error("an account's owner is not a public key");
   }
+  if (
+    !states.every((state) => state === null || state.data instanceof Uint8Array)
+  ) {
+    throw new Error("an account's data is not bytes");
+  }
   return states;
+}
+
+/**
+ * The text of what an Rpc threw, for the reason no result is used. An Rpc
+ * can throw anything, so reading it must not throw in turn.
+ */
+function errorText(error: unknown): string {
+  try {
+    return String(error instanceof Error ? error.message : error);
+  } catch {
+    return "the RPC failed with an error limen cannot read";
+  }
+}
+
+function isNotDevnet(error: unknown): boolean {
+  try {
+    return error instanceof RpcError && error.reason === "not-devnet";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -223,7 +256,7 @@ async function loadTables(
   const keys = transaction.message.lookups.map((lookup) => lookup.table);
   const tables = new Map<string, readonly string[]>();
   if (keys.length === 0) return tables;
-  const states = await rpc.getAccounts(keys);
+  const states = validStates(await rpc.getAccounts(keys), keys.length);
   keys.forEach((key, i) => {
     const state = states[i];
     if (state === null || state.owner !== ADDRESS_LOOKUP_TABLE_PROGRAM) return;
@@ -251,7 +284,8 @@ export async function preflight(
   if (typeof user !== "string" || decodePublicKey(user) === null) {
     return { kind: "user-not-given" };
   }
-  const received = decodeBase64(sent);
+  // A JavaScript caller can pass anything; only text can be base64.
+  const received = typeof sent === "string" ? decodeBase64(sent) : null;
   if (received === null) return { kind: "malformed", problem: "not-base64" };
   const unset = readUnsetFeePayer(received);
   let bytes = received;
@@ -289,7 +323,7 @@ export async function preflight(
     const unwatched = watchProblem(feePayer, accounts);
     if (unwatched !== null) throw new Error(unwatched);
     const watched = watchedAddresses(feePayer, accounts);
-    const before = validStates(await rpc.getAccounts(watched));
+    const before = validStates(await rpc.getAccounts(watched), watched.length);
     read = true;
     owned = ownedTokenAccounts(feePayer, watched, before, []);
     const result = await rpc.simulate(base64, watched);
@@ -335,7 +369,7 @@ export async function preflight(
     // (simulate.ts, balanceChanges). The other fields come from the read
     // before it, which a second read must confirm, so a change another
     // transaction made in between is not taken for this one's.
-    const again = validStates(await rpc.getAccounts(watched));
+    const again = validStates(await rpc.getAccounts(watched), watched.length);
     if (!unchangedBetween(before, again)) {
       throw new Error(
         "an account limen watches changed on devnet during the check",
@@ -363,25 +397,21 @@ export async function preflight(
       changes: withMarker(changes, feePayer),
       fromReadBefore: FROM_READ_BEFORE,
     };
-    // A blockhash is never one of the transaction's own accounts; such a
-    // value from the RPC is not kept.
+    // A blockhash is 32 bytes, and never one of the transaction's own
+    // accounts; any other value from the RPC is not kept.
     const blockhash =
-      result.replacementBlockhash !== null &&
-      keys.includes(result.replacementBlockhash)
-        ? null
-        : result.replacementBlockhash;
+      isPublicKey(result.replacementBlockhash) &&
+      !keys.includes(result.replacementBlockhash)
+        ? result.replacementBlockhash
+        : null;
     simulatedAt = { slot: result.slot, blockhash };
   } catch (error) {
-    if (error instanceof RpcError && error.reason === "not-devnet") {
-      return { kind: "not-devnet" };
-    }
+    if (isNotDevnet(error)) return { kind: "not-devnet" };
     // The reason can quote the RPC's own error text, which can name any
     // account, so every address in it is scrubbed.
     simulation = {
       status: "not-run",
-      reason: scrubAddresses(
-        error instanceof Error ? error.message : String(error),
-      ),
+      reason: scrubAddresses(errorText(error)),
     };
   }
 
@@ -518,6 +548,14 @@ export async function preflightTransaction(
   drainPattern: boolean;
   simulatedAt: SimulatedAt | null;
 }> {
+  // A JavaScript caller can pass anything; only bytes are a transaction.
+  if (!(transaction instanceof Uint8Array)) {
+    return {
+      summary: { kind: "malformed", problem: "not-bytes" },
+      drainPattern: false,
+      simulatedAt: null,
+    };
+  }
   const result = await preflight(
     options.rpc,
     encodeBase64(transaction),
