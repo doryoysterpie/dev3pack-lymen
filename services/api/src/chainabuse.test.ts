@@ -36,6 +36,10 @@ import {
 import { openDatabase } from "./db.ts";
 import { canonicalJson, loadBundle, type StoredBundle } from "./evidence.ts";
 import { API_VERSION, createApiServer } from "./server.ts";
+import {
+  TEST_STATION_DISPLAY_SECRET,
+  TEST_STATION_SETTINGS,
+} from "./test-station.ts";
 import { bundledLists, loadCase } from "./triage.ts";
 
 const FIXTURES = JSON.parse(
@@ -102,6 +106,7 @@ async function runFlow(
   const server: Server = createApiServer({
     db,
     version: API_VERSION,
+    ...TEST_STATION_SETTINGS,
     reports: {
       now: () => 1_795_000_500,
       resimulator: async (tx) => ({
@@ -376,6 +381,7 @@ test("with the flag on and no domain lists, the API still starts, serves /health
       // E-02 refuses API_PORT=0, so the test names a port that was free a moment ago.
       API_PORT: String(await freePort()),
       CHAINABUSE_POST: "dry-run",
+      STATION_DISPLAY_TOKEN: TEST_STATION_DISPLAY_SECRET,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -403,7 +409,7 @@ test("with the flag on and no domain lists, the API still starts, serves /health
     assert.deepEqual(await health.json(), {
       status: "ok",
       version: "0.1.0",
-      schema_version: 3,
+      schema_version: 5,
     });
     const report = await fetch(`${url}/reports`, {
       method: "POST",
@@ -827,6 +833,7 @@ async function manualFlow(
   const server: Server = createApiServer({
     db,
     version: API_VERSION,
+    ...TEST_STATION_SETTINGS,
     reports: {
       now: () => 1_795_000_500,
       triageToken: TRIAGE_TOKEN,

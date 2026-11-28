@@ -11,6 +11,7 @@ import { openDatabase } from "./db.ts";
 import { DASHBOARD_CSP } from "./dashboard.ts";
 import type { Resimulator } from "./evidence.ts";
 import { API_VERSION, createApiServer } from "./server.ts";
+import { TEST_STATION_SETTINGS } from "./test-station.ts";
 
 const FIXTURES = JSON.parse(
   readFileSync(
@@ -57,6 +58,7 @@ async function start(options: {
   const server = createApiServer({
     db: openDatabase(":memory:"),
     version: API_VERSION,
+    ...TEST_STATION_SETTINGS,
     reports: { now: () => clock++, ...options },
   });
   servers.push(server);

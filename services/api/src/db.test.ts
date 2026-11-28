@@ -31,6 +31,7 @@ const OWED_SCHEMA: Record<string, string[]> = {
     "station_nonce",
     "mint",
     "created_at",
+    "mint_status",
   ],
   evidence_bundles: [
     "sighting_id",
@@ -80,14 +81,14 @@ function withTempDir(fn: (dir: string) => void): void {
   }
 }
 
-test("an empty database migrates to schema version 3 with exactly the seven owed tables", () => {
+test("an empty database migrates to schema version 5 with exactly the seven owed tables", () => {
   const db = new DatabaseSync(":memory:");
   assert.equal(schemaVersion(db), 0);
   assert.deepEqual(tables(db), []);
 
-  assert.equal(migrate(db), 3);
-  assert.equal(schemaVersion(db), 3);
-  assert.equal(MIGRATIONS.length, 3);
+  assert.equal(migrate(db), 5);
+  assert.equal(schemaVersion(db), 5);
+  assert.equal(MIGRATIONS.length, 5);
   assert.deepEqual(tables(db), Object.keys(OWED_SCHEMA).sort());
   for (const [table, owed] of Object.entries(OWED_SCHEMA)) {
     assert.deepEqual(columns(db, table), owed, `columns of ${table}`);
@@ -98,14 +99,14 @@ test("an empty database file on disk migrates, and reopening it does not migrate
   withTempDir((dir) => {
     const path = join(dir, "limen.db");
     const first = openDatabase(path);
-    assert.equal(schemaVersion(first), 3);
+    assert.equal(schemaVersion(first), 5);
     first
       .prepare("INSERT INTO stations (id, name, created_at) VALUES (?, ?, ?)")
       .run("st-1", "Front desk", 1_700_000_000);
     first.close();
 
     const second = openDatabase(path);
-    assert.equal(schemaVersion(second), 3);
+    assert.equal(schemaVersion(second), 5);
     const row = second
       .prepare("SELECT name FROM stations WHERE id = ?")
       .get("st-1") as {
@@ -121,7 +122,7 @@ test("a database from a newer build is refused, not run against", () => {
   db.exec("PRAGMA user_version = 99");
   assert.throws(
     () => migrate(db),
-    /schema version 99 is newer than this build supports \(3\)/,
+    /schema version 99 is newer than this build supports \(5\)/,
   );
 });
 
@@ -163,6 +164,132 @@ test("the schema enforces foreign keys and a wallet bound to at most one registr
   );
 });
 
+test("migration 4 names every earlier check-in's mint state: done with a mint address, unrecorded without", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
+  for (let version = 0; version < 3; version++) {
+    db.exec(MIGRATIONS[version]!);
+    db.exec(`PRAGMA user_version = ${version + 1}`);
+  }
+  // Rows as 7a1176c wrote them: the mint recorded after a pass landed, or never.
+  db.exec(`
+    INSERT INTO stations (id, name, created_at) VALUES ('st-front', 'Front desk', 1);
+    INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('day-2', 'Day 2', 1, 2);
+    INSERT INTO registrations (reg_hash, wallet, bound_at) VALUES ('h1', 'w1', 1), ('h2', 'w2', 1);
+    INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, mint, created_at)
+      VALUES ('day-2', 'st-front', 'h1', 'w1', 'n1', 'Mint1111', 1);
+    INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, created_at)
+      VALUES ('day-2', 'st-front', 'h2', 'w2', 'n2', 1);
+  `);
+  assert.equal(migrate(db), 5);
+  assert.deepEqual(
+    db
+      .prepare("SELECT reg_hash, mint, mint_status FROM checkins ORDER BY id")
+      .all()
+      .map((r) => ({ ...r })),
+    [
+      { reg_hash: "h1", mint: "Mint1111", mint_status: "done" },
+      { reg_hash: "h2", mint: null, mint_status: "unrecorded" },
+    ],
+  );
+  // pending and done carry a mint address; no row is left without a state.
+  assert.throws(
+    () =>
+      db.exec(
+        "INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, mint_status, created_at) VALUES ('day-2', 'st-front', 'h3', 'w3', 'n3', 'pending', 1)",
+      ),
+    /CHECK constraint failed/,
+  );
+  assert.throws(
+    () =>
+      db.exec("UPDATE checkins SET mint_status = NULL WHERE reg_hash = 'h1'"),
+    /NOT NULL constraint failed/,
+  );
+});
+
+/** Migration 4 as 228e3f5 shipped it: a nullable state, with no state for rows before it. */
+const MIGRATION_4_AT_228E3F5 = `
+  ALTER TABLE checkins ADD COLUMN mint_status TEXT
+    CHECK (mint_status IS NULL OR (mint_status IN ('pending', 'done') AND mint IS NOT NULL));
+  `;
+
+/** A database at schema version `version`, built from `migrations`, with check-in rows. */
+function checkinsAt(
+  version: number,
+  migrations: readonly string[],
+  rows: string,
+): DatabaseSync {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
+  for (let v = 0; v < version; v++) {
+    db.exec(migrations[v]!);
+    db.exec(`PRAGMA user_version = ${v + 1}`);
+  }
+  db.exec(`
+    INSERT INTO stations (id, name, created_at) VALUES ('st-front', 'Front desk', 1);
+    INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('day-2', 'Day 2', 1, 2);
+    INSERT INTO registrations (reg_hash, wallet, bound_at) VALUES ('h1', 'w1', 1), ('h2', 'w2', 1), ('h3', 'w3', 1), ('h4', 'w4', 1);
+    ${rows}
+  `);
+  return db;
+}
+
+const stateRows = (db: DatabaseSync) =>
+  db
+    .prepare("SELECT reg_hash, mint, mint_status FROM checkins ORDER BY id")
+    .all()
+    .map((r) => ({ ...r }));
+
+test("every earlier schema migrates to the latest with every check-in in a named state: from v3, and from v4 as 228e3f5 and as f547f8e wrote it", () => {
+  const before4 = `
+    INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, mint, created_at)
+      VALUES ('day-2', 'st-front', 'h1', 'w1', 'n1', 'Mint1111', 1);
+    INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, created_at)
+      VALUES ('day-2', 'st-front', 'h2', 'w2', 'n2', 1);`;
+  const at4 = `
+    INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, mint, mint_status, created_at)
+      VALUES ('day-2', 'st-front', 'h3', 'w3', 'n3', 'Mint3333', 'pending', 1),
+             ('day-2', 'st-front', 'h4', 'w4', 'n4', 'Mint4444', 'done', 1);`;
+  const owed = [
+    { reg_hash: "h1", mint: "Mint1111", mint_status: "done" },
+    { reg_hash: "h2", mint: null, mint_status: "unrecorded" },
+  ];
+  const owedAt4 = [
+    ...owed,
+    { reg_hash: "h3", mint: "Mint3333", mint_status: "pending" },
+    { reg_hash: "h4", mint: "Mint4444", mint_status: "done" },
+  ];
+  // From v3: rows as 7a1176c wrote them.
+  const v3 = checkinsAt(3, MIGRATIONS, before4);
+  assert.equal(migrate(v3), MIGRATIONS.length);
+  assert.deepEqual(stateRows(v3), owed);
+  // From v4 as 228e3f5 wrote it: the earlier rows still have no state.
+  const old4 = checkinsAt(
+    4,
+    [...MIGRATIONS.slice(0, 3), MIGRATION_4_AT_228E3F5],
+    before4 + at4,
+  );
+  assert.equal(migrate(old4), MIGRATIONS.length);
+  assert.deepEqual(stateRows(old4), owedAt4);
+  // From v4 as f547f8e wrote it: the states are kept.
+  const new4 = checkinsAt(4, MIGRATIONS, before4 + at4);
+  assert.equal(migrate(new4), MIGRATIONS.length);
+  assert.deepEqual(stateRows(new4), owedAt4);
+  for (const db of [v3, old4, new4]) {
+    // Each state but unrecorded carries a mint address, and unrecorded carries none; no row is
+    // without a state; revoked is a state.
+    for (const bad of [
+      "INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, mint_status, created_at) VALUES ('day-2', 'st-front', 'h9', 'w9', 'n9', 'pending', 1)",
+      "UPDATE checkins SET mint = 'MintX' WHERE reg_hash = 'h2'",
+      "UPDATE checkins SET mint_status = NULL WHERE reg_hash = 'h1'",
+    ])
+      assert.throws(() => db.exec(bad), /constraint failed/, bad);
+    db.exec(
+      "UPDATE checkins SET mint_status = 'revoked' WHERE reg_hash = 'h1'",
+    );
+  }
+});
+
 test("a version 1 database migrates to the latest version and keeps its rows", () => {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
@@ -173,7 +300,7 @@ test("a version 1 database migrates to the latest version and keeps its rows", (
   db.exec(
     "INSERT INTO sightings (device_hash, qr_text, created_at) VALUES ('d-1', 'qr', 1)",
   );
-  assert.equal(migrate(db), 3);
+  assert.equal(migrate(db), 5);
   const row = db.prepare("SELECT qr_text FROM sightings").get() as {
     qr_text: string;
   };
@@ -233,7 +360,7 @@ test("migration 3 keeps an E-02 case row and the sightings foreign key to cases"
   db.exec(
     "INSERT INTO cases (id, status, created_at, updated_at) VALUES (7, 'escalated', 1, 2)",
   );
-  assert.equal(migrate(db), 3);
+  assert.equal(migrate(db), 5);
   const row = db.prepare("SELECT * FROM cases").get() as Record<
     string,
     unknown

@@ -6,8 +6,12 @@
 //   - MetadataPointer pointing at the mint itself, which holds TokenMetadata: the name, the
 //     symbol, and the station, session and check-in time as additional fields.
 // The organizer key is the mint authority and the metadata update authority, and pays for
-// everything. Devnet only (D-03): connectDevnet, mintPass and revokePass each refuse a connection
-// whose cluster's genesis hash is not devnet's, before anything is sent.
+// everything. Devnet only (D-03): the module has one connection, to DEVNET_URL, made by a private
+// factory with a fetch that fails on any redirect, and no exported function takes a connection or
+// an endpoint. mintPass, revokePass and passMintState each refuse a cluster whose genesis hash is not
+// devnet's with their first request, before anything is sent (mintPass refuses an over-long
+// station or session ID even before that request), and a send is confirmed by polling over HTTP,
+// so no WebSocket is opened.
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   createBurnCheckedInstruction,
@@ -19,22 +23,29 @@ import {
   createMintToInstruction,
   createUpdateFieldInstruction,
   ExtensionType,
+  getAccount,
   getAssociatedTokenAddressSync,
+  type Account,
+  type Mint,
+  unpackMint,
   getMintLen,
   LENGTH_SIZE,
   TOKEN_2022_PROGRAM_ID,
+  TokenError,
   TYPE_SIZE,
 } from "@solana/spl-token";
 import {
   Connection,
   Keypair,
   PublicKey,
-  sendAndConfirmTransaction,
   SystemProgram,
   Transaction,
 } from "@solana/web3.js";
 
-export const DEVNET_URL = "https://api.devnet.solana.com";
+import { DEVNET_ENDPOINT } from "./devnet-endpoint.ts";
+
+/** The one devnet endpoint limen calls (devnet-endpoint.ts). */
+export const DEVNET_URL = DEVNET_ENDPOINT;
 /** getGenesisHash on devnet, read from api.devnet.solana.com on 2026-11-27. */
 export const DEVNET_GENESIS_HASH =
   "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
@@ -58,8 +69,9 @@ export interface PassDetails {
 
 /**
  * The most bytes of UTF-8 a station or session ID may take. The mint transaction is 820 bytes
- * with both IDs empty and grows by one byte for each byte of either, so at this limit it is 948
- * bytes, 284 under Solana's 1232-byte limit; at 206 bytes each it would be too large to send.
+ * empty with both IDs empty and grows by one byte for each byte of either, so at this limit it is
+ * 948 bytes empty, 964 bytes with a SOL top-up, and 947 bytes when the address already covers
+ * rent, well under Solana's 1232-byte limit; at 206 bytes each it would be too large to send.
  */
 export const MAX_PASS_ID_BYTES = 64;
 
@@ -142,20 +154,46 @@ export function buildPassMintTransaction(input: {
   holder: PublicKey;
   details: PassDetails;
   lamports: number;
+  /**
+   * Lamports already at the mint address, as a System-owned account with no data that anyone's
+   * transfer can make. When there are any, the account is topped up when needed, allocated and
+   * assigned instead of created (which a funded address would refuse): the organizer authorizes
+   * the SOL top-up and the mint keypair authorizes allocation and assignment; both sign.
+   */
+  funded?: number;
 }): Transaction {
   const { organizer, mint, holder, details, lamports } = input;
+  const funded = input.funded ?? 0;
   const programId = TOKEN_2022_PROGRAM_ID;
+  const space = getMintLen(PASS_EXTENSIONS);
   const tokenAccount = passTokenAccount(mint, holder);
   const tx = new Transaction();
   tx.feePayer = organizer;
+  if (funded === 0) {
+    tx.add(
+      SystemProgram.createAccount({
+        fromPubkey: organizer,
+        newAccountPubkey: mint,
+        space,
+        lamports,
+        programId,
+      }),
+    );
+  } else {
+    if (lamports > funded)
+      tx.add(
+        SystemProgram.transfer({
+          fromPubkey: organizer,
+          toPubkey: mint,
+          lamports: lamports - funded,
+        }),
+      );
+    tx.add(
+      SystemProgram.allocate({ accountPubkey: mint, space }),
+      SystemProgram.assign({ accountPubkey: mint, programId }),
+    );
+  }
   tx.add(
-    SystemProgram.createAccount({
-      fromPubkey: organizer,
-      newAccountPubkey: mint,
-      space: getMintLen(PASS_EXTENSIONS),
-      lamports,
-      programId,
-    }),
     createInitializeNonTransferableMintInstruction(mint, programId),
     createInitializePermanentDelegateInstruction(mint, organizer, programId),
     createInitializeMetadataPointerInstruction(
@@ -234,30 +272,100 @@ async function requireDevnet(connection: Connection): Promise<void> {
   }
 }
 
-/** Opens a connection and refuses it unless the cluster's genesis hash is devnet's. */
-export async function connectDevnet(
-  url: string = DEVNET_URL,
-  make = (u: string) => new Connection(u, "confirmed"),
-): Promise<Connection> {
-  const connection = make(url);
-  await requireDevnet(connection);
-  return connection;
+/**
+ * globalThis.fetch, read at each call, with redirect "error": a redirect from the endpoint fails
+ * the request rather than being followed. web3.js's own fetch follows redirects.
+ */
+const noRedirectFetch = ((
+  input: Parameters<typeof fetch>[0],
+  init?: Parameters<typeof fetch>[1],
+) => globalThis.fetch(input, { ...init, redirect: "error" })) as typeof fetch;
+
+/** The one private factory: a Connection to DEVNET_URL whose every HTTP request refuses redirects. */
+function makeDevnetConnection(): Connection {
+  return new Connection(DEVNET_URL, {
+    commitment: "confirmed",
+    fetch: noRedirectFetch,
+  });
+}
+
+let devnet: Connection | null = null;
+
+/**
+ * limen's one devnet connection, made on first use. No caller can supply another: no exported
+ * function here takes a connection or an endpoint. The devnet check script reads and sends through
+ * it.
+ */
+export function devnetConnection(): Connection {
+  return (devnet ??= makeDevnetConnection());
+}
+
+/** Signs and sends `tx`, and waits until devnet confirms it, over HTTP only. */
+async function sendAndConfirm(
+  tx: Transaction,
+  signers: Keypair[],
+): Promise<string> {
+  const connection = devnetConnection();
+  const { blockhash, lastValidBlockHeight } =
+    await connection.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = blockhash;
+  tx.sign(...signers);
+  const signature = await connection.sendRawTransaction(tx.serialize(), {
+    preflightCommitment: "confirmed",
+  });
+  for (;;) {
+    const [status] = (await connection.getSignatureStatuses([signature])).value;
+    if (status?.err)
+      throw new Error(
+        `devnet refused the transaction: ${JSON.stringify(status.err)}`,
+      );
+    if (
+      status?.confirmationStatus === "confirmed" ||
+      status?.confirmationStatus === "finalized"
+    )
+      return signature;
+    if ((await connection.getBlockHeight("confirmed")) > lastValidBlockHeight)
+      throw new Error("the transaction expired before devnet confirmed it");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }
 
 /**
- * Mints one pass to `holder` on devnet. Returns the new mint, the holder's token account and the
- * signature. Over-long details are refused before the cluster is asked anything, and a connection
- * to any other cluster is refused before anything is sent.
+ * `mintPass` found an account already at a pass's mint address other than a System-owned account
+ * with no data (for example a pass another request already minted there, or another account), so
+ * nothing is minted over it.
+ */
+export class MintAddressOccupiedError extends Error {
+  override name = "MintAddressOccupiedError";
+  constructor(mint: PublicKey) {
+    super(`mint address occupied: ${mint.toBase58()} already holds an account`);
+  }
+}
+
+/** True for a System-owned account with no data: the account anyone's transfer can make. */
+const fundedOnly = (info: { owner: PublicKey; data: Buffer }) =>
+  info.owner.equals(SystemProgram.programId) && info.data.length === 0;
+
+/**
+ * Mints one pass to `holder` on devnet, at `mint`'s address: a new keypair unless one is given,
+ * as E-05 gives one derived per check-in so a retry targets the same address. The address may be
+ * empty or hold only lamports anyone could have sent; any other account there throws
+ * MintAddressOccupiedError, and nothing is sent. Returns the mint,
+ * the holder's token account and the signature. Over-long details are refused before the cluster
+ * is asked anything, and another cluster is refused before anything is sent.
  */
 export async function mintPass(
-  connection: Connection,
   organizer: Keypair,
   holder: PublicKey,
   details: PassDetails,
+  mint: Keypair = Keypair.generate(),
 ): Promise<{ mint: PublicKey; tokenAccount: PublicKey; signature: string }> {
   const space = passAccountLen(details);
+  const connection = devnetConnection();
   await requireDevnet(connection);
-  const mint = Keypair.generate();
+  const existing = await connection.getAccountInfo(mint.publicKey, "confirmed");
+  if (existing !== null && !fundedOnly(existing))
+    throw new MintAddressOccupiedError(mint.publicKey);
   const lamports = await connection.getMinimumBalanceForRentExemption(space);
   const tx = buildPassMintTransaction({
     organizer: organizer.publicKey,
@@ -265,11 +373,9 @@ export async function mintPass(
     holder,
     details,
     lamports,
+    funded: existing?.lamports ?? 0,
   });
-  const signature = await sendAndConfirmTransaction(connection, tx, [
-    organizer,
-    mint,
-  ]);
+  const signature = await sendAndConfirm(tx, [organizer, mint]);
   return {
     mint: mint.publicKey,
     tokenAccount: passTokenAccount(mint.publicKey, holder),
@@ -278,20 +384,73 @@ export async function mintPass(
 }
 
 /**
- * Revokes a pass: the organizer burns the holder's token as permanent delegate. A connection to
- * any other cluster than devnet is refused before anything is sent.
+ * Where a pass stands on devnet, read without sending anything. A pass was issued at `mint` only
+ * if the account there is owned by Token-2022 and is an initialized mint:
+ *   - "absent": no account, or a System-owned account with no data, which anyone's transfer can
+ *     make, so no pass was issued and one can be minted there;
+ *   - "minted": an issued pass with decimals 0 and a supply of one, whose one token `holder`'s
+ *     associated token account, holding that mint for that owner, holds;
+ *   - "unheld": any other initialized Token-2022 mint there: supply other than one (such as 0
+ *     after a burn), mismatched decimals (other than 0), or `holder`'s associated token account
+ *     missing, unreadable as a Token-2022 account, for another mint, owned by a wrong owner, or
+ *     holding an amount other than one;
+ *   - "occupied": any other account, which limen did not make.
+ * A request that fails is thrown, not read as a state. Another cluster is refused first.
+ */
+export async function passMintState(
+  mint: PublicKey,
+  holder: PublicKey,
+): Promise<"absent" | "minted" | "unheld" | "occupied"> {
+  const connection = devnetConnection();
+  await requireDevnet(connection);
+  const info = await connection.getAccountInfo(mint, "confirmed");
+  if (info === null || fundedOnly(info)) return "absent";
+  if (!info.owner.equals(TOKEN_2022_PROGRAM_ID)) return "occupied";
+  let state: Mint;
+  try {
+    state = unpackMint(mint, info, TOKEN_2022_PROGRAM_ID);
+  } catch (err) {
+    // spl-token's refusals say the account is no mint; any other error is no fact.
+    if (err instanceof TokenError) return "occupied";
+    throw err;
+  }
+  if (!state.isInitialized) return "occupied";
+  let held: Account;
+  try {
+    held = await getAccount(
+      connection,
+      passTokenAccount(mint, holder),
+      "confirmed",
+      TOKEN_2022_PROGRAM_ID,
+    );
+  } catch (err) {
+    // A missing or foreign token account is a fact: the holder does not hold the pass.
+    if (err instanceof TokenError) return "unheld";
+    throw err;
+  }
+  return state.supply === 1n &&
+    state.decimals === 0 &&
+    held.mint.equals(mint) &&
+    held.owner.equals(holder) &&
+    held.amount === 1n
+    ? "minted"
+    : "unheld";
+}
+
+/**
+ * Revokes a pass: the organizer burns the holder's token as permanent delegate. Another cluster
+ * is refused before anything is sent.
  */
 export async function revokePass(
-  connection: Connection,
   organizer: Keypair,
   mint: PublicKey,
   holder: PublicKey,
 ): Promise<string> {
-  await requireDevnet(connection);
+  await requireDevnet(devnetConnection());
   const tx = buildRevokeTransaction({
     organizer: organizer.publicKey,
     mint,
     holder,
   });
-  return sendAndConfirmTransaction(connection, tx, [organizer]);
+  return sendAndConfirm(tx, [organizer]);
 }

@@ -4,10 +4,18 @@ import type { Server } from "node:http";
 import { isIPv6, type AddressInfo } from "node:net";
 
 import { chainabuseHook, parseChainabuseMode } from "./chainabuse.ts";
+import {
+  devnetMinter,
+  loadPassMintSecret,
+  registrationsFrom,
+} from "./checkin.ts";
 import { openDatabase } from "./db.ts";
+import { devnetEndpoint } from "./devnet-endpoint.ts";
 import { isMainModule } from "./main-module.ts";
 import { loadOrganizerKey } from "./organizer-key.ts";
+import { loadRegistrationSalt } from "./registration.ts";
 import { API_VERSION, createApiServer } from "./server.ts";
+import { parseStationDisplaySecret } from "./station-token.ts";
 import { bundledLists, type DomainLists } from "./triage.ts";
 
 export interface StartedApi {
@@ -39,9 +47,26 @@ export async function start(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<StartedApi> {
   // Loaded first so a bad key file stops start-up before anything else happens.
-  // E-03 hands the key to the station QR signer.
-  loadOrganizerKey(env.ORGANIZER_KEYPAIR_PATH);
+  const organizerKey = loadOrganizerKey(env.ORGANIZER_KEYPAIR_PATH);
+  const stationDisplayToken = parseStationDisplaySecret(
+    env.STATION_DISPLAY_TOKEN,
+  );
   const chainabuse = parseChainabuseMode(env.CHAINABUSE_POST);
+  // SOLANA_RPC_URL must be unset, empty or the one devnet endpoint; anything else stops start-up,
+  // whether or not check-in is wired, and the error does not echo it (devnet-endpoint.ts). The
+  // API's one devnet connection (pass-mint.ts) is to that endpoint whatever the variable says.
+  devnetEndpoint(env.SOLANA_RPC_URL);
+  // Check-in (E-05) binds registrations with E-07's code under REGISTRATION_SALT and mints with
+  // E-06's mintPass at that endpoint, paid for by the organizer key, at a mint address derived
+  // from PASS_MINT_SECRET. With REGISTRATION_SALT unset or empty, POST /checkins answers 503; a
+  // set but short salt stops start-up, as it stops the import tool, and with the salt set a
+  // missing or short PASS_MINT_SECRET stops it too.
+  const salt =
+    env.REGISTRATION_SALT === undefined || env.REGISTRATION_SALT === ""
+      ? undefined
+      : loadRegistrationSalt(env.REGISTRATION_SALT);
+  const mintSecret =
+    salt === undefined ? undefined : loadPassMintSecret(env.PASS_MINT_SECRET);
   const port = parsePort(env.API_PORT);
   const host = env.API_HOST || "127.0.0.1";
   const db = openDatabase(env.DATABASE_PATH || "limen.db");
@@ -60,6 +85,17 @@ export async function start(
   const server = createApiServer({
     db,
     version: API_VERSION,
+    stationSigner: organizerKey,
+    stationDisplayToken,
+    nowMs: () => Date.now(),
+    checkin:
+      salt === undefined || mintSecret === undefined
+        ? undefined
+        : {
+            registrations: registrationsFrom(db, salt),
+            minter: devnetMinter(organizerKey),
+            mintSecret,
+          },
     reports: {
       triageToken: env.TRIAGE_TOKEN || undefined,
       lists,

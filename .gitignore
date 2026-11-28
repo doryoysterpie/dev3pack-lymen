@@ -13,6 +13,14 @@ coverage/
 keys/
 *.keypair.json
 id.json
+# Station display links hold a station's display token (E-03). The link tool refuses to write
+# inside the repository, so none should be here; these patterns are a second guard, for link
+# files by their .url name and for the .station-links/ folder where they used to go.
+*.url
+.station-links/
+# The plaintext registration list the import tool reads (E-07). Only salted hashes of its IDs
+# belong in the database; the list stays out of git and is deleted after the import.
+.registrations/
 
 # Local databases
 *.db

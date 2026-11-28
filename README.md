@@ -56,7 +56,7 @@ limen runs on Solana devnet only (D-03).
 
 ## Design rationale
 
-1. Issuance binds to presence: a short-lived signed nonce on the station screen, not a shareable link.
+1. Issuance binds to a fresh station QR: a pass is minted only for a wallet that presents a QR the API signed for a station within the last 60 seconds, a short-lived signed nonce on the station screen, not a shareable link (E-05). It shows the wallet held that QR, not that the person stood there.
 2. Non-transferable from mint, with organizer revocation.
 3. One pass per registered participant per session.
 4. A consumer exists: perks, demo-day voting and accelerator applications read the pass.

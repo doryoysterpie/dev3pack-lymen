@@ -29,10 +29,10 @@ import {
   type Connection,
 } from "@solana/web3.js";
 
+import { devnetEndpoint } from "../devnet-endpoint.ts";
 import { loadOrganizerKey } from "../organizer-key.ts";
 import {
-  connectDevnet,
-  DEVNET_URL,
+  devnetConnection,
   mintPass,
   passAccountLen,
   passTokenAccount,
@@ -60,7 +60,9 @@ async function passState(mint: PublicKey, holder: PublicKey) {
 }
 
 test("devnet: setup", async () => {
-  connection = await connectDevnet(process.env.SOLANA_RPC_URL || DEVNET_URL);
+  // SOLANA_RPC_URL may name only the devnet endpoint; the check uses limen's one connection.
+  devnetEndpoint(process.env.SOLANA_RPC_URL);
+  connection = devnetConnection();
   organizer = Keypair.fromSecretKey(
     loadOrganizerKey(process.env.ORGANIZER_KEYPAIR_PATH).secretKeyBytes(),
   );
@@ -81,12 +83,7 @@ test("devnet: a minted pass has the owed extensions, metadata and a supply of on
     session: "build-window",
     checkedInAt: Math.floor(Date.now() / 1000),
   };
-  const { mint, signature } = await mintPass(
-    connection,
-    organizer,
-    holder,
-    details,
-  );
+  const { mint, signature } = await mintPass(organizer, holder, details);
   console.log(
     `mint ${explorer("address", mint.toBase58())}\n  tx ${explorer("tx", signature)}`,
   );
@@ -133,12 +130,7 @@ test("devnet done test: a transfer attempt fails on chain, and the delegate burn
     session: "build-window",
     checkedInAt: Math.floor(Date.now() / 1000),
   };
-  const { mint } = await mintPass(
-    connection,
-    organizer,
-    holder.publicKey,
-    details,
-  );
+  const { mint } = await mintPass(organizer, holder.publicKey, details);
 
   // A destination account for the attempt, paid by the organizer.
   const otherAccount = passTokenAccount(mint, other);
@@ -200,12 +192,7 @@ test("devnet done test: a transfer attempt fails on chain, and the delegate burn
     "the holder still holds the pass",
   );
 
-  const burnSig = await revokePass(
-    connection,
-    organizer,
-    mint,
-    holder.publicKey,
-  );
+  const burnSig = await revokePass(organizer, mint, holder.publicKey);
   console.log(`delegate burn ${explorer("tx", burnSig)}`);
   const after = await passState(mint, holder.publicKey);
   assert.equal(after.amount, 0n);
@@ -223,7 +210,6 @@ test(
       checkedInAt: Math.floor(Date.now() / 1000),
     };
     const { mint, tokenAccount, signature } = await mintPass(
-      connection,
       organizer,
       holder,
       details,
