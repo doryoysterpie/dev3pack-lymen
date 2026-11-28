@@ -2,6 +2,7 @@
 // a sentence for the participant. Pure module: the fetch function is passed in.
 
 import { encodeBase64 } from "./base64.ts";
+import { appFetch, type HttpFetch } from "./http.ts";
 
 export interface CheckinRequest {
   readonly qr: string;
@@ -71,17 +72,21 @@ export function checkinBody(req: CheckinRequest): string {
 
 /** Posts one check-in to `<apiBase>/checkins` and reads the answer. Never throws. */
 export async function postCheckin(
-  fetchFn: typeof fetch,
+  fetchFn: HttpFetch,
   apiBase: string,
   req: CheckinRequest,
 ): Promise<CheckinResult> {
   let res: Response;
   try {
-    res = await fetchFn(`${apiBase.replace(/\/+$/, "")}/checkins`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: checkinBody(req),
-    });
+    res = await appFetch(
+      `${apiBase.replace(/\/+$/, "")}/checkins`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: checkinBody(req),
+      },
+      fetchFn,
+    );
   } catch {
     return refused("unreachable");
   }

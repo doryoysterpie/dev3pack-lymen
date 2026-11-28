@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
+import { createServer, type IncomingMessage, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 
 import {
   CHECKIN_MESSAGES,
+  checkinBody,
   postCheckin,
   type CheckinRequest,
 } from "./client.ts";
+import { appFetch } from "./http.ts";
 
 const SIGNATURE = new Uint8Array(64).map((_, i) => i);
 const REQ: CheckinRequest = {
@@ -43,6 +47,7 @@ test("the check-in is POSTed as JSON to <API>/checkins with a standard base64 si
   assert.equal(seen.length, 1);
   assert.equal(seen[0]!.url, "http://10.0.2.2:8787/checkins");
   assert.equal(seen[0]!.init?.method, "POST");
+  assert.equal(seen[0]!.init?.redirect, "error");
   assert.deepEqual(seen[0]!.init?.headers, {
     "content-type": "application/json",
   });
@@ -177,4 +182,97 @@ test("an unreachable server, an unknown error and a body that is not JSON each g
     ).ok,
     false,
   );
+});
+
+function readText(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+async function listen(server: Server): Promise<string> {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+
+test("307 and 308 redirects fail closed with no second request, where plain fetch resends the body", async () => {
+  for (const status of [307, 308] as const) {
+    const targetHits: { method: string | undefined; body: string }[] = [];
+    const target = createServer(async (req, res) => {
+      targetHits.push({ method: req.method, body: await readText(req) });
+      res.writeHead(201, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          status: "checked_in",
+          station: "st-front",
+          session: "day-2",
+          mint: "Mint1",
+          signature: "Sig1",
+        }),
+      );
+    });
+    const targetUrl = await listen(target);
+    let endpointHits = 0;
+    const endpoint = createServer((_req, res) => {
+      endpointHits += 1;
+      res.writeHead(status, { location: `${targetUrl}/checkins` });
+      res.end();
+    });
+    const endpointUrl = await listen(endpoint);
+    try {
+      const result = await postCheckin(globalThis.fetch, endpointUrl, REQ);
+      assert.deepEqual(
+        result,
+        {
+          ok: false,
+          error: "unreachable",
+          message: CHECKIN_MESSAGES.unreachable,
+        },
+        `status ${status} fails closed`,
+      );
+      assert.equal(endpointHits, 1, `status ${status}: one attempt only`);
+      assert.equal(
+        targetHits.length,
+        0,
+        `status ${status}: second origin receives nothing`,
+      );
+
+      // appFetch also forces redirect "error" even if a caller passes redirect "follow".
+      await assert.rejects(
+        appFetch(`${endpointUrl}/checkins`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: checkinBody(REQ),
+          redirect: "follow",
+        }),
+      );
+      assert.equal(
+        endpointHits,
+        2,
+        `status ${status}: appFetch attempted once`,
+      );
+      assert.equal(
+        targetHits.length,
+        0,
+        `status ${status}: appFetch never hits second origin`,
+      );
+
+      // Control: plain fetch without redirect "error" follows 307/308 and resends the body.
+      const control = await globalThis.fetch(`${endpointUrl}/checkins`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: checkinBody(REQ),
+      });
+      assert.equal(control.status, 201);
+      assert.equal(targetHits.length, 1);
+      assert.equal(targetHits[0]!.method, "POST");
+      assert.ok(targetHits[0]!.body.includes("LMN-0001"));
+    } finally {
+      for (const server of [endpoint, target])
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }
 });

@@ -12,6 +12,7 @@
 // Adapter signer plugs in as a WalletSigner.
 
 import { CHECKIN_MESSAGES, postCheckin, type CheckinResult } from "./client.ts";
+import type { HttpFetch } from "./http.ts";
 import { checkinMessageBytes, registrationIdInput } from "./message.ts";
 import { verifyStationQrOnDevice, type Ed25519Verify } from "./station-qr.ts";
 
@@ -42,7 +43,7 @@ export interface CheckinFlowDeps {
   readonly nowMs: () => number;
   readonly verify: Ed25519Verify;
   readonly signer: WalletSigner;
-  readonly fetchFn: typeof fetch;
+  readonly fetchFn: HttpFetch;
 }
 
 /** The message a check-in will sign, as the panel shows it before anything is signed. */

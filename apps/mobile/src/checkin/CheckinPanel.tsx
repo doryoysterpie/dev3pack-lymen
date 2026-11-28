@@ -15,6 +15,7 @@ import {
   type CheckinFlowDeps,
   type PreparedCheckin,
 } from "./flow.ts";
+import { appFetch } from "./http.ts";
 import { walletSigner } from "./mwa.ts";
 
 type ReadyCheckin = Extract<PreparedCheckin, { ok: true }>;
@@ -25,7 +26,7 @@ const deps: CheckinFlowDeps = {
   nowMs: () => Date.now(),
   verify: ed25519Verify,
   signer: walletSigner,
-  fetchFn: fetch,
+  fetchFn: appFetch,
 };
 
 export function CheckinPanel({ qr }: { readonly qr: string }) {
