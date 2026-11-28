@@ -21,7 +21,7 @@ If a fetch fails, or gets no answer within 10 s, the page clears the QR, shows t
 
 What the servers serve (`vite.config.ts`):
 
-- **The dev server.** Its `fs.allow` is `src` and `index.html`, and nothing else in this folder. Vite serves its own client and its dependency cache, where `qrcode` is bundled, by its own exemption.
+- **The dev server.** In this folder it serves `index.html`, the `.ts` and `.css` files under `src`, and Vite's dependency cache, where `qrcode` is bundled. Any other file here gets 403, by its path or by `/@fs/`, a key named `organizer.json` in `src` included.
 - **The preview server.** It answers `/` and paths ending `.html`, `.js`, `.css` or `.svg`, and 403 to any other path outside `/api`.
 - **Both.** They refuse, by name, key and certificate files, keypair files, databases, `.env` files and the `node_modules/@limen` workspace links, except under `/api`, which they forward to the API, so a station named `keys` still works. They send no CORS header.
 - **The build.** It copies no public folder, and it fails when its output holds anything but the page's `.html`, `.js`, `.css` and `.svg` files.

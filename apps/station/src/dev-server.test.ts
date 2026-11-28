@@ -337,3 +337,47 @@ test("the build fails when its output holds anything but the page's html, js, cs
     rmSync(outDir, { recursive: true, force: true });
   }
 });
+
+test("in the station folder the dev server serves only source files: a key named organizer.json in src gets 403", async () => {
+  const src = join(APP, "src");
+  const tag = `dev-server-test-${process.pid}`;
+  const files = [
+    join(src, `${tag}-organizer.json`),
+    join(src, `${tag}-notes.md`),
+  ];
+  const written: string[] = [];
+  const dev = await createServer({
+    configFile: join(APP, "vite.config.ts"),
+    root: APP,
+    logLevel: "silent",
+    server: { port: await freePort(), strictPort: true },
+  });
+  try {
+    // Stand-ins, each created with flag "wx", so an existing file is not overwritten.
+    for (const file of files) {
+      writeFileSync(file, `${MARKER}\n`, { flag: "wx" });
+      written.push(file);
+    }
+    await dev.listen();
+    const port = (dev.httpServer!.address() as AddressInfo).port;
+    const get = async (path: string) => {
+      const res = await fetch(`http://127.0.0.1:${port}${path}`);
+      const body = await res.text();
+      return { status: res.status, served: body.includes(MARKER) };
+    };
+    for (const file of files) {
+      const name = file.slice(src.length + 1);
+      for (const path of [
+        `/src/${name}`,
+        `/src/${name}?raw`,
+        `/src/${name}?import`,
+        `/@fs${file}`,
+      ])
+        assert.deepEqual(await get(path), { status: 403, served: false }, path);
+    }
+    assert.equal((await get("/src/main.ts")).status, 200);
+  } finally {
+    await dev.close();
+    for (const file of written) rmSync(file, { force: true });
+  }
+});
