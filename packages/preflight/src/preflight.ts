@@ -36,7 +36,6 @@ import {
   scrubWithin,
   USER_MARKER,
   withRoleMarkers,
-  withMarkers,
 } from "./marker.ts";
 import { ADDRESS_LOOKUP_TABLE_PROGRAM } from "./programs.ts";
 import {
