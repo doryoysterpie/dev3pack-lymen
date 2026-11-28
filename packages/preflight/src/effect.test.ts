@@ -336,3 +336,83 @@ describe("the audit of 6c4e64e, Major 7, swept: every instruction kind the decod
     );
   });
 });
+
+describe("the audit of 6c4e64e, Major 7, swept: compute budget instructions the runtime refuses", () => {
+  const budget = (...data: number[][]) =>
+    tx(
+      ...data.map(
+        (bytes) =>
+          new web3.TransactionInstruction({
+            programId: web3.ComputeBudgetProgram.programId,
+            keys: [],
+            data: Buffer.from(bytes),
+          }),
+      ),
+    );
+  const u32 = (value: number) => [
+    value & 0xff,
+    (value >>> 8) & 0xff,
+    (value >>> 16) & 0xff,
+    value >>> 24,
+  ];
+  const verdictsOf = async (transaction: string) =>
+    ready(await preflight(offline, transaction, USER)).verdicts.map(
+      (verdict) =>
+        verdict.verdict === "refused"
+          ? `${verdict.program} ${verdict.refusal}`
+          : verdict.verdict,
+    );
+
+  it("holds a second instruction of one kind, data it cannot read, a bad heap frame and a zero data limit", async () => {
+    for (const [data, owed] of [
+      [
+        [
+          [2, ...u32(1000)],
+          [2, ...u32(2000)],
+        ],
+        ["other", "runtime compute-budget-duplicate"],
+      ],
+      [
+        [
+          [3, 1, 0, 0, 0, 0, 0, 0, 0],
+          [3, 2, 0, 0, 0, 0, 0, 0, 0],
+        ],
+        ["other", "runtime compute-budget-duplicate"],
+      ],
+      [[[0]], ["runtime compute-budget-data"]],
+      [[[9, 0, 0, 0, 0]], ["runtime compute-budget-data"]],
+      [[[2, 1, 0]], ["runtime compute-budget-data"]],
+      [[[1, ...u32(32 * 1024 - 1024)]], ["runtime heap-frame-size"]],
+      [[[1, ...u32(256 * 1024 + 1024)]], ["runtime heap-frame-size"]],
+      [[[1, ...u32(33 * 1024 + 1)]], ["runtime heap-frame-size"]],
+      [[[4, ...u32(0)]], ["runtime data-size-limit-zero"]],
+    ] as const) {
+      assert.deepEqual(
+        await verdictsOf(budget(...data.map((bytes) => [...bytes]))),
+        owed,
+        JSON.stringify(data),
+      );
+    }
+  });
+
+  it("uses a clean run whose compute budget instructions the runtime reads", async () => {
+    const transaction = budget(
+      [1, ...u32(256 * 1024)],
+      [2, ...u32(200_000)],
+      [3, 1, 0, 0, 0, 0, 0, 0, 0],
+      [4, ...u32(64 * 1024)],
+    );
+    assert.deepEqual(await verdictsOf(transaction), [
+      "other",
+      "other",
+      "other",
+      "other",
+    ]);
+    const result = ready(await preflight(clean(), transaction, USER));
+    assert.equal(result.simulation.status, "ran");
+    assert.equal(
+      await notRun(clean(), budget([2, ...u32(1)], [2, ...u32(1)])),
+      "the simulation ran without an error, though instruction 2 asks for what the runtime refuses (a second compute budget instruction of one kind)",
+    );
+  });
+});

@@ -25,6 +25,7 @@ import {
   type UndecodedReason,
 } from "./decode.ts";
 import {
+  computeBudgetRefusals,
   instructionEffect,
   mayChangeWallet,
   type InstructionVerdict,
@@ -423,12 +424,18 @@ export function instructionVerdicts(
   const { message } = transaction;
   const accounts = messageAccounts(message, tables);
   const user = message.staticKeys[0];
+  // The runtime refuses some compute budget instructions before any runs,
+  // whatever the accounts hold, decoded or not (effect.ts).
+  const budget = computeBudgetRefusals(message);
   let walletIsSystemAccount = true;
   return message.instructions.map((compiled, instruction) => {
     const decoded = decodeInstruction(compiled, accounts);
     const verdict = instructionEffect(decoded, user, walletIsSystemAccount);
     if (mayChangeWallet(decoded, user)) walletIsSystemAccount = false;
-    return { ...verdict, instruction };
+    const refusal = budget.get(instruction);
+    return refusal === undefined
+      ? { ...verdict, instruction }
+      : { verdict: "refused", program: "runtime", refusal, instruction };
   });
 }
 

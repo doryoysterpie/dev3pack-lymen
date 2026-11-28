@@ -23,7 +23,12 @@
 import type { Account } from "./accounts.ts";
 import type { Decoded, TokenProgram } from "./decode.ts";
 import { findProgramAddress } from "./pda.ts";
-import { ASSOCIATED_TOKEN_PROGRAM, SYSTEM_PROGRAM } from "./programs.ts";
+import {
+  ASSOCIATED_TOKEN_PROGRAM,
+  COMPUTE_BUDGET_PROGRAM,
+  SYSTEM_PROGRAM,
+} from "./programs.ts";
+import type { ParsedMessage } from "./wire.ts";
 
 /** Why a program refuses an instruction whatever the accounts hold. */
 export type Refusal =
@@ -65,15 +70,34 @@ export type Refusal =
    * (associated-token-account 34509e4, program/src/processor.rs:77 to :86;
    * interface/src/address.rs:61 to :75).
    */
-  | "not-derived-address";
+  | "not-derived-address"
+  /**
+   * Compute budget data the runtime cannot read as one of its four
+   * instructions: none, a kind it does not have, or too short for its kind
+   * (agave a64fa73, compute-budget-instruction/src
+   * /compute_budget_instruction_details.rs:155 to :186).
+   */
+  | "compute-budget-data"
+  /** A second compute budget instruction of one kind (the same lines). */
+  | "compute-budget-duplicate"
+  /**
+   * A heap frame that is not a multiple of 1024 from 32768 to 262144 bytes
+   * (:105 to :119, :192 to :194; program-runtime/src/execution_budget.rs:35
+   * and :36; HEAP_LENGTH in solana-program-entrypoint 3.1.1,
+   * anza-xyz/solana-sdk 19945d3, program-entrypoint/src/lib.rs:39).
+   */
+  | "heap-frame-size"
+  /** A loaded accounts data size limit of 0 (:141). */
+  | "data-size-limit-zero";
 
 /** How a card or a reason names the program that refuses. */
 export const PROGRAM_NAME: Readonly<
-  Record<TokenProgram | "associated-token", string>
+  Record<TokenProgram | "associated-token" | "runtime", string>
 > = {
   token: "the Token program",
   "token-2022": "Token-2022",
   "associated-token": "the associated token account program",
+  runtime: "the runtime",
 };
 
 /** What a refused instruction asks for, as a card or a reason says it. */
@@ -85,12 +109,17 @@ export const REFUSAL_WHY: Readonly<Record<Refusal, string>> = {
     "the wallet's own account as a token account or mint",
   "not-derived-address":
     "an associated token account other than the address derived from its wallet, token program and mint",
+  "compute-budget-data": "compute budget data it cannot read",
+  "compute-budget-duplicate": "a second compute budget instruction of one kind",
+  "heap-frame-size":
+    "a heap frame that is not a multiple of 1024 from 32768 to 262144 bytes",
+  "data-size-limit-zero": "a loaded accounts data size limit of 0",
 };
 
 export type Verdict =
   | {
       readonly verdict: "refused";
-      readonly program: TokenProgram | "associated-token";
+      readonly program: TokenProgram | "associated-token" | "runtime";
       readonly refusal: Refusal;
     }
   | { readonly verdict: "no-effect" }
@@ -276,4 +305,55 @@ export function mayChangeWallet(decoded: Decoded, user: string): boolean {
     default:
       return false;
   }
+}
+
+// The runtime's compute budget instructions: data length after the tag.
+const COMPUTE_BUDGET_WIDTH: Readonly<Record<number, number>> = {
+  1: 4, // RequestHeapFrame(u32)
+  2: 4, // SetComputeUnitLimit(u32)
+  3: 8, // SetComputeUnitPrice(u64)
+  4: 4, // SetLoadedAccountsDataSizeLimit(u32)
+};
+
+/**
+ * The compute budget instructions the runtime refuses from their data
+ * alone, by index, read as the runtime reads the message's compute budget
+ * instructions before any runs (compute_budget_instruction_details.rs:54 to
+ * :98, :101 to :153 and :155 to :186). A refusal fails the whole
+ * transaction.
+ */
+export function computeBudgetRefusals(
+  message: ParsedMessage,
+): Map<number, Refusal> {
+  const refusals = new Map<number, Refusal>();
+  const seen = new Set<number>();
+  message.instructions.forEach((instruction, index) => {
+    if (
+      message.staticKeys[instruction.programIdIndex] !== COMPUTE_BUDGET_PROGRAM
+    ) {
+      return;
+    }
+    const { data } = instruction;
+    const width = data.length > 0 ? COMPUTE_BUDGET_WIDTH[data[0]] : undefined;
+    if (width === undefined || data.length < 1 + width) {
+      refusals.set(index, "compute-budget-data");
+      return;
+    }
+    const tag = data[0];
+    if (seen.has(tag)) {
+      refusals.set(index, "compute-budget-duplicate");
+      return;
+    }
+    seen.add(tag);
+    const u32 =
+      (data[1] | (data[2] << 8) | (data[3] << 16) | (data[4] << 24)) >>> 0;
+    if (
+      tag === 1 &&
+      !(u32 >= 32 * 1024 && u32 <= 256 * 1024 && u32 % 1024 === 0)
+    ) {
+      refusals.set(index, "heap-frame-size");
+    }
+    if (tag === 4 && u32 === 0) refusals.set(index, "data-size-limit-zero");
+  });
+  return refusals;
 }

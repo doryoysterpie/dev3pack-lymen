@@ -224,7 +224,9 @@ function refusedRow(
   const label =
     verdict.program === "associated-token"
       ? "Refused by the associated token account program"
-      : "Refused by the token program";
+      : verdict.program === "runtime"
+        ? "Refused by the runtime"
+        : "Refused by the token program";
   // The two refusals the owner's audits named keep their own sentence.
   if (
     verdict.refusal === "owner-removed" &&
