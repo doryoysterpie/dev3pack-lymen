@@ -95,6 +95,15 @@ function effectRow(effect: Effect): CardRow {
                 : `Asks to send ${sol(effect.lamports)} from your wallet to ${where(effect.to)}.`,
           };
     case "owner-assigned":
+      // The summary writes the wallet's own address as "user"; naming it as a
+      // program would read "program user" (the audit of 21e1f9f, item 8).
+      if (effect.newOwner === USER_MARKER) {
+        return {
+          label: "Assigns your wallet account",
+          value:
+            "Asks to make your wallet's own address the owner program of your wallet account.",
+        };
+      }
       return {
         label: "Hands over your wallet account",
         value: `Asks to assign your wallet account to program ${effect.newOwner}, which would then control its SOL.`,

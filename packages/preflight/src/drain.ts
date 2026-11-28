@@ -20,7 +20,8 @@
 //
 // 1. Control handed over, in the decoded instructions: a delegate other than
 //    the wallet approved over one of the wallet's token accounts; the wallet
-//    account assigned to a program other than the System Program; a token
+//    account assigned to a program other than the System Program and the
+//    wallet's own address; a token
 //    account or mint authority moved to an address other than the wallet; or
 //    a token account closed with its SOL sent to an address other than the
 //    wallet.
@@ -56,8 +57,11 @@ export function handsOverControl(effect: Effect): boolean {
         effect.delegate.address !== USER_MARKER
       );
     case "owner-assigned":
-      // The System Program already owns a wallet account.
-      return effect.newOwner !== SYSTEM_PROGRAM;
+      // The System Program already owns a wallet account, and the wallet's
+      // own address is not another address (the audit of 21e1f9f, item 8).
+      return (
+        effect.newOwner !== SYSTEM_PROGRAM && effect.newOwner !== USER_MARKER
+      );
     case "authority-changed":
       return (
         effect.newAuthority !== null && effect.newAuthority !== USER_MARKER

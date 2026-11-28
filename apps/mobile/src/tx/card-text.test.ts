@@ -713,6 +713,17 @@ describe("the owner's audit: what the card claims", () => {
     }
   });
 
+  it("the audit of 21e1f9f, item 8: names the wallet's own address as the new owner", async () => {
+    const rows = await rowsFor([
+      { kind: "owner-assigned" as const, instruction: 0, newOwner: "user" },
+    ]);
+    assert.deepEqual(rows[1], {
+      label: "Assigns your wallet account",
+      value:
+        "Asks to make your wallet's own address the owner program of your wallet account.",
+    });
+  });
+
   it("A7: a transfer from a token account to itself moves no tokens", async () => {
     const rows = await rowsFor([
       {
