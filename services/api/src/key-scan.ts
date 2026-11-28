@@ -1,8 +1,8 @@
-// Finds private-key material by content (E-03), and flags what the organizer-key loader accepts
-// as a key: every bracketed array, and every base58 run decoded to bytes, is given to the loader's
-// own acceptsAsKeypair, with no length or form filter first. It also flags PEM private-key headers
-// and Ed25519 PKCS#8 DER in raw bytes. A tracked file it cannot read, or that is not a regular
-// file, fails the scan. CI runs it over every tracked file (key-scan.test.ts):
+// Scans regular tracked files for private-key patterns (E-03): every bracketed array, and every
+// base58 run decoded to bytes, is given to the organizer-key loader's acceptsAsKeypair, alongside
+// PEM private-key header lines and the two 14-byte Ed25519 PKCS#8 DER (v1/v2) header sequences.
+// Any tracked path that cannot be read or is not a regular file is not scanned and fails the run
+// (key-scan.test.ts):
 //
 //   node services/api/src/key-scan.ts
 import { spawnSync } from "node:child_process";
@@ -13,7 +13,7 @@ import { isMainModule } from "./main-module.ts";
 import { acceptsAsKeypair } from "./organizer-key.ts";
 
 const PEM = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/;
-/** Ed25519 PKCS#8 DER, versions 1 and 2: the version, the algorithm, and the key's wrapper. */
+/** 14-byte Ed25519 PKCS#8 DER header sequences (v1 and v2): version, OID 1.3.101.112, and 04 22 04 20; matched alone without outer SEQUENCE or trailing seed bytes. */
 const DER_PREFIXES = [
   "020100300506032b657004220420",
   "020101300506032b657004220420",
@@ -65,7 +65,7 @@ function bracketSpans(text: string): string[] {
   return spans;
 }
 
-/** The kinds of private-key material in `bytes`, each named once. */
+/** The key-scan pattern names matched in `bytes`, each named once. */
 export function keyMaterialIn(bytes: Buffer): string[] {
   const text = bytes.toString("latin1");
   const found = new Set<string>();
@@ -85,9 +85,10 @@ export function keyMaterialIn(bytes: Buffer): string[] {
   return [...found];
 }
 
-/** Scans every file git tracks under `root`; one it cannot read, or not a regular file, is a hit. */
+/** Checks every path git tracks under `root`; unreadable or non-regular paths are not scanned and are recorded in `hits`. */
 export function scanTrackedFiles(root: string): {
   files: number;
+  scanned: number;
   hits: { file: string; reasons: string[] }[];
 } {
   const listed = spawnSync("git", ["ls-files", "-z"], {
@@ -97,27 +98,34 @@ export function scanTrackedFiles(root: string): {
   if (listed.status !== 0) throw new Error("git ls-files failed");
   const names = listed.stdout.toString("utf8").split("\0").filter(Boolean);
   const hits: { file: string; reasons: string[] }[] = [];
+  let scanned = 0;
   for (const file of names) {
     const path = join(root, file);
     let reasons: string[];
     try {
-      reasons = lstatSync(path).isFile()
-        ? keyMaterialIn(readFileSync(path))
-        : ["not-a-regular-file"];
+      if (lstatSync(path).isFile()) {
+        const bytes = readFileSync(path);
+        scanned++;
+        reasons = keyMaterialIn(bytes);
+      } else {
+        reasons = ["not-a-regular-file"];
+      }
     } catch {
       reasons = ["unreadable"];
     }
     if (reasons.length > 0) hits.push({ file, reasons });
   }
-  return { files: names.length, hits };
+  return { files: names.length, scanned, hits };
 }
 
 if (isMainModule(import.meta.url)) {
-  const { files, hits } = scanTrackedFiles(process.cwd());
+  const { files, scanned, hits } = scanTrackedFiles(process.cwd());
   for (const { file, reasons } of hits)
     console.error(`key-scan: ${file}: ${reasons.join(", ")}`);
+  const unscanned = files - scanned;
+  const matched = hits.length - unscanned;
   console.log(
-    `key-scan: ${files} tracked files scanned, ${hits.length} with private-key material.`,
+    `key-scan: ${scanned} of ${files} tracked paths scanned, ${matched} with key-scan pattern matches, ${unscanned} unreadable or non-regular.`,
   );
   if (hits.length > 0) process.exitCode = 1;
 }

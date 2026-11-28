@@ -19,7 +19,7 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - name: Scan tracked files for PEM private-key headers, Ed25519 PKCS#8 DER (v1/v2), and Solana Ed25519 keypairs
+      - name: Scan regular tracked files for PEM private-key headers, Ed25519 PKCS#8 DER (v1/v2) headers, and Solana Ed25519 keypairs; fail on unreadable or non-regular tracked paths
         run: node services/api/src/key-scan.ts
       - name: ESLint
         run: npm run lint

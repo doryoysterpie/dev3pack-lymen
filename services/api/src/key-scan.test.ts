@@ -120,7 +120,17 @@ test("CI runs the scan, and git ignores .der, .pem, .key and .p12 files anywhere
   }
 });
 
-test("the CI step label and README state exactly what the key scan covers and does not cover", () => {
+test("keyMaterialIn matches the 14-byte Ed25519 PKCS#8 DER header sequences alone (including truncated headers), and the CI label and README state exact match and failure conditions", () => {
+  for (const hex of [
+    "020100300506032b657004220420",
+    "020101300506032b657004220420",
+  ]) {
+    const headerOnly = Buffer.from(hex, "hex");
+    assert.equal(headerOnly.length, 14);
+    assert.deepEqual(keyMaterialIn(headerOnly), ["pkcs8-der"]);
+    assert.deepEqual(keyMaterialIn(headerOnly.subarray(0, 13)), []);
+  }
+
   const ci = readFileSync(
     new URL("../../../.github/workflows/lint.yml", import.meta.url),
     "utf8",
@@ -130,10 +140,11 @@ test("the CI step label and README state exactly what the key scan covers and do
       ci,
     )?.[1];
   assert.ok(step !== undefined, "CI step label is present");
-  assert.match(step, /tracked files/i);
-  assert.match(step, /PEM/i);
-  assert.match(step, /Ed25519 PKCS#8 DER/i);
+  assert.match(step, /regular tracked files/i);
+  assert.match(step, /PEM private-key headers/i);
+  assert.match(step, /Ed25519 PKCS#8 DER \(v1\/v2\) headers/i);
   assert.match(step, /Solana Ed25519 keypairs/i);
+  assert.match(step, /unreadable or non-regular tracked paths/i);
 
   const readme = readFileSync(
     new URL("../../../README.md", import.meta.url),
@@ -141,8 +152,11 @@ test("the CI step label and README state exactly what the key scan covers and do
   );
   assert.match(readme, /untracked files or git history/i);
   assert.match(readme, /non-key secrets/i);
-  assert.match(readme, /PEM private-key headers/i);
-  assert.match(readme, /Ed25519 PKCS#8 DER/i);
+  assert.match(readme, /PEM private-key header/i);
+  assert.match(readme, /020100300506032b657004220420/);
+  assert.match(readme, /020101300506032b657004220420/);
+  assert.match(readme, /truncated header/i);
+  assert.match(readme, /not scanned and fails the run/i);
 });
 
 test("the scan flags exactly what the organizer-key loader accepts: every number form JSON allows, and base58 of any length", async () => {
@@ -190,7 +204,8 @@ test("the scan flags exactly what the organizer-key loader accepts: every number
   ]);
 });
 
-test("a tracked symlink, or a tracked file missing from the tree, fails the scan rather than being skipped", () => {
+test("a tracked symlink, or a tracked file missing from the tree, fails the scan and the CLI summary distinguishes scanned regular files, pattern matches, and unreadable or non-regular paths", () => {
+  const entry = fileURLToPath(new URL("./key-scan.ts", import.meta.url));
   const dir = mkdtempSync(join(tmpdir(), "limen-key-scan-"));
   try {
     const git = (...args: string[]) =>
@@ -205,11 +220,41 @@ test("a tracked symlink, or a tracked file missing from the tree, fails the scan
     symlinkSync("kept.txt", join(dir, "link.txt"));
     git("add", "kept.txt", "gone.txt", "link.txt");
     rmSync(join(dir, "gone.txt"));
-    const { hits } = scanTrackedFiles(dir);
+    const { files, hits } = scanTrackedFiles(dir);
+    assert.equal(files, 3);
     assert.deepEqual(hits.map((h) => [h.file, h.reasons]).sort(), [
       ["gone.txt", ["unreadable"]],
       ["link.txt", ["not-a-regular-file"]],
     ]);
+
+    const cli1 = spawnSync(process.execPath, [entry], {
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? "" },
+      encoding: "utf8",
+    });
+    assert.equal(cli1.status, 1);
+    assert.equal(
+      cli1.stdout,
+      "key-scan: 1 of 3 tracked paths scanned, 0 with key-scan pattern matches, 2 unreadable or non-regular.\n",
+    );
+    assert.match(cli1.stderr, /gone\.txt: unreadable/);
+    assert.match(cli1.stderr, /link\.txt: not-a-regular-file/);
+
+    writeFileSync(
+      join(dir, "header-only.txt"),
+      `-----BEGIN ${"PRIVATE KEY"}-----\n`,
+    );
+    git("add", "header-only.txt");
+    const cli2 = spawnSync(process.execPath, [entry], {
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? "" },
+      encoding: "utf8",
+    });
+    assert.equal(cli2.status, 1);
+    assert.equal(
+      cli2.stdout,
+      "key-scan: 2 of 4 tracked paths scanned, 1 with key-scan pattern matches, 2 unreadable or non-regular.\n",
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
