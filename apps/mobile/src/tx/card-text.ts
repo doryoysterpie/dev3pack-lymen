@@ -275,8 +275,13 @@ const BLOCK: Readonly<Record<SignBlock, string>> = {
 const DRAIN = {
   decoded:
     "It would hand control of your tokens or accounts to another address.",
+  // The decoded instructions after a failed run, which signed now would most
+  // likely fail as well, so they only ask.
+  asked:
+    "Its instructions ask to hand control of your tokens or accounts to another address.",
+  // Clauses 2 and 3 of the drain pattern (drain.ts), each named.
   simulated:
-    "As simulated, it would hand control of your wallet or tokens to another address, or leave your wallet or a token account with less than a tenth of what it holds.",
+    "As simulated, it would hand control of your wallet or tokens to another address, give your wallet account a different amount of data, or leave your wallet or a token account with less than a tenth of what it holds.",
 } as const;
 
 // What the simulation adds to a card, said only as far as a result is used.
@@ -342,6 +347,9 @@ export function transactionCardText(
   // The card's flag is the drain pattern, the one definition (drain.ts).
   const handsOver = summary.effects.some(handsOverControl);
   const drains = drainPattern(toReport(result));
+  const failed = simulation.status === "ran" && simulation.err !== null;
+  const lower = (text: string) =>
+    `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
 
   const rows: CardRow[] = [from];
   if (message !== null) {
@@ -409,11 +417,13 @@ export function transactionCardText(
       : "Solana Pay transaction request",
     tone: fallback || drains || blocks.length > 0 ? "flagged" : "neutral",
     status: fallback
-      ? `limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. ${simulated(simulation)}${handsOver ? ` ${DRAIN.decoded}` : drains ? ` ${DRAIN.simulated}` : ""}`
+      ? `limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. ${simulated(simulation)}${handsOver ? ` ${failed ? DRAIN.asked : DRAIN.decoded}` : drains ? ` ${DRAIN.simulated}` : ""}`
       : handsOver
-        ? `limen flags this transaction: ${DRAIN.decoded.charAt(0).toLowerCase()}${DRAIN.decoded.slice(1)}`
+        ? failed
+          ? `limen flags this transaction: ${lower(DRAIN.asked)} The simulation failed, so signed now it would most likely fail.`
+          : `limen flags this transaction: ${lower(DRAIN.decoded)}`
         : drains
-          ? `limen flags this transaction: ${DRAIN.simulated.charAt(0).toLowerCase()}${DRAIN.simulated.slice(1)}`
+          ? `limen flags this transaction: ${lower(DRAIN.simulated)}`
           : simulation.status === "ran" && simulation.err === null
             ? "This card shows what the transaction would do before you sign."
             : `This card shows what the decoded instructions would do. ${simulated(simulation)}`,
