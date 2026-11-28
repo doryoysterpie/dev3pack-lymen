@@ -17,7 +17,7 @@ import {
 
 import { SOLANA_RPC_URL } from "../config.ts";
 import type { CardText } from "../pay/card-text.ts";
-import { transactionCardText } from "../tx/card-text.ts";
+import { linkHost, transactionCardText } from "../tx/card-text.ts";
 import { requestTransaction } from "../tx/request.ts";
 import {
   connectWallet,
@@ -41,11 +41,6 @@ type Step =
 const appFetch: Fetch = (url, init) => fetch(url, init);
 const rpc = jsonRpc(appFetch, SOLANA_RPC_URL);
 
-function hostOf(link: string): string {
-  const match = /^https:\/\/([^/?#]+)/.exec(link);
-  return match === null ? link : match[1];
-}
-
 const reason = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
@@ -63,7 +58,7 @@ export function TransactionRequestView({
 }) {
   const [step, setStep] = useState<Step>({ kind: "start" });
   const [shownFor, setShownFor] = useState<string | null>(null);
-  const host = hostOf(link);
+  const host = linkHost(link);
 
   const fetchAndCheck = async () => {
     try {

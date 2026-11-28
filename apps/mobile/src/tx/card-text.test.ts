@@ -13,7 +13,7 @@ import {
   type Fetch,
 } from "@limen/preflight";
 
-import { transactionCardText, withDecimals } from "./card-text.ts";
+import { linkHost, transactionCardText, withDecimals } from "./card-text.ts";
 
 const fixture = JSON.parse(
   readFileSync(
@@ -953,6 +953,27 @@ describe("the owner's audit: what the card claims", () => {
       value:
         "An instruction that does not name your wallet as its payer or authority. Your wallet's signature may still count toward it, for example as one signer of a multisig.",
     });
+  });
+
+  it("hunt: the card names the host the request goes to, not a user name before it", async () => {
+    const result = await drainerOffline();
+    for (const [link, owed] of [
+      ["https://pay.example@evil.example/drainer", "evil.example"],
+      [
+        "https://pay.example:secret@evil.example:8443/x?y=1",
+        "evil.example:8443",
+      ],
+      ["https://pay.example/solana-pay?order=7", "pay.example"],
+    ] as const) {
+      assert.equal(linkHost(link), owed, link);
+      const card = transactionCardText(link, null, result);
+      assert.deepEqual(card.rows[0], { label: "Requested from", value: owed });
+      const stopped = transactionCardText(link, null, { kind: "not-devnet" });
+      assert.deepEqual(stopped.rows[0], {
+        label: "Requested from",
+        value: owed,
+      });
+    }
   });
 
   it("13: the burn, revoke and create rows claim only what the instruction proves", async () => {
