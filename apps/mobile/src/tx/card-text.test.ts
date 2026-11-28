@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 
 import {
   decodePublicKey,
+  FROM_READ_BEFORE,
   jsonRpc,
   preflight,
   recordedRpc,
@@ -148,7 +149,7 @@ describe("transaction card text", () => {
         (row) =>
           row.label === "Your wallet, simulated" &&
           row.value ===
-            `5 SOL before, 4.999995 SOL after. Your wallet account's owner program changes from ${SYSTEM_PROGRAM} to ${unknownProgram}, which would then control its SOL.`,
+            `5 SOL before, 4.999995 SOL after. Your wallet account's owner program: ${SYSTEM_PROGRAM} in a read taken before the simulation, ${unknownProgram} after it, which would then control its SOL.`,
       ),
     );
   });
@@ -252,7 +253,12 @@ describe("transaction card text", () => {
           },
         ],
       },
-      simulation: { status: "ran" as const, err: null, changes: [] },
+      simulation: {
+        status: "ran" as const,
+        err: null,
+        changes: [],
+        fromReadBefore: FROM_READ_BEFORE,
+      },
       blocks: [],
     };
     const card = transactionCardText(LINK, null, closeOnly);
@@ -412,7 +418,7 @@ describe("transaction card text", () => {
     const card = transactionCardText(LINK, null, result);
     assert.equal(
       card.status,
-      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation ran, and the balance changes it found are shown below. As simulated, it would hand control of your wallet or tokens to another address, give your wallet account a different amount of data, or leave your wallet or a token account with less than a tenth of what it holds.",
+      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation ran, and the balance changes it found are shown below. As simulated, your wallet or one of its token accounts would be left with less than a tenth of what it held, or, compared with a read taken before the simulation, would come under another address's control or hold a different amount of data.",
     );
   });
 
@@ -751,7 +757,7 @@ describe("the owner's audit: what the card claims", () => {
     const card = transactionCardText(LINK, null, result);
     assert.equal(
       card.status,
-      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation ran, and the balance changes it found are shown below. As simulated, it would hand control of your wallet or tokens to another address, give your wallet account a different amount of data, or leave your wallet or a token account with less than a tenth of what it holds.",
+      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation ran, and the balance changes it found are shown below. As simulated, your wallet or one of its token accounts would be left with less than a tenth of what it held, or, compared with a read taken before the simulation, would come under another address's control or hold a different amount of data.",
     );
   });
 
@@ -761,6 +767,7 @@ describe("the owner's audit: what the card claims", () => {
       status: "ran" as const,
       err: { InstructionError: [1, "Custom"] },
       changes: [],
+      fromReadBefore: FROM_READ_BEFORE,
     };
     const card = transactionCardText(LINK, null, {
       ...result,
@@ -790,6 +797,84 @@ describe("the owner's audit: what the card claims", () => {
       fallback.status,
       "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation failed, so no balance change is shown. It asks your wallet to give another address control of tokens or accounts.",
     );
+  });
+
+  it("A2: each change row says which values come from a read before the simulation", async () => {
+    const result = await drainerOffline();
+    const token = (change: Record<string, unknown>) => ({
+      kind: "token" as const,
+      account: userTokenAccount,
+      mint: fixture.keys.mint,
+      before: "200",
+      after: "200",
+      delegateBefore: null,
+      delegateAfter: null,
+      delegatedAmountBefore: "0",
+      delegatedAmountAfter: "0",
+      ownerAfter: "user",
+      closeAuthorityBefore: null,
+      closeAuthorityAfter: null,
+      ...change,
+    });
+    const card = transactionCardText(LINK, null, {
+      ...result,
+      simulation: {
+        status: "ran" as const,
+        err: null,
+        fromReadBefore: FROM_READ_BEFORE,
+        changes: [
+          {
+            kind: "sol" as const,
+            account: "user",
+            before: "5000000000",
+            after: "4990000000",
+            ownerBefore: SYSTEM_PROGRAM,
+            ownerAfter: SYSTEM_PROGRAM,
+            dataLengthBefore: 0,
+            dataLengthAfter: 64,
+          },
+          token({
+            delegateAfter: attacker,
+            delegatedAmountAfter: "100",
+            closeAuthorityAfter: attacker,
+          }),
+          token({
+            delegateBefore: attacker,
+            delegateAfter: attacker,
+            delegatedAmountBefore: "5",
+            delegatedAmountAfter: "100",
+          }),
+          token({
+            delegateBefore: attacker,
+            delegatedAmountBefore: "5",
+            closeAuthorityBefore: attacker,
+          }),
+        ],
+      },
+      blocks: [],
+    });
+    const simulated = card.rows.filter((row) =>
+      row.label.endsWith("simulated"),
+    );
+    assert.deepEqual(simulated, [
+      {
+        label: "Your wallet, simulated",
+        value:
+          "5 SOL before, 4.99 SOL after. Your wallet account's data: 0 bytes in a read taken before the simulation, 64 bytes after it.",
+      },
+      {
+        label: `Your token account ${userTokenAccount}, simulated`,
+        value: `200 base units before, 200 after. The delegate: none in a read taken before the simulation, ${attacker} after it, for up to 100 base units. The close authority: none in a read taken before the simulation, ${attacker} after it.`,
+      },
+      {
+        label: `Your token account ${userTokenAccount}, simulated`,
+        value: `200 base units before, 200 after. The allowance of delegate ${attacker}: 5 base units in a read taken before the simulation, 100 base units after it.`,
+      },
+      {
+        label: `Your token account ${userTokenAccount}, simulated`,
+        value: `200 base units before, 200 after. The delegate: ${attacker} in a read taken before the simulation, none after it. The close authority: ${attacker} in a read taken before the simulation, none after it.`,
+      },
+    ]);
   });
 
   it("13: the burn, revoke and create rows claim only what the instruction proves", async () => {

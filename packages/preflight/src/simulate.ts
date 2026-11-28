@@ -49,6 +49,21 @@ export type BalanceChange =
       readonly closeAuthorityAfter: string | null;
     };
 
+/**
+ * The fields of a change that come from the read before the simulation, not
+ * from the simulation's own run; the matching After fields are the run's
+ * account state. So a change in one of them may come from another
+ * transaction that landed between that read and the simulation, even when a
+ * second read after the simulation agrees with the first.
+ */
+export const FROM_READ_BEFORE = [
+  "ownerBefore",
+  "dataLengthBefore",
+  "delegateBefore",
+  "delegatedAmountBefore",
+  "closeAuthorityBefore",
+] as const;
+
 /** The simulateTransaction accounts list is capped like getMultipleAccounts. */
 export const MAX_WATCHED = 100;
 

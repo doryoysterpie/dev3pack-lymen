@@ -207,6 +207,13 @@ describe("E-09 done test: the drainer pre-flight", () => {
     });
     assert.deepEqual(result.simulation, {
       status: "ran",
+      fromReadBefore: [
+        "ownerBefore",
+        "dataLengthBefore",
+        "delegateBefore",
+        "delegatedAmountBefore",
+        "closeAuthorityBefore",
+      ],
       err: null,
       changes: [
         {
