@@ -264,7 +264,7 @@ describe("pre-flight paths", () => {
     );
   });
 
-  it("passes a simulation error through for an unknown program, without a crash", async () => {
+  it("reports a simulation error for an unknown program as agave names it, without a crash", async () => {
     const err = { InstructionError: [1, "InvalidInstructionData"] };
     const rpc = recordedEndpoint({
       ...drainerRecording,
@@ -278,7 +278,14 @@ describe("pre-flight paths", () => {
       ["unknown-program"],
     );
     assert.ok(result.simulation.status === "ran");
-    assert.deepEqual(result.simulation.err, err);
+    // Only agave's variant names and the index (failure.ts; the audit of
+    // 6c4e64e, Major 5).
+    assert.deepEqual(result.simulation.err, {
+      transactionError: "InstructionError",
+      instruction: 1,
+      instructionError: "InvalidInstructionData",
+      custom: null,
+    });
   });
 
   it("blocks signing when a co-signer has not signed", async () => {

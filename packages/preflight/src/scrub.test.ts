@@ -48,7 +48,7 @@ const answering = (simulate: unknown): RpcEndpoint => ({
 const runs = (value: unknown) => JSON.stringify(value).match(RUN) ?? [];
 
 describe("the audit of 21e1f9f, item 2: RPC text keeps no address", () => {
-  it("scrubs an off-message address inside longer text in a run's error, keys included", async () => {
+  it("shows no text of a run's error, so no address in it, keys included, reaches the report", async () => {
     const result = await preflightTransaction(drainer, {
       endpoint: answering({
         result: {
@@ -64,12 +64,16 @@ describe("the audit of 21e1f9f, item 2: RPC text keeps no address", () => {
       user: fixture.user,
     });
     assert.ok(result.summary.kind === "ready");
-    assert.equal(result.summary.simulation.status, "ran");
-    assert.deepEqual(
-      runs(result).filter((run) => run !== SYSTEM_PROGRAM),
-      [],
-    );
-    assert.ok(JSON.stringify(result).includes(`Program ${SYSTEM_PROGRAM}`));
+    assert.ok(result.summary.simulation.status === "ran");
+    // Not agave's form, so no detail is shown (failure.ts; the audit of
+    // 6c4e64e, Major 5).
+    assert.deepEqual(result.summary.simulation.err, {
+      transactionError: null,
+      instruction: null,
+      instructionError: null,
+      custom: null,
+    });
+    assert.deepEqual(runs(result), []);
   });
 
   it("scrubs one inside an RPC error message", async () => {

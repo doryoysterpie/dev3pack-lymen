@@ -5,12 +5,29 @@
 // copies each value it uses into fresh, checked data, with index loops and
 // new Uint8Arrays. No caller can hand the pre-flight its own RPC adapter.
 //
-// Devnet only (D-03): every pre-flight starts with assertDevnet, which compares
-// the endpoint's genesis hash with devnet's and refuses any other cluster.
+// Every answer is read once, by json.ts, which refuses a repeated member name
+// at any depth and keeps each number as the text the answer wrote; every
+// value the client uses comes from that one read, checked against the shape
+// agave gives each method's answer (the owner's audit of 6c4e64e, Majors 1, 3
+// and 4). Anything else is refused, which leaves the simulation unused and
+// holds signing.
+//
+// Devnet only (D-03): every pre-flight starts with assertDevnet, which
+// confirms devnet only by its exact genesis hash (Major 9).
 
 import { decodePublicKey } from "./base58.ts";
 import { decodeBase64 } from "./base64.ts";
-import { jsonNumbers, pathKey } from "./json.ts";
+import { runError, type RunError } from "./failure.ts";
+import {
+  isJsonArray,
+  isJsonObject,
+  JsonNumber,
+  parseJson,
+  wholeNumber,
+  wholeUpTo,
+  type JsonObject,
+  type JsonValue,
+} from "./json.ts";
 import { DEVNET_GENESIS_HASH } from "./programs.ts";
 
 /** What a fetch resolves to: plain data, the body already read as text. */
@@ -46,10 +63,10 @@ export interface AccountState {
 }
 
 export interface Simulation {
-  /** The runtime error, as the RPC reports it (JSON data), or null. */
-  readonly err: unknown;
-  /** The slot the simulation ran at, from the response context. */
-  readonly slot: number | null;
+  /** The runtime error as far as limen shows it (failure.ts), or null. */
+  readonly err: RunError | null;
+  /** The slot from the response context. */
+  readonly slot: number;
   /** The blockhash the simulation used in place of the transaction's own. */
   readonly replacementBlockhash: string | null;
   /**
@@ -72,9 +89,9 @@ export interface Simulation {
   } | null;
   /**
    * The account index of every token balance entry the run lists. limen uses
-   * no token balance, but an entry present must be well formed, and its
-   * index is checked against the message's keys (the audit of 21e1f9f, item
-   * 5). Empty for a failed run.
+   * no token balance, but an entry present must be as agave writes one, and
+   * its index is checked against the message's keys (the audits of 21e1f9f,
+   * item 5, and of 6c4e64e, Major 3). Empty for a failed run.
    */
   readonly tokenAccountIndexes: readonly number[];
 }
@@ -89,10 +106,6 @@ export class RpcError extends Error {
 
 /** The RPC caps getMultipleAccounts at 100 addresses. */
 const MAX_ACCOUNTS_PER_CALL = 100;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 let nextId = 1;
 
@@ -165,27 +178,12 @@ function asFetched(url: string): string {
     : `${authorityOnly[1]}/${authorityOnly[2] ?? ""}`;
 }
 
-/** The raw text of a number in a call's result, by its path from there. */
-type RawNumber = (path: readonly (string | number)[]) => string | undefined;
-
-/** One JSON-RPC call; its result, parsed from the answer's text. */
+/** One JSON-RPC call; its result, as json.ts read it from the answer's text. */
 async function call(
   endpoint: Required<RpcEndpoint>,
   method: string,
   params: unknown[],
-): Promise<unknown> {
-  return (await callKeepingNumbers(endpoint, method, params)).result;
-}
-
-/**
- * One JSON-RPC call; its result, and the text of each number in it as the
- * answer wrote it (json.ts), for the amounts and slot the client keeps.
- */
-async function callKeepingNumbers(
-  endpoint: Required<RpcEndpoint>,
-  method: string,
-  params: unknown[],
-): Promise<{ readonly result: unknown; readonly raw: RawNumber }> {
+): Promise<JsonValue> {
   const id = nextId;
   nextId += 1;
   const late = new RpcError(
@@ -226,49 +224,89 @@ async function callKeepingNumbers(
       `${method}: the answer came from another address`,
     );
   }
-  const numbers = jsonNumbers(answer.text);
-  let body: unknown;
-  try {
-    if (numbers === null) throw new Error("not JSON");
-    body = JSON.parse(answer.text);
-  } catch {
-    throw new RpcError("shape", `${method}: not JSON`);
+  // The one read of the answer: a member name repeated at any depth, or
+  // text that is not JSON, leaves nothing to read (the audit of 6c4e64e,
+  // Major 1).
+  const parsed = parseJson(answer.text);
+  if (!parsed.ok) {
+    throw new RpcError(
+      "shape",
+      parsed.problem === "repeated-member"
+        ? `${method}: a member name repeats`
+        : `${method}: not JSON`,
+    );
   }
-  if (!isRecord(body)) throw new RpcError("shape", `${method}: not an object`);
+  const body = parsed.value;
+  if (!isJsonObject(body)) {
+    throw new RpcError("shape", `${method}: not an object`);
+  }
   // The envelope as the answer wrote it (the audit of 21e1f9f, item 6).
-  if (body.jsonrpc !== "2.0") {
+  if (body.get("jsonrpc") !== "2.0") {
     throw new RpcError("shape", `${method}: not a JSON-RPC 2.0 answer`);
   }
   // An answer to another request is not evidence for this one. The id is
   // compared as written, since JSON.parse rounds 1.0000000000000001 to 1.
-  if (numbers?.get(pathKey(["id"])) !== String(id)) {
+  const answered = body.get("id");
+  if (!(answered instanceof JsonNumber) || answered.text !== String(id)) {
     throw new RpcError("shape", `${method}: the answer is for another request`);
   }
-  if ("error" in body) {
-    if ("result" in body) {
+  const error = body.get("error");
+  if (error !== undefined) {
+    if (body.has("result")) {
       throw new RpcError(
         "shape",
         `${method}: an answer with both a result and an error`,
       );
     }
-    if (!isRecord(body.error)) {
+    if (!isJsonObject(error)) {
       throw new RpcError("shape", `${method}: an error that is not an object`);
     }
-    const message = body.error.message;
+    // No text the endpoint wrote reaches the card or a report, only the
+    // error's code, when it is a whole number as written (the audit of
+    // 6c4e64e, Major 5, swept to the RPC's own errors).
+    const code = error.get("code");
+    const written =
+      code instanceof JsonNumber && /^-?(0|[1-9][0-9]{0,18})$/.test(code.text)
+        ? code.text
+        : null;
     throw new RpcError(
       "rpc",
-      `${method}: ${typeof message === "string" ? message : "an error"}`,
+      written === null
+        ? `${method}: the endpoint answered with an error`
+        : `${method}: the endpoint answered with JSON-RPC error ${written}`,
     );
   }
-  if (!("result" in body)) throw new RpcError("shape", `${method}: no result`);
-  return {
-    result: body.result,
-    raw: (path) => numbers?.get(pathKey(["result", ...path])),
-  };
+  const result = body.get("result");
+  if (result === undefined) {
+    throw new RpcError("shape", `${method}: no result`);
+  }
+  return result;
+}
+
+/**
+ * A Response<T> (agave a64fa73, rpc-client-types/src/response.rs:124 to
+ * :127): its context's slot, a u64 written as a whole number (:71 to :75),
+ * and its value. Every answer that has a context is read through here, so no
+ * context slot goes unchecked (the audit of 6c4e64e, Major 4). A slot past
+ * 2^53 is refused too, since the client keeps it as a number.
+ */
+function response(
+  result: JsonValue,
+  method: string,
+): { readonly slot: number; readonly value: JsonValue } {
+  const context = isJsonObject(result) ? result.get("context") : undefined;
+  const slot = isJsonObject(context)
+    ? wholeUpTo(context.get("slot"), Number.MAX_SAFE_INTEGER)
+    : null;
+  if (slot === null) throw new RpcError("shape", `${method}: context slot`);
+  const value = isJsonObject(result) ? result.get("value") : undefined;
+  if (value === undefined) throw new RpcError("shape", `${method}: no value`);
+  return { slot, value };
 }
 
 /** What the pre-flight asks of the endpoint, inside the package only. */
 export interface Rpc {
+  /** The endpoint's genesis hash: 32 bytes in base58, or a refusal. */
   getGenesisHash(): Promise<string>;
   /** Accounts at the confirmed commitment, in the order asked; null if absent. */
   getAccounts(addresses: readonly string[]): Promise<(AccountState | null)[]>;
@@ -280,7 +318,12 @@ export interface Rpc {
   latestBlockhash(): Promise<string>;
 }
 
-/** Refuses any endpoint whose genesis hash is not devnet's. */
+/**
+ * Refuses any endpoint whose genesis hash is not devnet's. getGenesisHash
+ * has already refused anything but a well-formed 32-byte hash, so this
+ * refusal, the only one that says "not devnet", is for another cluster's
+ * hash (the audit of 6c4e64e, Major 9).
+ */
 export async function assertDevnet(rpc: Rpc): Promise<void> {
   if ((await rpc.getGenesisHash()) !== DEVNET_GENESIS_HASH) {
     throw new RpcError("not-devnet", "the RPC endpoint is not devnet");
@@ -302,45 +345,41 @@ export function isAmount(value: unknown): value is string {
   );
 }
 
-/**
- * A lamport amount: a whole number from 0 to the largest u64. A JSON number is
- * taken from its text as the answer wrote it (raw), digit for digit, and one
- * written with a fraction or an exponent is refused, even where JSON.parse
- * rounds it to a whole number (1.0000000000000001 reads as 1). A decimal
- * string is taken as it is. Anything else is refused.
- */
-function amountAt(
-  value: unknown,
-  raw: string | undefined,
-  what: string,
-): string {
-  if (typeof value === "number") {
-    if (raw !== undefined && isAmount(raw)) return raw;
-    throw new RpcError("shape", `${what}: not a whole amount`);
-  }
-  if (isAmount(value)) return value;
-  throw new RpcError("shape", `${what}: not a whole amount`);
+/** A u64 as the answer wrote it, digit for digit, or null. */
+function u64Of(value: JsonValue | undefined): string | null {
+  const text = wholeNumber(value);
+  return text !== null && isAmount(text) ? text : null;
 }
 
 /** Each item of a JSON list, read by index into a new array. */
 function listOf<T>(
-  value: unknown,
+  value: JsonValue | undefined,
   what: string,
-  read: (item: unknown, index: number) => T,
+  read: (item: JsonValue, index: number) => T,
 ): T[] {
-  if (!Array.isArray(value)) throw new RpcError("shape", `${what}: not a list`);
+  if (!isJsonArray(value)) throw new RpcError("shape", `${what}: not a list`);
   const out: T[] = [];
   for (let i = 0; i < value.length; i += 1) out.push(read(value[i], i));
   return out;
 }
 
+/**
+ * A run's lamport balances, Option<Vec<u64>> (response.rs:467 and :468):
+ * each a whole number as the answer wrote it, digit for digit, so one with a
+ * fraction or an exponent is refused even where JSON.parse would round it to
+ * a whole number. Null when the answer gives none.
+ */
 function balancesOf(
-  value: unknown,
+  value: JsonValue | undefined,
   what: string,
-  raw: (index: number) => string | undefined,
 ): string[] | null {
   if (value === undefined || value === null) return null;
-  return listOf(value, what, (item, index) => amountAt(item, raw(index), what));
+  return listOf(value, what, (item) => {
+    const amount = u64Of(item);
+    if (amount === null)
+      throw new RpcError("shape", `${what}: not a whole amount`);
+    return amount;
+  });
 }
 
 /** Whether a value is a public key: base58 for 32 bytes. */
@@ -348,18 +387,22 @@ export function isPublicKey(value: unknown): value is string {
   return typeof value === "string" && decodePublicKey(value) !== null;
 }
 
-/** Whether a value is a slot: a whole number from 0, as a JSON number. */
-export function isSlot(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function accountState(value: unknown): AccountState | null {
+/**
+ * An account as read for its lookup table: an owner that is a public key and
+ * data as [base64 text, "base64"] (UiAccount and UiAccountData::Binary, agave a64fa73,
+ * account-decoder-client-types/src/lib.rs:19 to :34). null for an account
+ * that does not exist.
+ */
+function accountState(value: JsonValue): AccountState | null {
   if (value === null) return null;
-  if (!isRecord(value)) throw new RpcError("shape", "account: not an object");
-  const { owner, data } = value;
+  if (!isJsonObject(value)) {
+    throw new RpcError("shape", "account: not an object");
+  }
+  const owner = value.get("owner");
   if (!isPublicKey(owner)) throw new RpcError("shape", "account: owner");
+  const data = value.get("data");
   if (
-    !Array.isArray(data) ||
+    !isJsonArray(data) ||
     data.length !== 2 ||
     data[1] !== "base64" ||
     typeof data[0] !== "string"
@@ -374,13 +417,6 @@ function accountState(value: unknown): AccountState | null {
   return { owner, data: bytes };
 }
 
-function valueOf(result: unknown, method: string): unknown {
-  if (!isRecord(result) || !("value" in result)) {
-    throw new RpcError("shape", `${method}: no value`);
-  }
-  return result.value;
-}
-
 async function fetchAccounts(
   endpoint: Required<RpcEndpoint>,
   addresses: readonly string[],
@@ -388,15 +424,14 @@ async function fetchAccounts(
   const out: (AccountState | null)[] = [];
   for (let i = 0; i < addresses.length; i += MAX_ACCOUNTS_PER_CALL) {
     const batch = addresses.slice(i, i + MAX_ACCOUNTS_PER_CALL);
-    const result = await call(endpoint, "getMultipleAccounts", [
-      batch,
-      { encoding: "base64", commitment: "confirmed" },
-    ]);
-    const states = listOf(
-      valueOf(result, "getMultipleAccounts"),
+    const { value } = response(
+      await call(endpoint, "getMultipleAccounts", [
+        batch,
+        { encoding: "base64", commitment: "confirmed" },
+      ]),
       "getMultipleAccounts",
-      accountState,
     );
+    const states = listOf(value, "getMultipleAccounts", accountState);
     if (states.length !== batch.length) {
       throw new RpcError("shape", "getMultipleAccounts: wrong length");
     }
@@ -405,14 +440,30 @@ async function fetchAccounts(
   return out;
 }
 
+/**
+ * A blockhash answer, RpcBlockhash (response.rs:145 to :148): a blockhash
+ * of 32 bytes in base58, and lastValidBlockHeight a u64 written as a whole
+ * number.
+ */
+function blockhashOf(value: JsonValue | undefined, what: string): string {
+  const blockhash = isJsonObject(value) ? value.get("blockhash") : undefined;
+  if (
+    !isJsonObject(value) ||
+    !isPublicKey(blockhash) ||
+    u64Of(value.get("lastValidBlockHeight")) === null
+  ) {
+    throw new RpcError("shape", `${what}: blockhash`);
+  }
+  return blockhash;
+}
+
 async function fetchSimulation(
   endpoint: Required<RpcEndpoint>,
   transactionBase64: string,
 ): Promise<Simulation> {
-  const { result, raw } = await callKeepingNumbers(
-    endpoint,
-    "simulateTransaction",
-    [
+  // RpcSimulateTransactionResult (response.rs:457 to :473), in a Response.
+  const { slot, value } = response(
+    await call(endpoint, "simulateTransaction", [
       transactionBase64,
       {
         encoding: "base64",
@@ -420,38 +471,24 @@ async function fetchSimulation(
         replaceRecentBlockhash: true,
         commitment: "confirmed",
       },
-    ],
+    ]),
+    "simulateTransaction",
   );
-  const value = valueOf(result, "simulateTransaction");
-  if (!isRecord(value)) {
+  if (!isJsonObject(value)) {
     throw new RpcError("shape", "simulateTransaction: value");
   }
-  const context = isRecord(result) ? result.context : undefined;
-  // A slot that is given must be one; with none given, it is unknown.
-  const given = isRecord(context) ? context.slot : undefined;
-  // Read from its text, so a slot written with a fraction or an exponent is
-  // refused even where JSON.parse rounds it (json.ts).
-  const givenText = raw(["context", "slot"]);
-  if (
-    given !== undefined &&
-    (!isSlot(given) ||
-      givenText === undefined ||
-      !/^(0|[1-9][0-9]*)$/.test(givenText))
-  ) {
-    throw new RpcError("shape", "simulateTransaction: context slot");
-  }
-  const slot = given ?? null;
   // A missing err field is not a clean run: it is refused, so the pre-flight
   // marks the simulation not run instead of showing no changes.
-  if (!("err" in value)) {
+  const err = value.get("err");
+  if (err === undefined) {
     throw new RpcError("shape", "simulateTransaction: no err field");
   }
-  // From a failed run limen uses nothing but its error (ruling 20a): its
-  // balances and blockhash are not read, so they cannot refuse it either.
-  if (value.err !== null) {
+  // From a failed run limen uses nothing but its error (ruling 20a), and of
+  // the error only what failure.ts shows exactly: its balances and blockhash
+  // are not read, so they cannot refuse it either.
+  if (err !== null) {
     return {
-      // Parsed from the answer's text by this client, so it is JSON data.
-      err: jsonSafe(value.err, (path) => raw(["value", "err", ...path])),
+      err: runError(err),
       slot,
       replacementBlockhash: null,
       preBalances: null,
@@ -460,140 +497,126 @@ async function fetchSimulation(
       tokenAccountIndexes: [],
     };
   }
-  const replacement = value.replacementBlockhash;
-  // A blockhash is 32 bytes in base58; anything else is not kept.
-  const replacementBlockhash =
-    isRecord(replacement) && isPublicKey(replacement.blockhash)
-      ? replacement.blockhash
-      : null;
+  const replacement = value.get("replacementBlockhash");
   return {
-    // Parsed from the answer's text by this client, so it is JSON data.
-    err: value.err ?? null,
+    err: null,
     slot,
-    replacementBlockhash,
+    // Option<RpcBlockhash>: when given, it must be one.
+    replacementBlockhash:
+      replacement === undefined || replacement === null
+        ? null
+        : blockhashOf(replacement, "simulateTransaction: replacementBlockhash"),
     preBalances: balancesOf(
-      value.preBalances,
+      value.get("preBalances"),
       "simulateTransaction: preBalances",
-      (index) => raw(["value", "preBalances", index]),
     ),
     postBalances: balancesOf(
-      value.postBalances,
+      value.get("postBalances"),
       "simulateTransaction: postBalances",
-      (index) => raw(["value", "postBalances", index]),
     ),
-    loadedAddresses: loadedAddressesOf(value.loadedAddresses),
+    loadedAddresses: loadedAddressesOf(value.get("loadedAddresses")),
     tokenAccountIndexes: [
       ...tokenAccountIndexesOf(
-        value.preTokenBalances,
+        value.get("preTokenBalances"),
         "simulateTransaction: preTokenBalances",
-        (index) => raw(["value", "preTokenBalances", index, "accountIndex"]),
       ),
       ...tokenAccountIndexesOf(
-        value.postTokenBalances,
+        value.get("postTokenBalances"),
         "simulateTransaction: postTokenBalances",
-        (index) => raw(["value", "postTokenBalances", index, "accountIndex"]),
       ),
     ],
   };
 }
 
 /**
+ * Whether an OptionSerializer<String> member is absent, null, or a public
+ * key (transaction-status-client-types/src/lib.rs:523 to :532).
+ */
+function optionalKey(entry: JsonObject, name: string): boolean {
+  const value = entry.get(name);
+  return value === undefined || value === null || isPublicKey(value);
+}
+
+/**
+ * Whether a value is a UiTokenAmount (agave a64fa73,
+ * account-decoder-client-types/src/token.rs:8 to :13): uiAmount an
+ * Option<f64>, absent, null or a finite number; decimals a u8; amount and
+ * uiAmountString strings, amount a whole u64.
+ */
+function isUiTokenAmount(value: JsonValue | undefined): boolean {
+  if (!isJsonObject(value)) return false;
+  const uiAmount = value.get("uiAmount");
+  return (
+    (uiAmount === undefined ||
+      uiAmount === null ||
+      (uiAmount instanceof JsonNumber &&
+        Number.isFinite(Number(uiAmount.text)))) &&
+    wholeUpTo(value.get("decimals"), 255) !== null &&
+    isAmount(value.get("amount")) &&
+    typeof value.get("uiAmountString") === "string"
+  );
+}
+
+/**
  * The account indexes of a run's token balance entries, each entry checked
- * to be well formed: a whole account index as the answer wrote it, a mint
- * that is a public key, an owner and program that are public keys when
- * given, and a whole amount. A missing list has none.
+ * against UiTransactionTokenBalance (transaction-status-client-types
+ * /src/lib.rs:519 to :533): accountIndex a u8 written as a whole number, a
+ * mint that is a public key, a UiTokenAmount, and an owner and program that
+ * are public keys when given. A missing list has none.
  */
 function tokenAccountIndexesOf(
-  value: unknown,
+  value: JsonValue | undefined,
   what: string,
-  rawIndex: (index: number) => string | undefined,
 ): number[] {
   if (value === undefined || value === null) return [];
-  return listOf(value, what, (item, index) => {
-    const optionalKey = (key: unknown) =>
-      key === undefined || key === null || isPublicKey(key);
+  return listOf(value, what, (item) => {
+    const index = isJsonObject(item)
+      ? wholeUpTo(item.get("accountIndex"), 255)
+      : null;
     if (
-      !isRecord(item) ||
-      !isSlot(item.accountIndex) ||
-      !/^(0|[1-9][0-9]*)$/.test(rawIndex(index) ?? "") ||
-      !isPublicKey(item.mint) ||
-      !optionalKey(item.owner) ||
-      !optionalKey(item.programId) ||
-      !isRecord(item.uiTokenAmount) ||
-      !isAmount(item.uiTokenAmount.amount)
+      !isJsonObject(item) ||
+      index === null ||
+      !isPublicKey(item.get("mint")) ||
+      !isUiTokenAmount(item.get("uiTokenAmount")) ||
+      !optionalKey(item, "owner") ||
+      !optionalKey(item, "programId")
     ) {
       throw new RpcError("shape", `${what}: entry`);
     }
-    return item.accountIndex;
+    return index;
   });
 }
 
 /**
- * value as JSON-safe data (the audit of 21e1f9f, item 7): a number JSON.parse
- * read as Infinity, -Infinity or NaN, such as 1e999, becomes the text the
- * answer wrote (raw, by its path within value), so the value keeps its
- * meaning through JSON.stringify, which writes such a number as null.
- * Everything else is copied as it is.
+ * A run's loaded addresses, UiLoadedAddresses
+ * (transaction-status-client-types/src/lib.rs:480 to :483): two lists of
+ * public keys, or null when the answer gives none.
  */
-function jsonSafe(
-  value: unknown,
-  raw: (path: readonly (string | number)[]) => string | undefined,
-  path: readonly (string | number)[] = [],
-): unknown {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : (raw(path) ?? String(value));
-  }
-  if (Array.isArray(value)) {
-    const out: unknown[] = [];
-    for (let i = 0; i < value.length; i += 1) {
-      out.push(jsonSafe(value[i], raw, [...path, i]));
-    }
-    return out;
-  }
-  if (isRecord(value)) {
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(value)) {
-      // Defined, not assigned, so a "__proto__" key stays a plain key.
-      Object.defineProperty(out, key, {
-        value: jsonSafe(value[key], raw, [...path, key]),
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
-    }
-    return out;
-  }
-  return value;
-}
-
-/** A run's loaded addresses: two lists of public keys, or null. */
-function loadedAddressesOf(value: unknown): Simulation["loadedAddresses"] {
+function loadedAddressesOf(
+  value: JsonValue | undefined,
+): Simulation["loadedAddresses"] {
   if (value === undefined || value === null) return null;
-  const keys = (list: unknown, what: string) =>
+  const what = "simulateTransaction: loadedAddresses";
+  if (!isJsonObject(value)) throw new RpcError("shape", what);
+  const keys = (list: JsonValue | undefined) =>
     listOf(list, what, (item) => {
       if (!isPublicKey(item)) throw new RpcError("shape", `${what}: address`);
       return item;
     });
-  if (!isRecord(value)) {
-    throw new RpcError("shape", "simulateTransaction: loadedAddresses");
-  }
   return {
-    writable: keys(value.writable, "simulateTransaction: loadedAddresses"),
-    readonly: keys(value.readonly, "simulateTransaction: loadedAddresses"),
+    writable: keys(value.get("writable")),
+    readonly: keys(value.get("readonly")),
   };
 }
 
 async function fetchLatestBlockhash(
   endpoint: Required<RpcEndpoint>,
 ): Promise<string> {
-  const result = await call(endpoint, "getLatestBlockhash", [
-    { commitment: "confirmed" },
-  ]);
-  const value = valueOf(result, "getLatestBlockhash");
-  if (!isRecord(value) || !isPublicKey(value.blockhash)) {
-    throw new RpcError("shape", "getLatestBlockhash: blockhash");
-  }
-  return value.blockhash;
+  const { value } = response(
+    await call(endpoint, "getLatestBlockhash", [{ commitment: "confirmed" }]),
+    "getLatestBlockhash",
+  );
+  return blockhashOf(value, "getLatestBlockhash");
 }
 
 /**
@@ -628,9 +651,13 @@ export function jsonRpc(endpoint: RpcEndpoint): Rpc {
   const checked = checkedEndpoint(endpoint);
   return {
     async getGenesisHash() {
+      // A genesis hash is a Hash written as text: 32 bytes in base58
+      // (agave a64fa73, rpc/src/rpc.rs:2472 to :2475). Anything else leaves
+      // devnet unconfirmed; it is never taken for another cluster (the audit
+      // of 6c4e64e, Major 9).
       const hash = await call(checked, "getGenesisHash", []);
-      if (typeof hash !== "string") {
-        throw new RpcError("shape", "getGenesisHash: not a string");
+      if (!isPublicKey(hash)) {
+        throw new RpcError("shape", "getGenesisHash: not a 32-byte hash");
       }
       return hash;
     },

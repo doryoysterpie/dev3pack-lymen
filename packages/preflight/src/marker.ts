@@ -8,9 +8,10 @@
 // "account N" for the account at index N of the message's account list,
 // "lookup table N" for the table at index N of its lookups, and "address N",
 // from 1 in the order first met, for any other, such as a new authority an
-// instruction's data names. The reason a simulation is not used, or the
-// error it ran into, has every address in it replaced. So the app and a
-// server produce the same report for the same bytes and the same RPC answers.
+// instruction's data names. The reason a simulation is not used has every
+// address in it replaced; a run's error holds no text the RPC wrote, only
+// agave's variant names (failure.ts). So the app and a server produce the
+// same report for the same bytes and the same RPC answers.
 
 import { decodePublicKey } from "./base58.ts";
 import {
@@ -47,8 +48,11 @@ export function isReportProgram(address: string): boolean {
 /** What scrubAddresses writes in place of an address. */
 export const SCRUBBED = "an address";
 
-// A run of base58 characters. Only a whole run is ever replaced, so an
-// address inside a longer run is left alone.
+// A run of base58 characters. Each replacement is of a whole run:
+// withMarkers and withRoleMarkers replace a run that is a known address, so an
+// address inside a longer run is not marked, while scrubAddresses replaces
+// any run of 32 or more characters, so an address inside a longer run goes
+// with it (the audit of 21e1f9f, item 2).
 const BASE58_RUN = /[1-9A-HJ-NP-Za-km-z]+/g;
 
 // Keys too: an object the RPC wrote, such as an error, can be keyed by an

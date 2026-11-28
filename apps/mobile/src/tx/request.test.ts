@@ -98,7 +98,12 @@ describe("re-audit 2, item 7: a redirected request is refused", () => {
   });
 
   it("refuses an answer that gives no final URL, or one written differently", async () => {
-    assert.equal(await reasonOf(from("")), REDIRECTED);
+    // No final URL is not called a redirect: limen cannot tell where the
+    // answer came from (the audit of 6c4e64e, Major 9).
+    assert.equal(
+      await reasonOf(from("")),
+      "no-final-url: the answer gave no final URL, so limen cannot confirm it came from the link and will not show what it answered",
+    );
     assert.equal(
       await reasonOf(from("https://PAY.example/solana-pay?order=7")),
       REDIRECTED,

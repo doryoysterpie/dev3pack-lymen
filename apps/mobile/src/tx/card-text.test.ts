@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
+import * as spl from "@solana/spl-token";
+import * as web3 from "@solana/web3.js";
+
 import {
   decodePublicKey,
   preflight,
@@ -11,6 +14,7 @@ import {
 } from "@limen/preflight";
 
 // Test support from the package, not one of its exports.
+import { legacy } from "../../../../packages/preflight/test-support/build.ts";
 import {
   endpointFor,
   recordedEndpoint,
@@ -220,6 +224,8 @@ describe("transaction card text", () => {
           },
         ],
       },
+      // The verdict effect.ts gives a close to the wallet.
+      verdicts: [{ instruction: 0, verdict: "other" as const }],
       simulation: {
         status: "ran" as const,
         err: null,
@@ -262,7 +268,7 @@ describe("transaction card text", () => {
     );
   });
 
-  it("m12: names an address from a lookup table limen could not read", async () => {
+  it("m12: names an address from a lookup table limen does not show", async () => {
     const result = await preflight(
       offline,
       transactionOf("drainer as a v0 transaction, lookup table not loaded"),
@@ -274,7 +280,7 @@ describe("transaction card text", () => {
         (row) =>
           row.label === "Sends SOL" &&
           row.value ===
-            `Asks to send 4.99 SOL from your wallet to an address in lookup table ${fixture.keys.lookupTable} (index 1) that limen could not read.`,
+            `Asks to send 4.99 SOL from your wallet to an address in lookup table ${fixture.keys.lookupTable} (index 1) that limen does not show.`,
       ),
     );
     assert.ok(
@@ -282,7 +288,7 @@ describe("transaction card text", () => {
         (row) =>
           row.label === "Lookup tables" &&
           row.value ===
-            "1 address comes from a lookup table limen could not read.",
+            "1 address comes from a lookup table. limen shows an address from a lookup table only with a simulation result it uses, so this one is not shown.",
       ),
     );
   });
@@ -316,11 +322,13 @@ describe("transaction card text", () => {
     );
     assert.deepEqual(result, { kind: "user-not-given" });
     const card = transactionCardText(LINK, null, result);
-    assert.equal(card.title, "Stopped: no wallet");
+    // limen was given no wallet address; it cannot tell that none is
+    // connected (the audit of 6c4e64e, Major 9).
+    assert.equal(card.title, "Stopped: no readable wallet address");
     assert.equal(card.tone, "flagged");
     assert.equal(
       card.status,
-      "limen holds this transaction: no wallet is connected, and limen pre-flights a transaction only for the wallet that pays its fee.",
+      "limen holds this transaction: it was given no wallet address it can read, and limen pre-flights a transaction only for the wallet that pays its fee.",
     );
   });
 
@@ -437,6 +445,8 @@ describe("transaction card text", () => {
           },
         ],
       },
+      // The verdict effect.ts gives this approval (effect.test.ts).
+      verdicts: [{ instruction: 0, verdict: "hands-over" as const }],
     });
     assert.equal(
       card.status,
@@ -468,6 +478,8 @@ describe("transaction card text", () => {
           },
         ],
       },
+      // The verdict effect.ts gives an approval to the wallet itself.
+      verdicts: [{ instruction: 0, verdict: "other" as const }],
     });
     assert.deepEqual(card.rows[1], {
       label: "Approves a delegate",
@@ -538,13 +550,13 @@ describe("the owner's audit: what the card claims", () => {
     });
   });
 
-  it("N4: names a delegate in a lookup table limen could not read, its table address as written", async () => {
+  it("N4: names a delegate in a lookup table limen does not show, its table address as written", async () => {
     const rows = await rowsFor([
       { ...approve(attacker, "5"), delegate: { table: LOWER, index: 0 } },
     ]);
     assert.deepEqual(rows[1], {
       label: "Approves a delegate",
-      value: `Asks to let an address in lookup table ${LOWER} (index 0) that limen could not read move up to 5 base units from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
+      value: `Asks to let an address in lookup table ${LOWER} (index 0) that limen does not show move up to 5 base units from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
     });
   });
 
@@ -572,6 +584,8 @@ describe("the owner's audit: what the card claims", () => {
           },
         ],
       },
+      // The verdict effect.ts gives a SOL transfer.
+      verdicts: [{ instruction: 0, verdict: "other" as const }],
     });
     assert.equal(
       card.status,
@@ -671,7 +685,9 @@ describe("the owner's audit: what the card claims", () => {
     assert.deepEqual(rows.slice(9, 11), [
       {
         label: "Sends tokens",
-        value: `Asks to send 2.5 of mint ${fixture.keys.mint} from token account ${userTokenAccount} to ${attacker}.`,
+        // Base units and the decimals the instruction states, no derived
+        // quantity (the audit of 6c4e64e, Major 8).
+        value: `Asks to send 2500000 base units (the instruction expects a mint with 6 decimals) of mint ${fixture.keys.mint} from token account ${userTokenAccount} to ${attacker}.`,
       },
       {
         label: "Sends SOL",
@@ -748,19 +764,28 @@ describe("the owner's audit: what the card claims", () => {
   });
 
   it("A7: a transfer from a token account to itself moves no tokens", async () => {
-    const rows = await rowsFor([
-      {
-        kind: "token-out" as const,
-        instruction: 0,
-        program: "token" as const,
-        source: { address: userTokenAccount },
-        destination: { address: userTokenAccount },
-        mint: null,
-        amount: "5",
-        decimals: null,
-      },
-    ]);
-    assert.deepEqual(rows[1], {
+    // A real transaction, so the row reads effect.ts's verdict.
+    const card = transactionCardText(
+      LINK,
+      null,
+      await preflight(
+        offline,
+        legacy(
+          fixture.user,
+          [
+            spl.createTransferInstruction(
+              new web3.PublicKey(userTokenAccount),
+              new web3.PublicKey(userTokenAccount),
+              new web3.PublicKey(fixture.user),
+              5,
+            ),
+          ],
+          fixture.keys.mint,
+        ),
+        fixture.user,
+      ),
+    );
+    assert.deepEqual(card.rows[1], {
       label: "Transfers to the same account",
       value: `Asks to transfer 5 base units from token account ${userTokenAccount} to itself, which moves no tokens if accepted.`,
     });
@@ -800,7 +825,13 @@ describe("the owner's audit: what the card claims", () => {
     const result = await drainerOffline();
     const failed = {
       status: "ran" as const,
-      err: { InstructionError: [1, "Custom"] },
+      // As failure.ts reads agave's {"InstructionError":[1,"Custom"]}.
+      err: {
+        transactionError: "InstructionError",
+        instruction: 1,
+        instructionError: null,
+        custom: null,
+      },
       changes: [],
     };
     const card = transactionCardText(LINK, null, {
@@ -834,31 +865,38 @@ describe("the owner's audit: what the card claims", () => {
   });
 
   it("hunt: a row the token program always refuses says it would fail", async () => {
-    const rows = await rowsFor([
-      {
-        kind: "authority-changed" as const,
-        instruction: 0,
-        program: "token" as const,
-        account: { address: userTokenAccount },
-        authorityType: "AccountOwner",
-        newAuthority: null,
-      },
-      {
-        kind: "account-closed" as const,
-        instruction: 1,
-        program: "token-2022" as const,
-        account: { address: userTokenAccount },
-        destination: { address: userTokenAccount },
-      },
-    ]);
-    assert.deepEqual(rows.slice(1, 3), [
+    // Real instructions, so each row reads effect.ts's verdict.
+    const user = new web3.PublicKey(fixture.user);
+    const account = new web3.PublicKey(userTokenAccount);
+    const card = transactionCardText(
+      LINK,
+      null,
+      await preflight(
+        offline,
+        legacy(
+          fixture.user,
+          [
+            spl.createSetAuthorityInstruction(
+              account,
+              user,
+              spl.AuthorityType.AccountOwner,
+              null,
+            ),
+            spl.createCloseAccountInstruction(account, account, user),
+          ],
+          fixture.keys.mint,
+        ),
+        fixture.user,
+      ),
+    );
+    assert.deepEqual(card.rows.slice(1, 3), [
       {
         label: "Refused by the token program",
         value: `Asks to remove the owner of token account ${userTokenAccount}, which the Token program refuses, so the transaction would fail.`,
       },
       {
         label: "Refused by the token program",
-        value: `Asks to close token account ${userTokenAccount} and send its SOL to that same account, which Token-2022 refuses, so the transaction would fail.`,
+        value: `Asks to close token account ${userTokenAccount} and send its SOL to that same account, which the Token program refuses, so the transaction would fail.`,
       },
     ]);
   });
@@ -906,8 +944,9 @@ describe("the owner's audit: what the card claims", () => {
     });
     assert.deepEqual(card.rows[1], {
       label: "Also in the transaction",
+      // Each kind gets its own row (the audit of 6c4e64e, the README Minor).
       value:
-        "An instruction that does not name your wallet as its payer or authority. Your wallet's signature may still count toward it, for example as one signer of a multisig.",
+        "A token transfer that does not name your wallet as its authority. Your wallet's signature may still count toward it, for example as one signer of a multisig.",
     });
   });
 

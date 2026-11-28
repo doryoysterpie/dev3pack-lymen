@@ -25,6 +25,11 @@ import {
   type UndecodedReason,
 } from "./decode.ts";
 import {
+  instructionEffect,
+  mayChangeWallet,
+  type InstructionVerdict,
+} from "./effect.ts";
+import {
   cappedUnitLimit,
   MAX_COMPUTE_UNIT_LIMIT,
   priorityFeeLamports,
@@ -64,10 +69,14 @@ export type Effect =
       readonly instruction: number;
       readonly account: Place;
       /**
-       * CreateIdempotent, which does nothing when the account exists
-       * (solana-program/associated-token-account 34509e4,
-       * program/src/processor.rs:88 to 101). Either way the wallet pays only
-       * what the account lacks of its rent (tools/account.rs:25 to 33).
+       * CreateIdempotent, which returns without creating anything when the
+       * account is already a token account of the token program named, for
+       * the wallet and mint named, and refuses it when its owner or mint
+       * differs (solana-program/associated-token-account 34509e4,
+       * program/src/processor.rs:88 to :103); either way only after the
+       * account is found to be the derived address (:77 to :86). The wallet
+       * pays only what the account lacks of its rent (tools/account.rs:25 to
+       * 33).
        */
       readonly idempotent: boolean;
     }
@@ -185,7 +194,11 @@ export interface TransactionSummary {
   /** Instructions the decoder could not decode. Any entry means the fallback card. */
   readonly undecoded: readonly Undecoded[];
   readonly signers: Signers;
-  /** Accounts from lookup tables that were not loaded. */
+  /**
+   * Addresses from lookup tables not among the tables given, so left
+   * unresolved. The pre-flight gives the tables only with a simulation
+   * result it uses (preflight.ts; the audit of 6c4e64e, Major 2).
+   */
   readonly unresolvedAccounts: number;
 }
 
@@ -395,6 +408,28 @@ function priorityFee(decoded: readonly Decoded[]): Effect | null {
 
 function isZero(signature: Uint8Array): boolean {
   return signature.every((byte) => byte === 0);
+}
+
+/**
+ * The verdict on each of the message's instructions, in order (effect.ts),
+ * decoded as summarizeTransaction decodes them. The wallet, the fee payer,
+ * is known to be a System account until an instruction that could change it
+ * (mayChangeWallet).
+ */
+export function instructionVerdicts(
+  transaction: ParsedTransaction,
+  tables: LookupTables,
+): InstructionVerdict[] {
+  const { message } = transaction;
+  const accounts = messageAccounts(message, tables);
+  const user = message.staticKeys[0];
+  let walletIsSystemAccount = true;
+  return message.instructions.map((compiled, instruction) => {
+    const decoded = decodeInstruction(compiled, accounts);
+    const verdict = instructionEffect(decoded, user, walletIsSystemAccount);
+    if (mayChangeWallet(decoded, user)) walletIsSystemAccount = false;
+    return { ...verdict, instruction };
+  });
 }
 
 /**

@@ -129,6 +129,8 @@ export type Decoded =
       readonly kind: "token-other";
       readonly program: TokenProgram;
       readonly name: string;
+      /** The token account each named instruction takes first. */
+      readonly account: Account;
     }
   | {
       readonly kind: "create-token-account";
@@ -137,6 +139,8 @@ export type Decoded =
       readonly account: Account;
       readonly wallet: Account;
       readonly mint: Account;
+      /** The token program the account is for, the instruction's sixth. */
+      readonly tokenProgram: Account;
     }
   | {
       readonly kind: "compute-budget";
@@ -489,7 +493,7 @@ function decodeToken(
         const [name, length, minAccounts] = named;
         const problem = shape(length, minAccounts);
         if (problem) return undecoded(id, problem);
-        return { kind: "token-other", program, name };
+        return { kind: "token-other", program, name, account: accounts[0] };
       }
       // Token-2022 extension instructions (25 and up), Batch (255) and
       // anything else.
@@ -519,6 +523,7 @@ function decodeAssociatedToken(
     account: accounts[1],
     wallet: accounts[2],
     mint: accounts[3],
+    tokenProgram: accounts[5],
   };
 }
 

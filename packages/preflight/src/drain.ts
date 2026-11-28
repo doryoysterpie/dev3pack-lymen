@@ -12,19 +12,23 @@
 // only the flagged fallback card; token-sweep evidence returns as H-13.
 //
 // "A simulation that ran without an error" means one the pre-flight used
-// (preflight.ts). Ownership in clause 1 is taken from the token programs' own
-// authority rule (summary.ts, authorizedByUser).
+// (preflight.ts). Clause 1 reads the one verdict effect.ts gives each decoded
+// instruction, the verdict the card and the signing gate read too (the
+// owner's audit of 6c4e64e, Majors 6 and 7).
 //
 // A ready report shows a drain pattern when, for the user's wallet (the
 // transaction's fee payer, written "user" in the report), either holds:
 //
-// 1. Control handed over, in the decoded instructions: a delegate other than
-//    the wallet approved over one of the wallet's token accounts; the wallet
-//    account assigned to a program other than the System Program and the
-//    wallet's own address; a token
-//    account or mint authority moved to an address other than the wallet; or
-//    a token account closed with its SOL sent to an address other than the
-//    wallet.
+// 1. Control handed over, in the decoded instructions: an instruction the
+//    wallet authorizes whose verdict is hands-over. That is a delegate other
+//    than the wallet approved for more than 0 base units over a token
+//    account; the wallet account assigned, or created anew, for a program
+//    other than the System Program and the wallet's own address; a token
+//    account or mint authority moved to an address other than the wallet;
+//    or a token account closed with its SOL sent to an address other than
+//    the wallet. An instruction its program refuses whatever the accounts
+//    hold, such as a close into the account itself, or one that moves
+//    nothing, is never a hand-over.
 // 2. A sweep of the wallet's SOL, in a simulation that ran without an error:
 //    the wallet left with less than a tenth of the lamports it held, from the
 //    run's own pre and post balances.
@@ -35,46 +39,20 @@
 // named, and a payment that leaves the wallet a tenth or more show no drain
 // pattern.
 
-import { USER_MARKER } from "./marker.ts";
-import { SYSTEM_PROGRAM } from "./programs.ts";
+import type { InstructionVerdict } from "./effect.ts";
 import type { PreflightReport } from "./preflight.ts";
 import type { BalanceChange } from "./simulate.ts";
-import type { Effect } from "./summary.ts";
 
 /** A sweep leaves less than 1 / SWEEP_DIVISOR of what an account held. */
 export const SWEEP_DIVISOR = 10;
 
 /**
- * Clause 1: a decoded effect that hands control of the user's tokens or
- * accounts to another address. The card uses this same test.
+ * Clause 1: an instruction that hands control of the wallet's tokens or
+ * accounts to another address, by its verdict. The card reads this same
+ * test.
  */
-export function handsOverControl(effect: Effect): boolean {
-  switch (effect.kind) {
-    case "delegate-approved":
-      // An unloaded lookup address is not the wallet's own address.
-      return (
-        !("address" in effect.delegate) ||
-        effect.delegate.address !== USER_MARKER
-      );
-    case "owner-assigned":
-      // The System Program already owns a wallet account, and the wallet's
-      // own address is not another address (the audit of 21e1f9f, item 8).
-      return (
-        effect.newOwner !== SYSTEM_PROGRAM && effect.newOwner !== USER_MARKER
-      );
-    case "authority-changed":
-      return (
-        effect.newAuthority !== null && effect.newAuthority !== USER_MARKER
-      );
-    case "account-closed":
-      // An unloaded lookup address is not the wallet's own address.
-      return (
-        !("address" in effect.destination) ||
-        effect.destination.address !== USER_MARKER
-      );
-    default:
-      return false;
-  }
+export function handsOverControl(verdict: InstructionVerdict): boolean {
+  return verdict.verdict === "hands-over";
 }
 
 function swept(before: string, after: string): boolean {
@@ -89,8 +67,8 @@ export function drainingChange(change: BalanceChange): boolean {
 
 export function drainPattern(report: PreflightReport): boolean {
   if (report.kind !== "ready") return false;
-  const { summary, simulation } = report;
-  if (summary.effects.some(handsOverControl)) return true;
+  const { simulation } = report;
+  if (report.verdicts.some(handsOverControl)) return true;
   if (simulation.status !== "ran" || simulation.err !== null) return false;
   return simulation.changes.some(drainingChange);
 }

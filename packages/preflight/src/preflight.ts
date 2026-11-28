@@ -6,10 +6,12 @@
 // only transactions that wallet pays the fee for. With no wallet named, or
 // another wallet as fee payer, the pre-flight stops and yields no summary. The
 // summary and the balance change write the role marker "user" in place of the
-// wallet's address; a report also marks the other accounts named in
-// instructions the wallet signs and has every address scrubbed from the text
-// the RPC wrote (marker.ts). So the app and a server produce the same report
-// for the same bytes and the same RPC answers.
+// wallet's address; a report carries no address but six programs' (marker.ts)
+// and no text the RPC wrote: a failed run's error holds only agave's variant
+// names and whole numbers (failure.ts), and the reason a result is not used
+// is limen's own, with at most an RPC error's code, every address in it
+// scrubbed all the same. So the app and a server produce the same report for
+// the same bytes and the same RPC answers.
 //
 // From a simulation, limen takes only the run's status and the wallet's SOL
 // change, from the run's own balances (the owner's ruling 20a): it reads no
@@ -30,6 +32,12 @@ import { messageAccounts, type LookupTables } from "./accounts.ts";
 import { decodePublicKey } from "./base58.ts";
 import { decodeBase64, encodeBase64 } from "./base64.ts";
 import { drainPattern } from "./drain.ts";
+import {
+  PROGRAM_NAME,
+  REFUSAL_WHY,
+  type InstructionVerdict,
+} from "./effect.ts";
+import type { RunError } from "./failure.ts";
 import { readUnsetFeePayer, withFeePayer } from "./fee-payer.ts";
 import { scrubAddresses, USER_MARKER, withRoleMarkers } from "./marker.ts";
 import { ADDRESS_LOOKUP_TABLE_PROGRAM } from "./programs.ts";
@@ -48,6 +56,7 @@ import {
 } from "./simulate.ts";
 import { parseLookupTable } from "./state.ts";
 import {
+  instructionVerdicts,
   summarizeTransaction,
   type Place,
   type TransactionSummary,
@@ -61,8 +70,11 @@ import {
 export type SimulationOutcome =
   | {
       readonly status: "ran";
-      /** The runtime error the simulation reported, or null. */
-      readonly err: unknown;
+      /**
+       * The runtime error the simulation reported, as far as limen shows it
+       * exactly (failure.ts), or null.
+       */
+      readonly err: RunError | null;
       /**
        * The wallet's SOL change, from the run's own balances (simulate.ts);
        * none when the run failed or left the wallet's SOL as it was.
@@ -109,13 +121,20 @@ export type Preflight =
       /** True when the request left the fee payer unset and limen set the user. */
       readonly feePayerSet: boolean;
       readonly summary: TransactionSummary;
+      /**
+       * What each of the message's instructions does, in order (effect.ts):
+       * the one result the card, the drain pattern and the signing gate
+       * read.
+       */
+      readonly verdicts: readonly InstructionVerdict[];
       readonly simulation: SimulationOutcome;
       readonly blocks: readonly SignBlock[];
       readonly simulatedAt: SimulatedAt | null;
       /**
        * The message's account list, in order: static keys, then the
-       * addresses loaded from lookup tables, null where a table could not be
-       * read. A report marks each address by its index here (toReport).
+       * addresses loaded from lookup tables, null where a lookup entry is
+       * unresolved, as every one is unless a simulation result is used. A
+       * report marks each address by its index here (toReport).
        */
       readonly accountKeys: readonly (string | null)[];
       /**
@@ -124,9 +143,11 @@ export type Preflight =
        * SOL or token transfer's destination, a delegate, a new authority, a
        * close's or a mint's destination, a new owner program), in the
        * effects' order, from the unmarked decode (bundleLists). It leaves out
-       * the wallet, and an address behind a lookup table limen could not
-       * read, which is not known. A report (toReport) never holds it: a report marks every
-       * account a wallet-signed instruction names, these included.
+       * the wallet, and any address from a lookup table the pre-flight
+       * leaves unresolved: every one, unless a simulation result is used
+       * (the audit of 6c4e64e, Major 2). A report (toReport) never holds
+       * it: a report marks every account a wallet-signed instruction names,
+       * these included.
        */
       readonly recipients: readonly string[];
       /**
@@ -247,17 +268,31 @@ export async function preflight(
     return { kind: "user-not-fee-payer", feePayer };
   }
 
-  let tables: LookupTables = new Map();
+  // The lookup tables the decode, the card and the bundle use. None until
+  // the last step of the one path on which every check passed, so every
+  // other way out leaves every lookup entry unresolved (the audit of
+  // 6c4e64e, Major 2).
+  let resolved: LookupTables = new Map();
   let simulation: SimulationOutcome;
   let simulatedAt: SimulatedAt | null = null;
   try {
     // The package's own JSON-RPC client is the only RPC (rpc.ts).
     const rpc = jsonRpc(endpoint);
-    await assertDevnet(rpc);
-    tables = await loadTables(rpc, transaction);
-    const refused = lookupProblem(transaction, tables);
+    // Devnet is confirmed only by its exact genesis hash; anything but
+    // another cluster's hash leaves it unconfirmed, never "not devnet" (the
+    // audit of 6c4e64e, Major 9).
+    try {
+      await assertDevnet(rpc);
+    } catch (error) {
+      if (isNotDevnet(error)) throw error;
+      throw new Error(`limen could not confirm devnet: ${errorText(error)}`, {
+        cause: error,
+      });
+    }
+    const read = await loadTables(rpc, transaction);
+    const refused = lookupProblem(transaction, read);
     if (refused !== null) return { kind: "malformed", problem: refused };
-    const accounts = messageAccounts(transaction.message, tables);
+    const accounts = messageAccounts(transaction.message, read);
     // The simulation is used only when its evidence covers every account the
     // transaction can write and belongs to this transaction alone; otherwise
     // it is marked not used, which holds signing (signBlocks).
@@ -267,16 +302,17 @@ export async function preflight(
     // for none, and takes the wallet's SOL from the run's own balances.
     const result = await rpc.simulate(base64);
     // From a failed run, limen uses nothing but its error (ruling 20a): no
-    // balances, no accounts and no blockhash. agave returns every account
-    // of a failed run as null (anza-xyz/agave a64fa73, rpc/src/rpc.rs:3554
-    // and :3555), which shows nothing the transaction would do. The slot is
-    // the answer's context, not the run's.
+    // balances, no accounts and no blockhash. For a failed run agave gives a
+    // null entry for each account a request names (anza-xyz/agave a64fa73,
+    // rpc/src/rpc.rs:3554 and :3555); limen names none, so the whole
+    // accounts field is null (:3537). The slot is the answer's context, not
+    // the run's.
     if (result.err !== null) {
       simulation = {
         status: "ran",
-        // The runtime's error, with any address the RPC wrote into it
-        // scrubbed.
-        err: scrubAddresses(result.err),
+        // Only agave's variant names and whole numbers (failure.ts), so no
+        // text the RPC wrote reaches the card or the report.
+        err: result.err,
         changes: [],
       };
       simulatedAt = { slot: result.slot, blockhash: null };
@@ -317,12 +353,19 @@ export async function preflight(
           result.loadedAddresses.readonly,
         )
       ) {
-        // The table read is disputed, so no entry of any lookup is taken
-        // for the decode, the card or the bundle, as for a table limen
-        // could not read (the audit of 21e1f9f, item 4).
-        tables = new Map();
         throw new Error(
           "the simulation's loaded addresses do not match the lookup tables read",
+        );
+      }
+      // A clean run of a transaction holding an instruction its program
+      // refuses whatever the accounts hold contradicts the instructions, so
+      // it is not used (the audit of 6c4e64e, Major 7).
+      const contradicted = instructionVerdicts(transaction, read).find(
+        (verdict) => verdict.verdict === "refused",
+      );
+      if (contradicted !== undefined && contradicted.verdict === "refused") {
+        throw new Error(
+          `the simulation ran without an error, though instruction ${contradicted.instruction + 1} asks for what ${PROGRAM_NAME[contradicted.program]} refuses (${REFUSAL_WHY[contradicted.refusal]})`,
         );
       }
       simulation = {
@@ -339,6 +382,9 @@ export async function preflight(
           : null;
       simulatedAt = { slot: result.slot, blockhash };
     }
+    // The last step of the one path on which every check passed: the run's
+    // answer is used, so the table read it did not dispute is too.
+    resolved = read;
   } catch (error) {
     if (isNotDevnet(error)) return { kind: "not-devnet" };
     // The reason can quote the RPC's own error text, which can name any
@@ -349,8 +395,8 @@ export async function preflight(
     };
   }
 
-  const summary = summarizeTransaction(transaction, tables);
-  const accountKeys = messageAccounts(transaction.message, tables).map(
+  const summary = summarizeTransaction(transaction, resolved);
+  const accountKeys = messageAccounts(transaction.message, resolved).map(
     (account) => account.address,
   );
   return {
@@ -359,6 +405,7 @@ export async function preflight(
     transaction,
     feePayerSet: unset !== null,
     summary,
+    verdicts: instructionVerdicts(transaction, resolved),
     simulation,
     blocks: signBlocks(summary, simulation),
     simulatedAt,
@@ -472,6 +519,7 @@ export type PreflightReport =
       readonly kind: "ready";
       readonly feePayerSet: boolean;
       readonly summary: TransactionSummary;
+      readonly verdicts: readonly InstructionVerdict[];
       readonly simulation: SimulationOutcome;
       readonly blocks: readonly SignBlock[];
     };
@@ -487,7 +535,7 @@ export function toReport(result: Preflight): PreflightReport {
       new Map<string, string>(),
     );
   }
-  const { feePayerSet, summary, simulation, blocks } = result;
+  const { feePayerSet, summary, verdicts, simulation, blocks } = result;
   // A report carries no address but REPORT_PROGRAMS (the owner's ruling
   // 20a): the wallet is "user", an account of the message is "account N" by
   // its index, a lookup table is "lookup table N", and any other address is
@@ -506,7 +554,7 @@ export function toReport(result: Preflight): PreflightReport {
     }
   });
   return withRoleMarkers(
-    { kind: "ready", feePayerSet, summary, simulation, blocks },
+    { kind: "ready", feePayerSet, summary, verdicts, simulation, blocks },
     markers,
   );
 }

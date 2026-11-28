@@ -29,6 +29,7 @@ export {
   type UndecodedReason,
 } from "./decode.ts";
 export {
+  instructionVerdicts,
   summarizeTransaction,
   type Effect,
   type Place,
@@ -36,6 +37,21 @@ export {
   type TransactionSummary,
   type Undecoded,
 } from "./summary.ts";
+export {
+  instructionEffect,
+  PROGRAM_NAME,
+  REFUSAL_WHY,
+  type InstructionVerdict,
+  type Refusal,
+  type Verdict,
+} from "./effect.ts";
+export { type RunError } from "./failure.ts";
+export {
+  isJsonObject,
+  parseJson,
+  type JsonObject,
+  type JsonValue,
+} from "./json.ts";
 export { parseLookupTable } from "./state.ts";
 
 // The package's only RPC is its own JSON-RPC client: a caller gives an

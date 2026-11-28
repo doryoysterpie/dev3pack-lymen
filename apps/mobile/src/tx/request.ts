@@ -6,6 +6,8 @@
 // "message". fetch is passed in, so the tests need no network.
 
 import {
+  isJsonObject,
+  parseJson,
   readAnswer,
   RPC_TIMEOUT_MS,
   withTimeout,
@@ -20,7 +22,12 @@ export interface TransactionResponse {
 
 export class RequestError extends Error {
   readonly reason:
-    "http" | "not-json" | "no-transaction" | "redirected" | "timeout";
+    | "http"
+    | "not-json"
+    | "no-transaction"
+    | "redirected"
+    | "no-final-url"
+    | "timeout";
   constructor(reason: RequestError["reason"], message: string) {
     super(message);
     this.reason = reason;
@@ -68,7 +75,15 @@ export async function requestTransaction(
   // fragment (on Android, the URL OkHttp last requested). Any difference
   // from the link, or no URL at all, is refused, so limen shows only what
   // the link itself answered. A 307 or 308 redirect has already resent the
-  // POST, account included, to wherever it pointed (README).
+  // POST, account included, to wherever it pointed (README). An answer with
+  // no final URL is not called redirected: limen cannot tell where it came
+  // from (the audit of 6c4e64e, Major 9).
+  if (response.url === "") {
+    throw new RequestError(
+      "no-final-url",
+      "the answer gave no final URL, so limen cannot confirm it came from the link and will not show what it answered",
+    );
+  }
   if (withoutFragment(response.url) !== withoutFragment(link)) {
     throw new RequestError(
       "redirected",
@@ -78,19 +93,27 @@ export async function requestTransaction(
   if (!response.ok) {
     throw new RequestError("http", `the link answered HTTP ${response.status}`);
   }
-  let body: unknown;
-  try {
-    body = JSON.parse(response.text);
-  } catch {
-    throw new RequestError("not-json", "the link did not answer with JSON");
+  // Read by the package's one JSON reader, as every RPC answer is, so an
+  // answer that names a member twice holds no transaction limen reads (the
+  // audit of 6c4e64e, Major 1, swept to the link's answer).
+  const parsed = parseJson(response.text);
+  if (!parsed.ok) {
+    throw new RequestError(
+      "not-json",
+      parsed.problem === "repeated-member"
+        ? "the link's answer names a member twice"
+        : "the link did not answer with JSON",
+    );
   }
-  if (typeof body !== "object" || body === null) {
+  const body = parsed.value;
+  if (!isJsonObject(body)) {
     throw new RequestError(
       "not-json",
       "the link did not answer with an object",
     );
   }
-  const { transaction, message } = body as Record<string, unknown>;
+  const transaction = body.get("transaction");
+  const message = body.get("message");
   if (typeof transaction !== "string" || transaction.length === 0) {
     throw new RequestError("no-transaction", "the answer holds no transaction");
   }

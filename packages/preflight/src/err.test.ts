@@ -1,5 +1,7 @@
 // The owner's audit of 21e1f9f, item 7: a run's error is JSON-safe data, so
-// a failed run never serializes its error as null.
+// a failed run never serializes its error as null. Since the audit of
+// 6c4e64e, Major 5, it holds only agave's variant names and whole numbers
+// (failure.ts), so a number past what JSON.parse can hold is not shown.
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -42,14 +44,25 @@ const failing = (err: string): RpcEndpoint => ({
 });
 
 describe("the audit of 21e1f9f, item 7: a run's error is JSON-safe", () => {
+  const none = {
+    transactionError: null,
+    instruction: null,
+    instructionError: null,
+    custom: null,
+  };
   for (const [err, owed] of [
     [
       '{"InstructionError":[0,{"Custom":1e999}]}',
-      { InstructionError: [0, { Custom: "1e999" }] },
+      {
+        transactionError: "InstructionError",
+        instruction: 0,
+        instructionError: "Custom",
+        custom: null,
+      },
     ],
-    ["-1e999", "-1e999"],
-    ["[1e400, 2]", ["1e400", 2]],
-    ['{"__proto__":{"x":1e999}}', JSON.parse('{"__proto__":{"x":"1e999"}}')],
+    ["-1e999", none],
+    ["[1e400, 2]", none],
+    ['{"__proto__":{"x":1e999}}', none],
   ] as const) {
     it(`keeps ${err} as data that survives JSON`, async () => {
       const result = await preflightTransaction(

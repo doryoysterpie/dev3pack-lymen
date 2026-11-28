@@ -154,7 +154,9 @@ const tokenRecording = (after: RecordedAccount | null): Recording => ({
   },
 });
 
-describe("M1: a token sweep shows a drain pattern", () => {
+// Ruling 20a removed the simulated token-sweep clause, so a token payment
+// shows a drain pattern only when its decoded instruction hands over control.
+describe("M1: a token payment, decoded, shows no drain pattern", () => {
   it("a payment that leaves a tenth of the tokens shows none", async () => {
     const transaction = build([
       spl.createTransferCheckedInstruction(
@@ -271,7 +273,9 @@ describe("m9, m10, m11: a simulation that did not run is not a clean run", () =>
     assert.ok(result.kind === "ready");
     assert.deepEqual(result.simulation, {
       status: "not-run",
-      reason: "the RPC endpoint did not answer within 0.05 seconds",
+      // The first answer is the genesis hash's (the audit of 6c4e64e, Major 9).
+      reason:
+        "limen could not confirm devnet: the RPC endpoint did not answer within 0.05 seconds",
     });
     assert.deepEqual(result.blocks, ["simulation-not-run"]);
   });

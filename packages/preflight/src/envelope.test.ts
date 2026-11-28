@@ -1,5 +1,7 @@
 // The owner's audit of 21e1f9f, item 6: the JSON-RPC envelope is checked as
-// the answer wrote it.
+// the answer wrote it. Each answer here is the genesis hash's, the first one
+// asked, so a refusal leaves devnet unconfirmed (the audit of 6c4e64e, Major
+// 9).
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -46,13 +48,13 @@ describe("the audit of 21e1f9f, item 6: the JSON-RPC envelope", () => {
         (id) =>
           `{"jsonrpc":"2.0","id":${id}.0000000000000001,"result":${HASH}}`,
       ),
-      "getGenesisHash: the answer is for another request",
+      "limen could not confirm devnet: getGenesisHash: the answer is for another request",
     );
     assert.equal(
       await reasonFor(
         (id) => `{"jsonrpc":"2.0","id":${id}e0,"result":${HASH}}`,
       ),
-      "getGenesisHash: the answer is for another request",
+      "limen could not confirm devnet: getGenesisHash: the answer is for another request",
     );
   });
 
@@ -62,12 +64,12 @@ describe("the audit of 21e1f9f, item 6: the JSON-RPC envelope", () => {
         await reasonFor(
           (id) => `{"jsonrpc":${version},"id":${id},"result":${HASH}}`,
         ),
-        "getGenesisHash: not a JSON-RPC 2.0 answer",
+        "limen could not confirm devnet: getGenesisHash: not a JSON-RPC 2.0 answer",
       );
     }
     assert.equal(
       await reasonFor((id) => `{"id":${id},"result":${HASH}}`),
-      "getGenesisHash: not a JSON-RPC 2.0 answer",
+      "limen could not confirm devnet: getGenesisHash: not a JSON-RPC 2.0 answer",
     );
   });
 
@@ -77,14 +79,14 @@ describe("the audit of 21e1f9f, item 6: the JSON-RPC envelope", () => {
         (id) =>
           `{"jsonrpc":"2.0","id":${id},"result":${HASH},"error":{"code":1,"message":"x"}}`,
       ),
-      "getGenesisHash: an answer with both a result and an error",
+      "limen could not confirm devnet: getGenesisHash: an answer with both a result and an error",
     );
     for (const error of ['"busy"', "7", "null", "[]"]) {
       assert.equal(
         await reasonFor(
           (id) => `{"jsonrpc":"2.0","id":${id},"error":${error}}`,
         ),
-        "getGenesisHash: an error that is not an object",
+        "limen could not confirm devnet: getGenesisHash: an error that is not an object",
       );
     }
   });

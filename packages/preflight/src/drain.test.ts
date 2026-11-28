@@ -2,14 +2,17 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
+import * as spl from "@solana/spl-token";
 import * as web3 from "@solana/web3.js";
 
 import { decodePublicKey } from "./base58.ts";
 import { decodeBase64, encodeBase64 } from "./base64.ts";
 import { drainPattern } from "./drain.ts";
-import { preflightTransaction, type PreflightReport } from "./preflight.ts";
+import { preflight, preflightTransaction, toReport } from "./preflight.ts";
 import { SYSTEM_PROGRAM, TOKEN_PROGRAM } from "./programs.ts";
+import { legacy } from "../test-support/build.ts";
 import {
+  endpointFor,
   recordedEndpoint,
   type RecordedAccount,
   type Recording,
@@ -338,120 +341,129 @@ describe("drainPattern through the simulation, for an instruction limen cannot d
   }
 });
 
-describe("drainPattern on decoded effects", () => {
-  const OTHER = ATTACKER;
-  const report = (effects: unknown[]): PreflightReport =>
-    ({
-      kind: "ready",
-      feePayerSet: false,
-      summary: {
-        effects,
-        others: [],
-        undecoded: [],
-        signers: { feePayer: "user", others: [], unsigned: true },
-        unresolvedAccounts: 0,
-      },
-      simulation: { status: "not-run", reason: "offline" },
-      blocks: [],
-    }) as PreflightReport;
-  const base = { instruction: 0, program: "token" as const };
-  const cases: ReadonlyArray<readonly [string, unknown, boolean]> = [
+describe("drainPattern on decoded instructions", () => {
+  // Each case a real transaction, pre-flighted offline, so the drain
+  // pattern reads the verdict effect.ts gives the decoded instruction (the
+  // owner's audit of 6c4e64e, Majors 6 and 7).
+  const user = new web3.PublicKey(USER);
+  const account = new web3.PublicKey(TOKEN_ACCOUNT);
+  const other = new web3.PublicKey(ATTACKER);
+  const mint = new web3.PublicKey(MINT);
+  const SPL = spl.TOKEN_PROGRAM_ID;
+  const offline = endpointFor(async () => {
+    throw new Error("offline");
+  }, "x");
+  const drains = async (base64: string) => {
+    const result = await preflight(offline, base64, USER);
+    assert.equal(result.kind, "ready");
+    return drainPattern(toReport(result));
+  };
+  const one = (instruction: web3.TransactionInstruction) =>
+    legacy(USER, [instruction], MINT);
+  const cases: ReadonlyArray<readonly [string, string, boolean]> = [
     [
       "owner moved to another address",
-      {
-        ...base,
-        kind: "authority-changed",
-        account: { address: TOKEN_ACCOUNT },
-        authorityType: "AccountOwner",
-        newAuthority: OTHER,
-      },
+      one(
+        spl.createSetAuthorityInstruction(
+          account,
+          user,
+          spl.AuthorityType.AccountOwner,
+          other,
+          [],
+          SPL,
+        ),
+      ),
       true,
     ],
     [
       "close authority moved to the wallet itself",
-      {
-        ...base,
-        kind: "authority-changed",
-        account: { address: TOKEN_ACCOUNT },
-        authorityType: "CloseAccount",
-        newAuthority: "user",
-      },
+      one(
+        spl.createSetAuthorityInstruction(
+          account,
+          user,
+          spl.AuthorityType.CloseAccount,
+          user,
+          [],
+          SPL,
+        ),
+      ),
       false,
     ],
     [
       "an authority removed",
-      {
-        ...base,
-        kind: "authority-changed",
-        account: { address: MINT },
-        authorityType: "FreezeAccount",
-        newAuthority: null,
-      },
+      one(
+        spl.createSetAuthorityInstruction(
+          mint,
+          user,
+          spl.AuthorityType.FreezeAccount,
+          null,
+          [],
+          SPL,
+        ),
+      ),
       false,
     ],
     [
       "account closed to another address",
-      {
-        ...base,
-        kind: "account-closed",
-        account: { address: TOKEN_ACCOUNT },
-        destination: { address: OTHER },
-      },
+      one(spl.createCloseAccountInstruction(account, other, user, [], SPL)),
       true,
     ],
     [
       "account closed to the wallet",
-      {
-        ...base,
-        kind: "account-closed",
-        account: { address: TOKEN_ACCOUNT },
-        destination: { address: "user" },
-      },
+      one(spl.createCloseAccountInstruction(account, user, user, [], SPL)),
       false,
     ],
     [
-      "account closed to an unloaded lookup address",
-      {
-        ...base,
-        kind: "account-closed",
-        account: { address: TOKEN_ACCOUNT },
-        destination: { table: MINT, index: 0 },
-      },
-      true,
-    ],
-    [
       "wallet assigned to a program",
-      { instruction: 0, kind: "owner-assigned", newOwner: OTHER },
+      one(web3.SystemProgram.assign({ accountPubkey: user, programId: other })),
       true,
     ],
     [
       "a delegate approved",
-      {
-        ...base,
-        kind: "delegate-approved",
-        account: { address: TOKEN_ACCOUNT },
-        delegate: { address: OTHER },
-        mint: null,
-        amount: "1",
-        decimals: null,
-      },
+      one(spl.createApproveInstruction(account, other, user, 1, [], SPL)),
       true,
     ],
     [
       "a plain SOL payment",
-      {
-        instruction: 0,
-        kind: "sol-out",
-        to: { address: OTHER },
-        lamports: "1000",
-        reason: "transfer",
-      },
+      one(
+        web3.SystemProgram.transfer({
+          fromPubkey: user,
+          toPubkey: other,
+          lamports: 1000,
+        }),
+      ),
       false,
     ],
   ];
-  for (const [name, effect, owed] of cases) {
-    it(`${name}: ${owed}`, () => {
-      assert.equal(drainPattern(report([effect])), owed);
+  for (const [name, base64, owed] of cases) {
+    it(`${name}: ${owed}`, async () => {
+      assert.equal(await drains(base64), owed);
     });
   }
+
+  it("account closed to an address in a lookup table limen could not read: true", async () => {
+    const table = new web3.AddressLookupTableAccount({
+      key: web3.PublicKey.unique(),
+      state: {
+        deactivationSlot: BigInt("18446744073709551615"),
+        lastExtendedSlot: 0,
+        lastExtendedSlotStartIndex: 0,
+        addresses: [other],
+      },
+    });
+    const message = new web3.TransactionMessage({
+      payerKey: user,
+      recentBlockhash: MINT,
+      instructions: [
+        spl.createCloseAccountInstruction(account, other, user, [], SPL),
+      ],
+    }).compileToV0Message([table]);
+    const base64 = Buffer.from(
+      new web3.VersionedTransaction(message).serialize(),
+    ).toString("base64");
+    const result = await preflight(offline, base64, USER);
+    assert.ok(result.kind === "ready");
+    assert.equal(result.summary.unresolvedAccounts, 1);
+    assert.equal(drainPattern(toReport(result)), true);
+  });
 });

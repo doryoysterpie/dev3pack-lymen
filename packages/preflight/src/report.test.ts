@@ -105,7 +105,7 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
     });
   }
 
-  it("scrubs addresses from the RPC's error text and from the runtime error", async () => {
+  it("shows no text from the RPC's error, nor from the runtime error", async () => {
     const c = fixture.cases.find((entry) => entry.name.startsWith("drainer:"));
     assert.ok(c !== undefined);
     const answering =
@@ -145,8 +145,10 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
     assert.deepEqual(limited.summary.simulation, {
       status: "not-run",
       // limen reads no account (ruling 20a), so the first call after the
-      // devnet check is the simulation.
-      reason: "simulateTransaction: account an address is rate limited",
+      // devnet check is the simulation. Only the error's code is shown (the
+      // audit of 6c4e64e, Major 5, swept to the RPC's own errors).
+      reason:
+        "simulateTransaction: the endpoint answered with JSON-RPC error -32005",
     });
 
     const failed = await preflightTransaction(decodeBase64(c.transaction)!, {
@@ -161,8 +163,13 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
     });
     assert.ok(failed.summary.kind === "ready");
     assert.ok(failed.summary.simulation.status === "ran");
+    // Not agave's form, so no detail is shown (failure.ts; the audit of
+    // 6c4e64e, Major 5): the runtime error carries only agave's names.
     assert.deepEqual(failed.summary.simulation.err, {
-      Custom: "insufficient funds in an address",
+      transactionError: null,
+      instruction: null,
+      instructionError: null,
+      custom: null,
     });
     assert.equal(JSON.stringify(failed).includes(fixture.user), false);
   });

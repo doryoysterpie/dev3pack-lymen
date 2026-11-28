@@ -9,7 +9,7 @@
 import type { ParsedMessage } from "./wire.ts";
 
 export interface Account {
-  /** null when the address sits in a lookup table that was not loaded. */
+  /** null when the address sits in a lookup table not among the tables given. */
   readonly address: string | null;
   readonly signer: boolean;
   readonly writable: boolean;

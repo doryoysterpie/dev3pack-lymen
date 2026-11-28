@@ -45,10 +45,10 @@ export interface Recording {
     /** The blockhash the simulation used in place of the transaction's own. */
     readonly replacementBlockhash?: string;
     /**
-     * Leaves out preBalances, postBalances and the token balances, which the
-     * recording otherwise derives: before from accounts, after from these
-     * accounts where they name an address, for every account the
-     * transaction lists.
+     * Leaves out preBalances, postBalances and the token balance lists.
+     * Otherwise the recording derives the balances for every account the
+     * transaction lists, before from accounts and after from these accounts
+     * where they name an address, and gives both token balance lists empty.
      */
     readonly omitBalances?: boolean;
   };

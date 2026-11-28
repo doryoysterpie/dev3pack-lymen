@@ -4,11 +4,15 @@
 import {
   drainPattern,
   handsOverControl,
+  PROGRAM_NAME,
+  REFUSAL_WHY,
   toReport,
   type BalanceChange,
   type Effect,
+  type InstructionVerdict,
   type Place,
   type Preflight,
+  type RunError,
   type SignBlock,
   type SimulationOutcome,
   type TransactionSummary,
@@ -37,30 +41,32 @@ const sol = (lamports: string) => `${withDecimals(lamports, 9)} SOL`;
 const shown = (address: string): string =>
   address === USER_MARKER ? "your wallet" : address;
 
+// The pre-flight resolves a lookup table's addresses only with a
+// simulation result it uses (the audit of 6c4e64e, Major 2), so an address
+// it leaves unresolved may come from a table it read; the card says only
+// that it does not show it.
 const unread = (place: { table: string; index: number }): string =>
-  `address in lookup table ${place.table} (index ${place.index}) that limen could not read`;
+  `address in lookup table ${place.table} (index ${place.index}) that limen does not show`;
 
 function where(place: Place): string {
   return "address" in place ? shown(place.address) : `an ${unread(place)}`;
 }
 
-/** Whether two places are the same account, as far as the card can tell. */
-function samePlace(a: Place, b: Place): boolean {
-  if ("address" in a && "address" in b) return a.address === b.address;
-  if ("table" in a && "table" in b) {
-    return a.table === b.table && a.index === b.index;
-  }
-  return false;
-}
+const capitalized = (text: string): string =>
+  `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 
-const programName = (program: "token" | "token-2022"): string =>
-  program === "token" ? "the Token program" : "Token-2022";
-
+/**
+ * A token amount as the instruction carries it: base units, and the
+ * decimals a checked instruction states, which the program checks against
+ * the mint. No token quantity is worked out from them: a mint's extensions,
+ * such as an interest-bearing or scaled UI amount, can show another one
+ * (the audit of 6c4e64e, Major 8; solana-program/token-2022 efe55b4,
+ * program/src/processor.rs:1605 to :1617).
+ */
 function tokenAmount(amount: string, decimals: number | null): string {
-  if (amount === U64_MAX) return "the largest possible amount";
   return decimals === null
     ? `${amount} base units`
-    : withDecimals(amount, decimals);
+    : `${amount} base units (the instruction expects a mint with ${decimals} decimals)`;
 }
 
 // What each authority type is called; a Token-2022 extension's authority
@@ -75,11 +81,17 @@ const AUTHORITY: Readonly<Record<string, string>> = {
 /**
  * One row per decoded effect, each starting "Asks": an instruction alone
  * cannot show that it is accepted or what it changes, so a row states an
- * outcome only where the program refuses the request whatever the accounts
- * hold. limen reads no account (ruling 20a), so no token account is called
- * the wallet's.
+ * outcome only where its verdict (effect.ts, the one the drain pattern and
+ * the signing gate read) is that the program refuses it whatever the
+ * accounts hold, or that it moves nothing if accepted. limen reads no
+ * account (ruling 20a), so no token account is called the wallet's.
  */
-function effectRow(effect: Effect): CardRow {
+function effectRow(
+  effect: Effect,
+  verdict: InstructionVerdict | undefined,
+): CardRow {
+  if (verdict?.verdict === "refused") return refusedRow(effect, verdict);
+  const moves = verdict?.verdict !== "no-effect";
   switch (effect.kind) {
     case "sol-out":
       return effect.reason === "create-account"
@@ -88,11 +100,12 @@ function effectRow(effect: Effect): CardRow {
             value: `Asks your wallet to pay ${sol(effect.lamports)} into new account ${where(effect.to)}.`,
           }
         : {
-            label: "Sends SOL",
+            // A transfer to the account it comes from moves nothing.
+            label: moves ? "Sends SOL" : "Sends SOL to the same account",
             value:
               effect.reason === "derived-account"
-                ? `Asks to send ${sol(effect.lamports)} from an account derived from your wallet to ${where(effect.to)}.`
-                : `Asks to send ${sol(effect.lamports)} from your wallet to ${where(effect.to)}.`,
+                ? `Asks to send ${sol(effect.lamports)} from an account derived from your wallet to ${moves ? where(effect.to) : "that same account"}${moves ? "." : ", which moves no SOL if accepted."}`
+                : `Asks to send ${sol(effect.lamports)} from your wallet to ${where(effect.to)}${moves ? "." : ", which moves no SOL if accepted."}`,
           };
     case "owner-assigned":
       // The summary writes the wallet's own address as "user"; naming it as a
@@ -124,7 +137,7 @@ function effectRow(effect: Effect): CardRow {
       // A transfer to the account it comes from returns before any amount
       // moves (solana-program/token 38de8d1, program/src/processor.rs:270 to
       // :311), if its checks pass, which the instruction does not show.
-      if (samePlace(effect.source, effect.destination)) {
+      if (!moves) {
         return {
           label: "Transfers to the same account",
           value: `Asks to transfer ${tokenAmount(effect.amount, effect.decimals)} from token account ${where(effect.source)} to itself, which moves no tokens if accepted.`,
@@ -158,18 +171,6 @@ function effectRow(effect: Effect): CardRow {
         value: `Asks to remove any delegate from token account ${where(effect.account)}. Your wallet signs as the authority the instruction names.`,
       };
     case "authority-changed": {
-      // A token account always has an owner: both programs refuse to remove
-      // it (solana-program/token 38de8d1, program/src/processor.rs:449 to
-      // 453; token-2022 efe55b4, :786 to :794).
-      if (
-        effect.authorityType === "AccountOwner" &&
-        effect.newAuthority === null
-      ) {
-        return {
-          label: "Refused by the token program",
-          value: `Asks to remove the owner of token account ${where(effect.account)}, which ${programName(effect.program)} refuses, so the transaction would fail.`,
-        };
-      }
       const what =
         AUTHORITY[effect.authorityType] ?? `${effect.authorityType} authority`;
       return {
@@ -181,15 +182,6 @@ function effectRow(effect: Effect): CardRow {
       };
     }
     case "account-closed":
-      // Both programs refuse to close an account into itself
-      // (solana-program/token 38de8d1, program/src/processor.rs:677 to 679;
-      // token-2022 efe55b4, :1351).
-      if (samePlace(effect.account, effect.destination)) {
-        return {
-          label: "Refused by the token program",
-          value: `Asks to close token account ${where(effect.account)} and send its SOL to that same account, which ${programName(effect.program)} refuses, so the transaction would fail.`,
-        };
-      }
       return {
         label: "Closes a token account",
         value: `Asks to close ${where(effect.account)} and send its SOL to ${where(effect.destination)}.`,
@@ -219,6 +211,45 @@ function effectRow(effect: Effect): CardRow {
   }
 }
 
+/**
+ * The row for an effect whose program refuses it whatever the accounts
+ * hold (effect.ts): it says what the instruction asks, which program
+ * refuses it and why, and that the transaction would fail.
+ */
+function refusedRow(
+  effect: Effect,
+  verdict: Extract<InstructionVerdict, { verdict: "refused" }>,
+): CardRow {
+  const program = PROGRAM_NAME[verdict.program];
+  const label =
+    verdict.program === "associated-token"
+      ? "Refused by the associated token account program"
+      : "Refused by the token program";
+  // The two refusals the owner's audits named keep their own sentence.
+  if (
+    verdict.refusal === "owner-removed" &&
+    effect.kind === "authority-changed"
+  ) {
+    return {
+      label,
+      value: `Asks to remove the owner of token account ${where(effect.account)}, which ${program} refuses, so the transaction would fail.`,
+    };
+  }
+  if (
+    verdict.refusal === "closed-into-itself" &&
+    effect.kind === "account-closed"
+  ) {
+    return {
+      label,
+      value: `Asks to close token account ${where(effect.account)} and send its SOL to that same account, which ${program} refuses, so the transaction would fail.`,
+    };
+  }
+  return {
+    label,
+    value: `${effectRow(effect, undefined).value} ${capitalized(program)} refuses ${REFUSAL_WHY[verdict.refusal]}, so the transaction would fail.`,
+  };
+}
+
 // One sentence per undecoded reason, after "Instruction N calls <program>".
 const UNDECODED: Readonly<Record<UndecodedReason, string>> = {
   "unknown-program": ", a program limen does not decode.",
@@ -229,8 +260,14 @@ const UNDECODED: Readonly<Record<UndecodedReason, string>> = {
   "missing-accounts": " with fewer accounts than the instruction needs.",
 };
 
-// The summary keeps each instruction the wallet does not authorize as its index
-// and kind only, so the card names the kind and shows no text from it.
+// A multisig the wallet signs for is still an authority that is not the
+// wallet (summary.ts, authorizedByUser).
+const MULTISIG =
+  " Your wallet's signature may still count toward it, for example as one signer of a multisig.";
+
+// The summary keeps each instruction that names the wallet neither as its
+// payer nor as its authority as its index and kind only, so the card names
+// the kind and shows no text from it.
 function otherText(kind: TransactionSummary["others"][number]["kind"]): string {
   switch (kind) {
     case "compute-budget":
@@ -241,12 +278,52 @@ function otherText(kind: TransactionSummary["others"][number]["kind"]): string {
       return "A token program instruction whose details are not shown.";
     case "advance-nonce":
       return "Asks to advance a durable nonce.";
-    default:
-      // The summary keeps an instruction here when it names the wallet
-      // neither as its payer nor as its authority; a multisig the wallet
-      // signs for is still such an authority (summary.ts, authorizedByUser).
-      return "An instruction that does not name your wallet as its payer or authority. Your wallet's signature may still count toward it, for example as one signer of a multisig.";
+    case "sol-transfer":
+      return "A SOL transfer that does not name your wallet as its sender.";
+    case "sol-transfer-with-seed":
+      return "A SOL transfer from an account derived from another address than your wallet.";
+    case "create-account":
+      return "An account creation that does not name your wallet as its payer.";
+    case "assign":
+      return "An owner change for an account other than your wallet account.";
+    case "create-token-account":
+      return "A token account creation that does not name your wallet as its payer.";
+    case "token-transfer":
+      return `A token transfer that does not name your wallet as its authority.${MULTISIG}`;
+    case "token-approve":
+      return `A delegate approval that does not name your wallet as its authority.${MULTISIG}`;
+    case "token-revoke":
+      return `A delegate removal that does not name your wallet as its authority.${MULTISIG}`;
+    case "token-set-authority":
+      return `An authority change that does not name your wallet as its authority.${MULTISIG}`;
+    case "token-close-account":
+      return `A token account close that does not name your wallet as its authority.${MULTISIG}`;
+    case "token-burn":
+      return `A token burn that does not name your wallet as its authority.${MULTISIG}`;
+    case "token-mint-to":
+      return `A mint that does not name your wallet as its mint authority.${MULTISIG}`;
   }
+}
+
+/** A failed run's error, as far as limen shows it exactly (failure.ts). */
+function failureText(err: RunError): string {
+  if (err.transactionError === null)
+    return "Failed on devnet (detail not shown).";
+  if (err.transactionError !== "InstructionError") {
+    return `Failed on devnet: ${err.transactionError}.`;
+  }
+  if (err.instruction === null) {
+    return "Failed on devnet: InstructionError (detail not shown).";
+  }
+  // Instructions are numbered from 1 on the card, as in its other rows.
+  const at = `Failed on devnet: InstructionError in instruction ${err.instruction + 1}`;
+  if (err.instructionError === null) return `${at} (detail not shown).`;
+  if (err.instructionError === "Custom") {
+    return err.custom === null
+      ? `${at}: Custom (detail not shown).`
+      : `${at}: Custom ${err.custom}.`;
+  }
+  return `${at}: ${err.instructionError}.`;
 }
 
 // The one simulated change a card shows (ruling 20a): the wallet's SOL
@@ -318,11 +395,13 @@ export function transactionCardText(
   const from: CardRow = { label: "Requested from", value: linkHost(link) };
 
   if (result.kind === "not-devnet") {
+    // Only another well-formed genesis hash stops here; one limen could not
+    // read leaves devnet unconfirmed instead (the audit of 6c4e64e, Major 9).
     return {
       title: "Stopped: not devnet",
       tone: "flagged",
       status:
-        "The RPC endpoint is not Solana devnet, so limen stops here. limen runs on devnet only.",
+        "The RPC endpoint's genesis hash is another cluster's, not Solana devnet's, so limen stops here. limen runs on devnet only.",
       rows: [from],
     };
   }
@@ -336,11 +415,13 @@ export function transactionCardText(
     };
   }
   if (result.kind === "user-not-given") {
+    // limen was given no wallet address, or one that is not a public key;
+    // it cannot tell that no wallet is connected.
     return {
-      title: "Stopped: no wallet",
+      title: "Stopped: no readable wallet address",
       tone: "flagged",
       status:
-        "limen holds this transaction: no wallet is connected, and limen pre-flights a transaction only for the wallet that pays its fee.",
+        "limen holds this transaction: it was given no wallet address it can read, and limen pre-flights a transaction only for the wallet that pays its fee.",
       rows: [from],
     };
   }
@@ -357,10 +438,13 @@ export function transactionCardText(
     };
   }
 
-  const { summary, simulation, blocks } = result;
+  const { summary, verdicts, simulation, blocks } = result;
   const fallback = summary.undecoded.length > 0;
-  // The card's flag is the drain pattern, the one definition (drain.ts).
-  const handsOver = summary.effects.some(handsOverControl);
+  // The card's flag is the drain pattern, the one definition (drain.ts),
+  // which reads each instruction's one verdict (effect.ts).
+  const handsOver = verdicts.some(handsOverControl);
+  const verdictOf = (instruction: number) =>
+    verdicts.find((verdict) => verdict.instruction === instruction);
   const drains = drainPattern(toReport(result));
   const failed = simulation.status === "ran" && simulation.err !== null;
   const lower = (text: string) =>
@@ -374,7 +458,11 @@ export function transactionCardText(
       quoted: true,
     });
   }
-  rows.push(...summary.effects.map((effect) => effectRow(effect)));
+  rows.push(
+    ...summary.effects.map((effect) =>
+      effectRow(effect, verdictOf(effect.instruction)),
+    ),
+  );
   for (const entry of summary.undecoded) {
     rows.push({
       label: "Not decoded",
@@ -382,9 +470,13 @@ export function transactionCardText(
     });
   }
   for (const other of summary.others) {
+    const verdict = verdictOf(other.instruction);
     rows.push({
       label: "Also in the transaction",
-      value: otherText(other.kind),
+      value:
+        verdict?.verdict === "refused"
+          ? `${otherText(other.kind)} It asks for what ${PROGRAM_NAME[verdict.program]} refuses (${REFUSAL_WHY[verdict.refusal]}), so the transaction would fail.`
+          : otherText(other.kind),
     });
   }
   if (summary.unresolvedAccounts > 0) {
@@ -392,8 +484,8 @@ export function transactionCardText(
       label: "Lookup tables",
       value:
         summary.unresolvedAccounts === 1
-          ? "1 address comes from a lookup table limen could not read."
-          : `${summary.unresolvedAccounts} addresses come from lookup tables limen could not read.`,
+          ? "1 address comes from a lookup table. limen shows an address from a lookup table only with a simulation result it uses, so this one is not shown."
+          : `${summary.unresolvedAccounts} addresses come from lookup tables. limen shows an address from a lookup table only with a simulation result it uses, so these are not shown.`,
     });
   }
 
@@ -408,7 +500,7 @@ export function transactionCardText(
       value:
         simulation.err === null
           ? "Ran on devnet without an error."
-          : `Failed on devnet: ${JSON.stringify(simulation.err)}. Signed now, the transaction would most likely fail the same way.`,
+          : `${failureText(simulation.err)} Signed now, the transaction would most likely fail the same way.`,
     });
     // A failed run's changes are not shown, as the status says.
     if (simulation.err === null) {

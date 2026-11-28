@@ -114,7 +114,7 @@ describe("re-audit 2, item 1: no RPC surface but the package's own client", () =
     assert.ok(refused.kind === "ready");
     assert.deepEqual(refused.simulation, {
       status: "not-run",
-      reason: "the answer's body is not text",
+      reason: "limen could not confirm devnet: the answer's body is not text",
     });
     assert.equal(methodsCalled, 0);
   });
@@ -151,7 +151,8 @@ describe("ruling 20a, item 8: a fetch's rejection is never read", () => {
     assert.ok(result.kind === "ready");
     assert.deepEqual(result.simulation, {
       status: "not-run",
-      reason: "getGenesisHash: the endpoint could not be reached",
+      reason:
+        "limen could not confirm devnet: getGenesisHash: the endpoint could not be reached",
     });
     assert.deepEqual(touched, []);
   });
@@ -169,7 +170,8 @@ describe("ruling 20a, item 8: a fetch's rejection is never read", () => {
     assert.ok(result.kind === "ready");
     assert.deepEqual(result.simulation, {
       status: "not-run",
-      reason: "the RPC endpoint did not answer within 0.02 seconds",
+      reason:
+        "limen could not confirm devnet: the RPC endpoint did not answer within 0.02 seconds",
     });
   });
 });

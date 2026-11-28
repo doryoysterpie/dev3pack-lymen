@@ -209,6 +209,9 @@ describe("audit 8: a malformed balance is refused, not thrown later", () => {
   // text, a sign, a fraction, a leading zero, past the largest u64, or a JSON
   // number past 2^53, where precision is already lost.
   const refusedAmounts: readonly unknown[] = [
+    // agave writes each balance as a JSON number (Vec<u64>, rpc-client-types
+    // /src/response.rs:467), so a string is not one (the audit of 6c4e64e).
+    "5",
     "unknown",
     "-1",
     "01",
@@ -253,10 +256,32 @@ describe("audit 8: a malformed balance is refused, not thrown later", () => {
     });
   }
 
-  it("jsonRpc keeps each whole simulated balance, as a decimal string", async () => {
-    const simulation = await simulateWith({
-      preBalances: [5_000_000_000, "18446744073709551615", 0],
+  it("jsonRpc keeps each whole simulated balance as the answer wrote it, digit for digit", async () => {
+    // The largest u64 written as a JSON number, which JSON.parse would round.
+    const fetch = endpoint({
+      accounts: () => [],
+      simulation: () => ({
+        err: null,
+        logs: [],
+        accounts: null,
+        preBalances: [5_000_000_000, 0, 0],
+        postBalances: [4_999_995_000, 0, 1],
+        preTokenBalances: [],
+        postTokenBalances: [],
+      }),
     });
+    const simulation = await jsonRpc(
+      endpointFor(async (url, init) => {
+        const answer = await fetch(url, init);
+        return {
+          ...answer,
+          text: answer.text.replace(
+            '"preBalances":[5000000000,0,0]',
+            '"preBalances":[5000000000,18446744073709551615,0]',
+          ),
+        };
+      }, "x"),
+    ).simulate(encodeBase64(build([transfer()])));
     assert.deepEqual(simulation.preBalances, [
       "5000000000",
       "18446744073709551615",
@@ -416,6 +441,13 @@ describe("fix check: a failed run claims no changes", () => {
   // (a64fa73, rpc/src/rpc.rs:3554 and :3555), which says nothing about what
   // the transaction would do.
   const failed = { InstructionError: [0, { Custom: 1 }] };
+  // As limen shows it (failure.ts; the audit of 6c4e64e, Major 5).
+  const shown = {
+    transactionError: "InstructionError",
+    instruction: 0,
+    instructionError: "Custom",
+    custom: 1,
+  };
   const tokenTransfer = () =>
     build([
       new web3.TransactionInstruction({
@@ -443,7 +475,7 @@ describe("fix check: a failed run claims no changes", () => {
     assert.ok(result.summary.kind === "ready");
     assert.deepEqual(result.summary.simulation, {
       status: "ran",
-      err: failed,
+      err: shown,
       changes: [],
     });
     assert.deepEqual(result.summary.blocks, ["simulation-failed"]);
@@ -494,7 +526,7 @@ describe("fix check: a failed run claims no changes", () => {
     assert.ok(result.summary.kind === "ready");
     assert.deepEqual(result.summary.simulation, {
       status: "ran",
-      err: failed,
+      err: shown,
       changes: [],
     });
     assert.deepEqual(result.summary.blocks, ["simulation-failed"]);
@@ -659,7 +691,12 @@ describe("hunt: the public interface refuses what it cannot use, and never throw
           postTokenBalances: [],
           ...(replacementBlockhash === undefined
             ? {}
-            : { replacementBlockhash: { blockhash: replacementBlockhash } }),
+            : {
+                replacementBlockhash: {
+                  blockhash: replacementBlockhash,
+                  lastValidBlockHeight: 0,
+                },
+              }),
         }),
       }),
       "x",
@@ -669,7 +706,9 @@ describe("hunt: the public interface refuses what it cannot use, and never throw
       address === USER ? system(5_000_000_000) : null,
     );
 
-  it("a replacement blockhash that is not a hash is not kept", async () => {
+  it("a replacement blockhash that is not a hash leaves the run unused", async () => {
+    // The audit of 6c4e64e, Major 4: a field limen reads is checked against
+    // agave's RpcBlockhash (rpc-client-types/src/response.rs:145 to :148).
     for (const replacementBlockhash of [5, "not a hash", {}]) {
       const result = await preflight(
         solRun(wallet, replacementBlockhash),
@@ -677,8 +716,11 @@ describe("hunt: the public interface refuses what it cannot use, and never throw
         USER,
       );
       assert.ok(result.kind === "ready");
-      assert.equal(result.simulation.status, "ran");
-      assert.deepEqual(result.simulatedAt, { slot: 2, blockhash: null });
+      assert.deepEqual(result.simulation, {
+        status: "not-run",
+        reason: "simulateTransaction: replacementBlockhash: blockhash",
+      });
+      assert.equal(result.simulatedAt, null);
     }
   });
 
@@ -709,7 +751,8 @@ describe("hunt: the public interface refuses what it cannot use, and never throw
         status: "not-run",
         // Ruling 20a, item 8: a rejection is never read, so its reason is
         // fixed.
-        reason: "getGenesisHash: the endpoint could not be reached",
+        reason:
+          "limen could not confirm devnet: getGenesisHash: the endpoint could not be reached",
       });
     }
   });
@@ -825,10 +868,9 @@ describe("audit 9: the report JSON and the blockhash", () => {
       slot: 7,
       blockhash: null,
     });
-    assert.deepEqual((await withHash("not a hash")).simulatedAt, {
-      slot: 7,
-      blockhash: null,
-    });
+    // A blockhash that is not one leaves the run unused (the audit of
+    // 6c4e64e, Major 4).
+    assert.equal((await withHash("not a hash")).simulatedAt, null);
     assert.deepEqual((await withHash(K.mint)).simulatedAt, {
       slot: 7,
       blockhash: K.mint,
@@ -855,6 +897,13 @@ describe("audit 9: the report JSON and the blockhash", () => {
 
 describe("ruling 20a, item 2: from a failed run limen uses nothing but its error", () => {
   const failed = { InstructionError: [0, { Custom: 1 }] };
+  // As limen shows it (failure.ts; the audit of 6c4e64e, Major 5).
+  const shown = {
+    transactionError: "InstructionError",
+    instruction: 0,
+    instructionError: "Custom",
+    custom: 1,
+  };
   const failedRun = (value: Json) =>
     endpointFor(
       endpoint({
@@ -889,7 +938,7 @@ describe("ruling 20a, item 2: from a failed run limen uses nothing but its error
       assert.ok(result.kind === "ready");
       assert.deepEqual(result.simulation, {
         status: "ran",
-        err: failed,
+        err: shown,
         changes: [],
       });
       assert.deepEqual(result.simulatedAt, { slot: 2, blockhash: null });
@@ -932,7 +981,7 @@ describe("ruling 20a, item 4: every answer comes from the endpoint, with status 
         await run(answered("https://rpc.example/", () => ({ status }))),
         {
           status: "not-run",
-          reason: `getGenesisHash: HTTP ${status}`,
+          reason: `limen could not confirm devnet: getGenesisHash: HTTP ${status}`,
         },
       );
     }
@@ -949,7 +998,8 @@ describe("ruling 20a, item 4: every answer comes from the endpoint, with status 
         await run(answered("https://rpc.example/", () => ({ url: other }))),
         {
           status: "not-run",
-          reason: "getGenesisHash: the answer came from another address",
+          reason:
+            "limen could not confirm devnet: getGenesisHash: the answer came from another address",
         },
       );
     }
@@ -979,7 +1029,8 @@ describe("ruling 20a, item 4: every answer comes from the endpoint, with status 
       ),
       {
         status: "not-run",
-        reason: "getGenesisHash: the answer came from another address",
+        reason:
+          "limen could not confirm devnet: getGenesisHash: the answer came from another address",
       },
     );
   });
