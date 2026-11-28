@@ -79,26 +79,17 @@ export function withMarker<T>(value: T, user: string): T {
 }
 
 /**
- * Replaces every address (a base58 run that decodes to 32 bytes) in every
- * string of a plain JSON value, keys included, with SCRUBBED. For text the
- * RPC wrote, which could name any account.
+ * Replaces every base58 run of 32 or more characters in every string of a
+ * plain JSON value, keys included, with SCRUBBED, unless it is one of the
+ * programs a report may carry. For text the RPC wrote, which could name any
+ * account, alone or inside longer text (the audit of 21e1f9f, item 2): no
+ * run that long is kept, whether or not it decodes to 32 bytes.
  */
 export function scrubAddresses<T>(value: T): T {
   return mapStrings(value, (text) =>
     text.replace(BASE58_RUN, (run) =>
-      run.length >= 32 && decodePublicKey(run) !== null ? SCRUBBED : run,
+      run.length >= 32 && !REPORT_PROGRAMS.has(run) ? SCRUBBED : run,
     ),
-  );
-}
-
-/**
- * Replaces each of the given addresses wherever it occurs in every string of
- * a plain JSON value, keys included, inside a longer run too, with SCRUBBED.
- * For text the RPC wrote, with the wallet's address and its token accounts'.
- */
-export function scrubWithin<T>(value: T, addresses: readonly string[]): T {
-  return mapStrings(value, (text) =>
-    addresses.reduce((out, address) => out.split(address).join(SCRUBBED), text),
   );
 }
 

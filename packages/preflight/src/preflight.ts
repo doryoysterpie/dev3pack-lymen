@@ -31,12 +31,7 @@ import { decodePublicKey } from "./base58.ts";
 import { decodeBase64, encodeBase64 } from "./base64.ts";
 import { drainPattern } from "./drain.ts";
 import { readUnsetFeePayer, withFeePayer } from "./fee-payer.ts";
-import {
-  scrubAddresses,
-  scrubWithin,
-  USER_MARKER,
-  withRoleMarkers,
-} from "./marker.ts";
+import { scrubAddresses, USER_MARKER, withRoleMarkers } from "./marker.ts";
 import { ADDRESS_LOOKUP_TABLE_PROGRAM } from "./programs.ts";
 import {
   assertDevnet,
@@ -347,17 +342,6 @@ export async function preflight(
   const accountKeys = messageAccounts(transaction.message, tables).map(
     (account) => account.address,
   );
-  // The RPC's text can hold an address inside a longer run, which the scrub
-  // of whole runs leaves; every address the message names, its lookup
-  // tables included, is removed wherever it occurs.
-  const named = [
-    ...accountKeys.filter((address): address is string => address !== null),
-    ...transaction.message.lookups.map((lookup) => lookup.table),
-  ];
-  simulation =
-    simulation.status === "ran"
-      ? { ...simulation, err: scrubWithin(simulation.err, named) }
-      : { ...simulation, reason: scrubWithin(simulation.reason, named) };
   return {
     kind: "ready",
     base64,
