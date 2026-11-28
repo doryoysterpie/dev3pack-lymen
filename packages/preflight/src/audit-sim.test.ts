@@ -518,6 +518,61 @@ describe("audit 12: more writable accounts than limen watches", () => {
     assert.equal(result.summary.simulation.status, "not-run");
     assert.ok(result.summary.blocks.includes("simulation-not-run"));
   });
+
+  it("does not use the simulation when a writable account sits behind a lookup table limen could not read", async () => {
+    // The wallet's token account is written through a lookup table that the
+    // RPC does not return, so its address is unknown and it cannot be
+    // watched; the run sweeps it.
+    const table = new web3.AddressLookupTableAccount({
+      key: web3.PublicKey.unique(),
+      state: {
+        deactivationSlot: BigInt("18446744073709551615"),
+        lastExtendedSlot: 0,
+        lastExtendedSlotStartIndex: 0,
+        addresses: [tokenAccount],
+      },
+    });
+    const sweep = new web3.TransactionInstruction({
+      programId: key(K.unknownProgram),
+      keys: [
+        { pubkey: user, isSigner: true, isWritable: true },
+        { pubkey: tokenAccount, isSigner: false, isWritable: true },
+      ],
+      data: Buffer.from([1]),
+    });
+    const message = new web3.TransactionMessage({
+      payerKey: user,
+      recentBlockhash: K.mint,
+      instructions: [sweep],
+    }).compileToV0Message([table]);
+    assert.equal(message.addressTableLookups.length, 1);
+    const result = await preflightTransaction(
+      new web3.VersionedTransaction(message, [new Uint8Array(64)]).serialize(),
+      {
+        rpc: recordedRpc({
+          accounts: {
+            [USER]: system(5_000_000_000) as never,
+            [K.userTokenAccount]: tokenState(200, null) as never,
+          },
+          simulation: {
+            err: null,
+            accounts: {
+              [USER]: system(4_999_995_000) as never,
+              [K.userTokenAccount]: tokenState(0, null) as never,
+            },
+          },
+        }),
+        user: USER,
+      },
+    );
+    assert.ok(result.summary.kind === "ready");
+    assert.deepEqual(result.summary.simulation, {
+      status: "not-run",
+      reason:
+        "a writable account comes from a lookup table limen could not read",
+    });
+    assert.deepEqual(result.summary.blocks, ["simulation-not-run"]);
+  });
 });
 
 describe("audit 6: the rest of the same-run evidence", () => {
