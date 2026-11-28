@@ -13,6 +13,7 @@ import recipientListsJson from "./src/pay/recipient-lists.json";
 import { classifyQr } from "./src/qr/classify.ts";
 import { resultCard } from "./src/result-card.ts";
 import { CardView } from "./src/ui/CardView.tsx";
+import { LogoHeader } from "./src/ui/LogoHeader.tsx";
 import { TransactionRequestView } from "./src/ui/TransactionRequestView.tsx";
 
 // Devnet fixture lists, loaded once; a list entry that is not a public key
@@ -73,31 +74,35 @@ export default function App() {
 
   if (scan !== null) {
     return (
-      <ScrollView contentContainerStyle={styles.card}>
-        {scan.link === null ? (
-          <CardView card={scan.card} />
-        ) : (
-          <TransactionRequestView link={scan.link} intro={scan.card} />
-        )}
-        <Text style={styles.label}>Scanned text</Text>
-        <Text style={styles.raw} selectable>
-          {scan.text}
-        </Text>
-        <Button title="Scan another QR" onPress={() => setScan(null)} />
-        <StatusBar style="dark" />
-      </ScrollView>
+      <View style={styles.fill}>
+        <LogoHeader />
+        <ScrollView contentContainerStyle={styles.card}>
+          {scan.link === null ? (
+            <CardView card={scan.card} />
+          ) : (
+            <TransactionRequestView link={scan.link} intro={scan.card} />
+          )}
+          <Text style={styles.label}>Scanned text</Text>
+          <Text style={styles.raw} selectable>
+            {scan.text}
+          </Text>
+          <Button title="Scan another QR" onPress={() => setScan(null)} />
+          <StatusBar style="dark" />
+        </ScrollView>
+      </View>
     );
   }
 
   return (
     <View style={styles.fill}>
+      <LogoHeader />
       <CameraView
         style={styles.fill}
         facing="back"
         barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
         onBarcodeScanned={onBarcodeScanned}
       />
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
     </View>
   );
 }
@@ -111,7 +116,7 @@ const styles = StyleSheet.create({
     gap: 16,
     padding: 24,
   },
-  card: { gap: 12, padding: 24, paddingTop: 64 },
+  card: { gap: 12, padding: 24 },
   body: { fontSize: 16, lineHeight: 22 },
   label: { fontSize: 13, fontWeight: "600", marginTop: 12 },
   raw: { fontFamily: "monospace", fontSize: 13 },

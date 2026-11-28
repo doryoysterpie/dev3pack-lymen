@@ -1,0 +1,115 @@
+:root {
+  color-scheme: light dark;
+  --ink: #1d1f21;
+  --paper: #fbfbf8;
+  --muted: #5c6066;
+  --line: #d6d6d0;
+  --held: #8a5a00;
+  --escalated: #a3261b;
+  --dismissed: #4d5560;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e6e6e1;
+    --paper: #17181a;
+    --muted: #a2a6ab;
+    --line: #3a3c40;
+    --held: #e0a63c;
+    --escalated: #ff8a7a;
+    --dismissed: #a9b1bb;
+  }
+}
+
+body {
+  margin: 0 auto;
+  max-width: 72rem;
+  padding: 1rem;
+  font:
+    16px/1.5 system-ui,
+    sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+/* The logo (E-19) is a black wordmark. Its descender is a fifth of its height, so it sits that
+   far below the line; in the dark scheme it is inverted to read on the dark page. */
+.logo {
+  height: 1.1em;
+  vertical-align: -0.2em;
+}
+
+@media (prefers-color-scheme: dark) {
+  .logo {
+    filter: invert(1);
+  }
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+
+th,
+td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+}
+
+dt {
+  color: var(--muted);
+}
+
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-family: ui-monospace, monospace;
+  font-size: 0.9rem;
+}
+
+li {
+  border-top: 1px solid var(--line);
+  padding: 0.5rem 0;
+}
+
+.note {
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+button.link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.status-held {
+  color: var(--held);
+}
+
+.status-escalated {
+  color: var(--escalated);
+}
+
+.status-dismissed {
+  color: var(--dismissed);
+}

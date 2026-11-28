@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en-CA">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>limen triage</title>
+    <link rel="stylesheet" href="/dashboard.css" />
+    <script src="/dashboard.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <h1><img class="logo" src="/limen-logo.svg" alt="limen" /> triage</h1>
+      <p>
+        Reported QRs, grouped into cases. A case escalates on its own only when
+        the D-05 threshold is met; everything else holds for a human.
+      </p>
+    </header>
+
+    <section id="token-section">
+      <form id="token-form">
+        <label for="token">Triage token</label>
+        <input id="token" type="password" autocomplete="off" required />
+        <button type="submit">Use token</button>
+      </form>
+      <p class="note">The token stays in this browser tab only.</p>
+    </section>
+
+    <p id="message" role="status"></p>
+
+    <section id="cases-section" hidden>
+      <h2>Cases</h2>
+      <button id="refresh" type="button">Refresh</button>
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Case</th>
+            <th scope="col">Status</th>
+            <th scope="col">Decided by</th>
+            <th scope="col">Domain</th>
+            <th scope="col">Sightings</th>
+            <th scope="col">Devices</th>
+            <th scope="col">Drain pattern</th>
+            <th scope="col">Listed domain</th>
+            <th scope="col">Updated</th>
+          </tr>
+        </thead>
+        <tbody id="cases"></tbody>
+      </table>
+    </section>
+
+    <section id="case-section" hidden>
+      <h2 id="case-title"></h2>
+      <p id="case-status"></p>
+      <div class="actions">
+        <button id="escalate" type="button">Escalate</button>
+        <button id="dismiss" type="button">Dismiss</button>
+        <button id="back" type="button">Back to cases</button>
+      </div>
+      <p class="note">
+        Escalate marks the case escalated. Dismiss closes it: later sightings
+        still attach to it, and it stays dismissed.
+      </p>
+      <h3>Evidence</h3>
+      <ol id="evidence"></ol>
+    </section>
+  </body>
+</html>

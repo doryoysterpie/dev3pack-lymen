@@ -5,6 +5,14 @@
     "version": "0.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
+    "android": {
+      "package": "app.antelimen.limen",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#FFFFFF"
+      }
+    },
     "plugins": [
       [
         "expo-camera",
@@ -14,9 +22,6 @@
           "recordAudioAndroid": false
         }
       ]
-    ],
-    "android": {
-      "package": "app.antelimen.limen"
-    }
+    ]
   }
 }

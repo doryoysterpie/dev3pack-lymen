@@ -1,6 +1,20 @@
 {
   "name": "@limen/api",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file-if-exists=../../.env src/index.ts",
+    "import-registrations": "node --env-file-if-exists=../../.env src/registration.ts",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "check:devnet": "node --env-file-if-exists=../../.env --test --test-concurrency=1 \"src/devnet/*.check.ts\""
+  },
+  "dependencies": {
+    "@limen/preflight": "0.0.0",
+    "@solana/spl-token": "0.4.15",
+    "@solana/web3.js": "1.99.0"
+  },
+  "devDependencies": {
+    "litesvm": "0.8.0"
+  }
 }
