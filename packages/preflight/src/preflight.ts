@@ -293,6 +293,13 @@ export async function preflight(
           "the simulation did not return the balances of its own run",
         );
       }
+      // limen uses no token balance, but an entry must name one of the
+      // message's keys (the audit of 21e1f9f, item 5).
+      if (result.tokenAccountIndexes.some((index) => index >= keys.length)) {
+        throw new Error(
+          "the simulation's token balances name an account outside the message",
+        );
+      }
       // The run's keys must be the message's: the addresses it loaded from
       // lookup tables are the ones limen read from them, in order (the
       // owner's ruling 20a), so its balances match the keys limen knows.

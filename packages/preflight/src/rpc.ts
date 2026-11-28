@@ -70,6 +70,13 @@ export interface Simulation {
     readonly writable: readonly string[];
     readonly readonly: readonly string[];
   } | null;
+  /**
+   * The account index of every token balance entry the run lists. limen uses
+   * no token balance, but an entry present must be well formed, and its
+   * index is checked against the message's keys (the audit of 21e1f9f, item
+   * 5). Empty for a failed run.
+   */
+  readonly tokenAccountIndexes: readonly number[];
 }
 
 export class RpcError extends Error {
@@ -436,6 +443,7 @@ async function fetchSimulation(
       preBalances: null,
       postBalances: null,
       loadedAddresses: null,
+      tokenAccountIndexes: [],
     };
   }
   const replacement = value.replacementBlockhash;
@@ -460,7 +468,50 @@ async function fetchSimulation(
       (index) => raw(["value", "postBalances", index]),
     ),
     loadedAddresses: loadedAddressesOf(value.loadedAddresses),
+    tokenAccountIndexes: [
+      ...tokenAccountIndexesOf(
+        value.preTokenBalances,
+        "simulateTransaction: preTokenBalances",
+        (index) => raw(["value", "preTokenBalances", index, "accountIndex"]),
+      ),
+      ...tokenAccountIndexesOf(
+        value.postTokenBalances,
+        "simulateTransaction: postTokenBalances",
+        (index) => raw(["value", "postTokenBalances", index, "accountIndex"]),
+      ),
+    ],
   };
+}
+
+/**
+ * The account indexes of a run's token balance entries, each entry checked
+ * to be well formed: a whole account index as the answer wrote it, a mint
+ * that is a public key, an owner and program that are public keys when
+ * given, and a whole amount. A missing list has none.
+ */
+function tokenAccountIndexesOf(
+  value: unknown,
+  what: string,
+  rawIndex: (index: number) => string | undefined,
+): number[] {
+  if (value === undefined || value === null) return [];
+  return listOf(value, what, (item, index) => {
+    const optionalKey = (key: unknown) =>
+      key === undefined || key === null || isPublicKey(key);
+    if (
+      !isRecord(item) ||
+      !isSlot(item.accountIndex) ||
+      !/^(0|[1-9][0-9]*)$/.test(rawIndex(index) ?? "") ||
+      !isPublicKey(item.mint) ||
+      !optionalKey(item.owner) ||
+      !optionalKey(item.programId) ||
+      !isRecord(item.uiTokenAmount) ||
+      !isAmount(item.uiTokenAmount.amount)
+    ) {
+      throw new RpcError("shape", `${what}: entry`);
+    }
+    return item.accountIndex;
+  });
 }
 
 /** A run's loaded addresses: two lists of public keys, or null. */

@@ -461,6 +461,74 @@ describe("ruling 20a, item 6: the run's keys are the message's", () => {
     assert.equal(result.accountKeys.includes(ATTACKER), false);
   });
 
+  it("the audit of 21e1f9f, item 5: token balance entries must be well formed and name a message key", async () => {
+    const entry = (fields: Record<string, unknown>) => ({
+      accountIndex: 1,
+      mint: MINT,
+      owner: USER,
+      programId: TOKEN_PROGRAM,
+      uiTokenAmount: {
+        amount: "1",
+        decimals: 0,
+        uiAmount: 1,
+        uiAmountString: "1",
+      },
+      ...fields,
+    });
+    for (const [list, fields, reason] of [
+      [
+        "preTokenBalances",
+        { accountIndex: 99 },
+        "the simulation's token balances name an account outside the message",
+      ],
+      [
+        "postTokenBalances",
+        { accountIndex: 99 },
+        "the simulation's token balances name an account outside the message",
+      ],
+      [
+        "preTokenBalances",
+        { accountIndex: 1.5 },
+        "simulateTransaction: preTokenBalances: entry",
+      ],
+      [
+        "postTokenBalances",
+        { mint: "not a key" },
+        "simulateTransaction: postTokenBalances: entry",
+      ],
+      [
+        "preTokenBalances",
+        { owner: 7 },
+        "simulateTransaction: preTokenBalances: entry",
+      ],
+      [
+        "postTokenBalances",
+        { uiTokenAmount: { amount: "-1" } },
+        "simulateTransaction: postTokenBalances: entry",
+      ],
+    ] as const) {
+      await notUsed(
+        changed((value) => {
+          value[list] = [entry(fields)];
+        }),
+        drainer.transaction,
+        reason,
+      );
+    }
+    // A well-formed entry is checked, not used.
+    const result = ready(
+      await preflight(
+        changed((value) => {
+          value.preTokenBalances = [entry({})];
+          value.postTokenBalances = [entry({ owner: undefined })];
+        }),
+        drainer.transaction,
+        USER,
+      ),
+    );
+    assert.equal(result.simulation.status, "ran");
+  });
+
   it("leaves a legacy run unused when it names loaded addresses, or none at all", async () => {
     await notUsed(
       changed((value) => {
