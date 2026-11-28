@@ -714,6 +714,55 @@ describe("fix check N2: token balances come only with a token program", () => {
     assert.equal(result.drainPattern, false);
   });
 
+  it("re-audit A1: with no token program, a run that shows the token account changed is not used", async () => {
+    // Nothing in the transaction can change the token account, so a new
+    // delegate in the run's account state did not come from it.
+    const rpc = jsonRpc(
+      endpoint({
+        accounts: (addresses) =>
+          addresses.map((address) =>
+            address === USER
+              ? system(5_000_000_000)
+              : address === K.userTokenAccount
+                ? tokenState(9, null)
+                : null,
+          ),
+        simulation: (addresses) => ({
+          err: null,
+          logs: [],
+          accounts: addresses.map((address) =>
+            address === USER
+              ? system(4_999_994_000)
+              : tokenState(9, K.attacker),
+          ),
+          preBalances: [5_000_000_000, 2_039_280, 1],
+          postBalances: [4_999_994_000, 2_040_280, 1],
+          preTokenBalances: [],
+          postTokenBalances: [],
+        }),
+      }),
+      "x",
+    );
+    const result = await preflightTransaction(
+      build([
+        web3.SystemProgram.transfer({
+          fromPubkey: user,
+          toPubkey: tokenAccount,
+          lamports: 1000,
+        }),
+      ]),
+      { rpc, user: USER },
+    );
+    assert.ok(result.summary.kind === "ready");
+    assert.deepEqual(result.summary.simulation, {
+      status: "not-run",
+      reason:
+        "the simulation's token balances do not match its own account state",
+    });
+    assert.deepEqual(result.summary.blocks, ["simulation-not-run"]);
+    assert.equal(result.drainPattern, false);
+  });
+
   it("an address behind a lookup table limen could not read may be a token program, so the token balances are still owed", async () => {
     const table = new web3.AddressLookupTableAccount({
       key: web3.PublicKey.unique(),
@@ -868,6 +917,185 @@ describe("fix check: a failed run claims no changes", () => {
     });
     assert.deepEqual(result.summary.blocks, ["simulation-failed"]);
   });
+});
+
+describe("re-audit A1 and A2: the token balances agree with the run's own accounts", () => {
+  // A Token transfer of 5 from the wallet's token account to the attacker.
+  // Accounts: the wallet, the token account (index 1), the attacker, the
+  // Token program.
+  const transferFive = () =>
+    build([
+      new web3.TransactionInstruction({
+        programId: new web3.PublicKey(TOKEN_PROGRAM),
+        keys: [
+          { pubkey: tokenAccount, isSigner: false, isWritable: true },
+          { pubkey: attacker, isSigner: false, isWritable: true },
+          { pubkey: user, isSigner: true, isWritable: false },
+        ],
+        data: Buffer.from([3, 5, 0, 0, 0, 0, 0, 0, 0]),
+      }),
+    ]);
+  const tokenOf = (amount: number, owner = USER, mint = K.mint) => {
+    const data = new Uint8Array(165);
+    data.set(decodePublicKey(mint) ?? new Uint8Array(32), 0);
+    data.set(decodePublicKey(owner) ?? new Uint8Array(32), 32);
+    data[64] = amount;
+    data[108] = 1;
+    return {
+      lamports: 2_039_280,
+      owner: TOKEN_PROGRAM,
+      data: [encodeBase64(data), "base64"],
+    };
+  };
+  const entry = (amount: string, owner = USER, mint = K.mint) => ({
+    accountIndex: 1,
+    mint,
+    owner,
+    uiTokenAmount: { amount },
+  });
+  const run = (
+    read: unknown,
+    after: unknown,
+    preTokenBalances: unknown[],
+    postTokenBalances: unknown[],
+  ) =>
+    preflightTransaction(transferFive(), {
+      rpc: jsonRpc(
+        endpoint({
+          accounts: (addresses) =>
+            addresses.map((address) =>
+              address === USER
+                ? system(5_000_000_000)
+                : address === K.userTokenAccount
+                  ? read
+                  : null,
+            ),
+          simulation: (addresses) => ({
+            err: null,
+            logs: [],
+            accounts: addresses.map((address) =>
+              address === USER
+                ? system(4_999_995_000)
+                : address === K.userTokenAccount
+                  ? after
+                  : null,
+            ),
+            preBalances: [5_000_000_000, 2_039_280, 0, 1],
+            postBalances: [4_999_995_000, 2_039_280, 0, 1],
+            preTokenBalances,
+            postTokenBalances,
+          }),
+        }),
+        "x",
+      ),
+      user: USER,
+    });
+  const READ = "the simulation's token balances do not match the accounts read";
+  const OWN =
+    "the simulation's token balances do not match its own account state";
+  const notUsed = async (
+    result: ReturnType<typeof run>,
+    reason: string,
+  ): Promise<void> => {
+    const { summary, drainPattern } = await result;
+    assert.ok(summary.kind === "ready");
+    assert.deepEqual(summary.simulation, { status: "not-run", reason });
+    assert.deepEqual(summary.blocks, ["simulation-not-run"]);
+    assert.equal(drainPattern, false);
+  };
+
+  it("uses balances that agree with the account the run returns", async () => {
+    const { summary } = await run(
+      tokenOf(200),
+      tokenOf(195),
+      [entry("200")],
+      [entry("195")],
+    );
+    assert.ok(summary.kind === "ready");
+    assert.ok(summary.simulation.status === "ran");
+    const change = summary.simulation.changes.find((c) => c.kind === "token");
+    assert.ok(change !== undefined && change.kind === "token");
+    assert.equal(change.before, "200");
+    assert.equal(change.after, "195");
+  });
+
+  it("A1: an open account with no post-balance entry is not read as swept", () =>
+    notUsed(run(tokenOf(200), tokenOf(195), [entry("200")], []), OWN));
+
+  it("A1: a post-balance entry does not hide the zero the account shows", () =>
+    notUsed(
+      run(tokenOf(200), tokenOf(0), [entry("200")], [entry("200")]),
+      OWN,
+    ));
+
+  it("A1: a post-balance entry whose mint is not the account's is refused", () =>
+    notUsed(
+      run(
+        tokenOf(200),
+        tokenOf(195),
+        [entry("200")],
+        [entry("195", USER, K.attacker)],
+      ),
+      OWN,
+    ));
+
+  it("A1: a post-balance entry whose owner is not the account's is refused", () =>
+    notUsed(
+      run(
+        tokenOf(200),
+        tokenOf(195),
+        [entry("200")],
+        [entry("195", K.attacker)],
+      ),
+      OWN,
+    ));
+
+  it("A1: a closed account with a post-balance entry is refused", () =>
+    notUsed(run(tokenOf(200), null, [entry("200")], [entry("0")]), OWN));
+
+  it("A1: two post-balance entries for one account are refused", () =>
+    notUsed(
+      run(
+        tokenOf(200),
+        tokenOf(195),
+        [entry("200")],
+        [entry("195"), entry("0")],
+      ),
+      OWN,
+    ));
+
+  it("A1: two pre-balance entries for one account are refused", () =>
+    notUsed(
+      run(
+        tokenOf(200),
+        tokenOf(195),
+        [entry("200"), entry("0")],
+        [entry("195")],
+      ),
+      READ,
+    ));
+
+  it("A1: a pre-balance entry whose mint is not the account's is refused", () =>
+    notUsed(
+      run(
+        tokenOf(200),
+        tokenOf(195),
+        [entry("200", USER, K.attacker)],
+        [entry("195")],
+      ),
+      READ,
+    ));
+
+  it("A2: an account the run shows as the wallet's is not skipped when the read named another owner", () =>
+    notUsed(
+      run(
+        tokenOf(200, K.attacker),
+        tokenOf(195),
+        [entry("200")],
+        [entry("195")],
+      ),
+      READ,
+    ));
 });
 
 describe("audit 9: the report JSON and the blockhash", () => {
