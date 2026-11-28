@@ -293,11 +293,13 @@ function nodeVerifies(
  * the wallet holding it, and records every mint call. A second mint at an address already on its
  * chain fails, as a second createAccount does. failNextMint() makes the next mint fail before
  * anything lands; landThenFailNextMint() makes it land and then fail, as a lost confirmation does.
+ * delayConfirmations(wait) makes each mint land at once and confirm only once `wait()` resolves.
  */
 function mintDouble() {
   const calls: { wallet: string; mint: string; details: unknown }[] = [];
   const chain = new Map<string, string>();
   let next: "ok" | "fail" | "land-then-fail" = "ok";
+  let confirmation: (() => Promise<void>) | null = null;
   const minter: PassMinter = {
     async mint(wallet, seed, details) {
       const mint = mintAddressFromSeed(seed);
@@ -308,7 +310,9 @@ function mintDouble() {
       if (chain.has(mint)) throw new Error("account already in use");
       chain.set(mint, wallet);
       if (mode === "land-then-fail") throw new Error("confirmation timed out");
-      return { signature: `sig-${calls.length}` };
+      const signature = `sig-${calls.length}`;
+      if (confirmation !== null) await confirmation();
+      return { signature };
     },
     async state(wallet, mint) {
       const holder = chain.get(mint);
@@ -324,6 +328,9 @@ function mintDouble() {
     },
     landThenFailNextMint: () => {
       next = "land-then-fail";
+    },
+    delayConfirmations: (wait: () => Promise<void>) => {
+      confirmation = wait;
     },
     minter,
   };
@@ -846,6 +853,60 @@ test("a pending check-in recorded under another PASS_MINT_SECRET answers 502, mi
   assert.deepEqual(mintRows(db), [
     { mint: recorded?.mint, mint_status: "pending" },
   ]);
+});
+
+test("concurrent requests for one check-in get one 201; the others get 409 already_checked_in, and one pass is minted", async () => {
+  const { db, deps, alice, minting } = setup();
+  // Each pass lands at once and is confirmed a turn later, so the other requests find it pending.
+  minting.delayConfirmations(
+    () => new Promise<void>((resolve) => setImmediate(resolve)),
+  );
+  const body = request(alice, "LMN-0001");
+  const answers = await Promise.all(
+    [0, 1, 2, 3].map(() => checkInAt(deps, body, T + 5)),
+  );
+  assert.deepEqual(answers.map((a) => a.status).sort(), [201, 409, 409, 409]);
+  for (const a of answers)
+    if (a.status !== 201)
+      assert.deepEqual(a.body, { error: "already_checked_in" });
+  assert.equal(minting.calls.length, 1);
+  assert.deepEqual(mintRows(db), [
+    { mint: passAddress("day-2", "LMN-0001"), mint_status: "done" },
+  ]);
+});
+
+test("a request that finds the pass on chain while the first awaits confirmation gets the 201; the first then gets 409", async () => {
+  const { db, deps, alice, minting } = setup();
+  let confirm: (() => void) | undefined;
+  minting.delayConfirmations(
+    () =>
+      new Promise<void>((resolve) => {
+        confirm = resolve;
+      }),
+  );
+  const first = checkInAt(deps, request(alice, "LMN-0001"), T + 5);
+  // Wait until the first request's pass has landed; its confirmation is held.
+  while (minting.calls.length === 0)
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  const mint = passAddress("day-2", "LMN-0001");
+  assert.deepEqual(await retryAt(deps, alice, T + 6), {
+    status: 201,
+    body: {
+      status: "checked_in",
+      station: "st-front",
+      session: "day-2",
+      mint,
+      signature: null,
+    },
+  });
+  assert.ok(confirm !== undefined);
+  confirm();
+  assert.deepEqual(await first, {
+    status: 409,
+    body: { error: "already_checked_in" },
+  });
+  assert.equal(minting.calls.length, 1);
+  assert.deepEqual(mintRows(db), [{ mint, mint_status: "done" }]);
 });
 
 test("the first failure is the earliest check, in the order the README lists", async () => {

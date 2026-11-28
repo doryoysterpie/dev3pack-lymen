@@ -513,7 +513,8 @@ interface Reservation {
  * read first: a pass already held by the wallet is recorded as done without minting, and an
  * account at the address that is not that pass is left pending. Otherwise the pass is minted at
  * the reservation's address. Any failure leaves the reservation pending, never deleted, and
- * answers 502; the next request for this check-in reads the chain again.
+ * answers 502; the next request for this check-in reads the chain again. When two requests both
+ * reach completion, only the one that moves the row from pending to done answers 201.
  */
 async function completePass(
   deps: CheckinDeps,
@@ -523,10 +524,15 @@ async function completePass(
   seed: Uint8Array,
 ): Promise<CheckinOutcome> {
   const mint = mintAddressFromSeed(seed);
+  // Completion is one transition, pending to done. Only the request whose UPDATE changes the row
+  // answers 201; another that completes the same reservation answers 409.
   const done = (signature: string | null): CheckinOutcome => {
-    deps.db
-      .prepare("UPDATE checkins SET mint_status = 'done' WHERE id = ?")
+    const { changes } = deps.db
+      .prepare(
+        "UPDATE checkins SET mint_status = 'done' WHERE id = ? AND mint_status = 'pending'",
+      )
       .run(reservation.id);
+    if (Number(changes) !== 1) return refuse(409, "already_checked_in");
     return {
       status: 201,
       body: {
