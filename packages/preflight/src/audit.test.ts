@@ -378,3 +378,31 @@ describe("audit 14: the right diagnosis for malformed input", () => {
     });
   });
 });
+
+describe("audit 11: a filled cosigner slot is not called signed", () => {
+  it("reports the slot as filled, not as a valid signature", () => {
+    const message = new web3.TransactionMessage({
+      payerKey: user,
+      recentBlockhash: K.mint,
+      instructions: [
+        new web3.TransactionInstruction({
+          programId: key(K.unknownProgram),
+          keys: [{ pubkey: organizer, isSigner: true, isWritable: false }],
+          data: Buffer.from([1]),
+        }),
+      ],
+    }).compileToLegacyMessage();
+    // Not a signature of anything: 64 bytes of 7.
+    const bytes = new web3.VersionedTransaction(message, [
+      new Uint8Array(64),
+      new Uint8Array(64).fill(7),
+    ]).serialize();
+    const result = parseTransaction(bytes);
+    assert.ok(result.ok);
+    const got = summarizeTransaction(result.transaction, new Map());
+    assert.deepEqual(got.signers.others, [
+      { address: K.organizer, signatureFilled: true },
+    ]);
+    assert.equal(JSON.stringify(got).includes('"signed"'), false);
+  });
+});

@@ -157,7 +157,7 @@ describe("m13: the fee payer left unset", () => {
     const got = summary(rebuilt(build(unsetPayer, [create()])));
     assert.deepEqual(got.signers, {
       feePayer: "user",
-      others: [{ address: UNSET_FEE_PAYER, signed: false }],
+      others: [{ address: UNSET_FEE_PAYER, signatureFilled: false }],
       unsigned: true,
     });
   });

@@ -382,7 +382,7 @@ const cases = [
       others: [{ instruction: 0, kind: "memo" }],
       undecoded: [],
       signers: userSigner(
-        [{ address: cosigner.toBase58(), signed: false }],
+        [{ address: cosigner.toBase58(), signatureFilled: false }],
         true,
       ),
       unresolvedAccounts: 0,
@@ -410,7 +410,7 @@ const cases = [
       undecoded: [],
       signers: {
         feePayer: "user",
-        others: [{ address: user.toBase58(), signed: false }],
+        others: [{ address: user.toBase58(), signatureFilled: false }],
         unsigned: false,
       },
       unresolvedAccounts: 0,

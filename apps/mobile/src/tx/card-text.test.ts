@@ -68,7 +68,7 @@ describe("E-09 done test: what the transaction card shows", () => {
       },
       {
         label: "Approves a delegate",
-        value: `${attacker} may move every token in your token account ${userTokenAccount}, with no limit.`,
+        value: `${attacker} may move up to 18446744073709551615 base units, the largest allowance a token account can hold, from your token account ${userTokenAccount}.`,
       },
     ]);
   });
@@ -198,7 +198,7 @@ describe("transaction card text", () => {
       ).status;
     assert.equal(
       await statusWith(offline),
-      `${lead} The simulation did not run, so no balance change is shown.`,
+      `${lead} No simulation result is used, so no balance change is shown.`,
     );
     assert.equal(
       await statusWith(
@@ -441,7 +441,7 @@ describe("transaction card text", () => {
     });
     assert.equal(
       card.status,
-      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation did not run, so no balance change is shown. It would hand control of your tokens or accounts to another address.",
+      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. No simulation result is used, so no balance change is shown. It would hand control of your tokens or accounts to another address.",
     );
   });
 
@@ -476,7 +476,7 @@ describe("transaction card text", () => {
     });
     assert.equal(
       card.status,
-      "This card shows what the transaction would do before you sign.",
+      "This card shows what the decoded instructions would do. No simulation result is used, so no balance change is shown.",
     );
   });
 
@@ -493,5 +493,159 @@ describe("transaction card text", () => {
     assert.equal(withDecimals("2500000", 6), "2.5");
     assert.equal(withDecimals("0", 6), "0");
     assert.equal(withDecimals("17", 0), "17");
+  });
+});
+
+describe("the owner's audit: what the card claims", () => {
+  // A valid address that starts with a lowercase base58 letter.
+  const LOWER = "cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN";
+  const U64 = "18446744073709551615";
+  type Ready = Extract<
+    Awaited<ReturnType<typeof preflight>>,
+    { kind: "ready" }
+  >;
+  const drainerOffline = async (): Promise<Ready> => {
+    const result = await preflight(
+      offline,
+      transactionOf("drainer: SOL balance out"),
+      fixture.user,
+    );
+    assert.ok(result.kind === "ready");
+    return result;
+  };
+  const rowsFor = async (effects: Ready["summary"]["effects"]) => {
+    const result = await drainerOffline();
+    return transactionCardText(LINK, null, {
+      ...result,
+      summary: { ...result.summary, effects },
+    }).rows;
+  };
+  const approve = (delegate: string, amount: string) => ({
+    kind: "delegate-approved" as const,
+    instruction: 0,
+    program: "token" as const,
+    account: { address: userTokenAccount },
+    delegate: { address: delegate },
+    mint: null,
+    amount,
+    decimals: null,
+  });
+
+  it("1: shows a delegate's address exactly as written", async () => {
+    const rows = await rowsFor([approve(LOWER, "5")]);
+    assert.deepEqual(rows[1], {
+      label: "Approves a delegate",
+      value: `${LOWER} may move up to 5 base units from your token account ${userTokenAccount}.`,
+    });
+  });
+
+  it("1: the largest allowance is not called unlimited", async () => {
+    const rows = await rowsFor([approve(attacker, U64)]);
+    assert.deepEqual(rows[1], {
+      label: "Approves a delegate",
+      value: `${attacker} may move up to ${U64} base units, the largest allowance a token account can hold, from your token account ${userTokenAccount}.`,
+    });
+  });
+
+  it("10: a decoded card whose simulation is not used says so", async () => {
+    const result = await drainerOffline();
+    const card = transactionCardText(LINK, null, {
+      ...result,
+      summary: {
+        ...result.summary,
+        effects: [
+          {
+            kind: "sol-out" as const,
+            instruction: 0,
+            to: { address: attacker },
+            lamports: "1000",
+            reason: "transfer" as const,
+          },
+        ],
+      },
+    });
+    assert.equal(
+      card.status,
+      "This card shows what the decoded instructions would do. No simulation result is used, so no balance change is shown.",
+    );
+  });
+
+  it("10: a failed simulation shows no balance change rows", async () => {
+    const walletAccount = (lamports: number) => ({
+      lamports,
+      owner: SYSTEM_PROGRAM,
+      data: ["", "base64"] as const,
+    });
+    const result = await preflight(
+      recordedRpc({
+        accounts: { [fixture.user]: walletAccount(5_000_000_000) },
+        simulation: {
+          err: { InstructionError: [1, "Custom"] },
+          accounts: { [fixture.user]: walletAccount(1_000_000_000) },
+        },
+      }),
+      transactionOf("unknown program"),
+      fixture.user,
+    );
+    const card = transactionCardText(LINK, null, result);
+    assert.equal(
+      card.rows.some((row) => row.label.endsWith("simulated")),
+      false,
+    );
+    assert.ok(
+      card.status.endsWith(
+        "The simulation failed, so no balance change is shown.",
+      ),
+    );
+  });
+
+  it("13: the burn, revoke and create rows claim only what the instruction proves", async () => {
+    const rows = await rowsFor([
+      {
+        kind: "tokens-burned" as const,
+        instruction: 0,
+        program: "token" as const,
+        account: { address: userTokenAccount },
+        mint: { address: fixture.keys.mint },
+        amount: "5",
+        decimals: null,
+      },
+      {
+        kind: "delegate-revoked" as const,
+        instruction: 1,
+        program: "token-2022" as const,
+        account: { address: userTokenAccount },
+      },
+      {
+        kind: "pays-for-token-account" as const,
+        instruction: 2,
+        account: { address: attacker },
+        idempotent: false,
+      },
+      {
+        kind: "pays-for-token-account" as const,
+        instruction: 3,
+        account: { address: attacker },
+        idempotent: true,
+      },
+    ]);
+    assert.deepEqual(rows.slice(1, 5), [
+      {
+        label: "Burns tokens",
+        value: `5 base units from token account ${userTokenAccount}, with your wallet's authority.`,
+      },
+      {
+        label: "Removes a delegate",
+        value: `From token account ${userTokenAccount}, with your wallet's authority.`,
+      },
+      {
+        label: "Creates a token account",
+        value: `Your wallet pays up to the rent for new token account ${attacker}.`,
+      },
+      {
+        label: "May create a token account",
+        value: `If token account ${attacker} does not exist yet, it is created and your wallet pays up to its rent.`,
+      },
+    ]);
   });
 });

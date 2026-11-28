@@ -55,6 +55,13 @@ export type Effect =
       readonly kind: "pays-for-token-account";
       readonly instruction: number;
       readonly account: Place;
+      /**
+       * CreateIdempotent, which does nothing when the account exists
+       * (solana-program/associated-token-account 34509e4,
+       * program/src/processor.rs:88 to 101). Either way the wallet pays only
+       * what the account lacks of its rent (tools/account.rs:25 to 33).
+       */
+      readonly idempotent: boolean;
     }
   | {
       readonly kind: "token-out";
@@ -143,10 +150,14 @@ export interface Signers {
    * Always the role marker "user", never the address.
    */
   readonly feePayer: string;
-  /** Every other required signer, and whether its signature is filled in. */
+  /**
+   * Every other required signer, and whether its signature slot is filled
+   * in. A filled slot is not a valid signature: limen does not verify it, and
+   * the simulation runs without signature checks.
+   */
   readonly others: readonly {
     readonly address: string;
-    readonly signed: boolean;
+    readonly signatureFilled: boolean;
   }[];
   /** No signature in the transaction is filled in yet. */
   readonly unsigned: boolean;
@@ -248,6 +259,7 @@ function effectOf(
             kind: "pays-for-token-account",
             instruction,
             account: place(decoded.account),
+            idempotent: decoded.idempotent,
           }
         : null;
     case "token-transfer":
@@ -538,7 +550,7 @@ export function summarizeTransaction(
     others: required
       .map((address, index) => ({
         address,
-        signed: !isZero(signatures[index]),
+        signatureFilled: !isZero(signatures[index]),
       }))
       .filter((signer) => signer.address !== user),
     unsigned: signatures.every(isZero),

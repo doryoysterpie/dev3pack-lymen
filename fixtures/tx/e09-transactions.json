@@ -314,7 +314,7 @@
           "others": [
             {
               "address": "5ZNFf2gWjUjeP4EPMNEwDhda6NcHyeQ5VHMTqZMTuit1",
-              "signed": false
+              "signatureFilled": false
             }
           ],
           "unsigned": true
@@ -340,7 +340,7 @@
           "others": [
             {
               "address": "63e2bvJ6SLRtgbTHJaYiiCWBs4BpSMcugDr6XLohgUka",
-              "signed": false
+              "signatureFilled": false
             }
           ],
           "unsigned": false
