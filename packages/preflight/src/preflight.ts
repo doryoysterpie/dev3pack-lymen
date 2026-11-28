@@ -124,17 +124,18 @@ export type Preflight =
       readonly simulatedAt: SimulatedAt | null;
       /**
        * The wallet's token accounts, in the message's account order: those
-       * the read before the simulation, or the simulation's own account
-       * state, shows it owns. A report writes "user token account N" for the
-       * Nth, and the card says "your token account" only for these.
+       * the read before the simulation shows it owns. A report writes "user
+       * token account N" for the Nth, and the card says "your token account"
+       * only for these.
        */
       readonly userTokenAccounts: readonly string[];
       /**
        * Other token accounts the decoded instructions name as the wallet's
        * (summary.ts, userTokenAccounts) or act on with the wallet as signing
-       * authority (summary.ts, userAuthorizedTokenAccounts), in the same
-       * order: an instruction alone shows no ownership. A report writes
-       * "user-authorized token account N".
+       * authority (summary.ts, userAuthorizedTokenAccounts), and those only
+       * the simulation's state after shows the wallet owns, in the same
+       * order: neither an instruction nor the run alone is a read that shows
+       * ownership. A report writes "user-authorized token account N".
        */
       readonly userAuthorizedTokenAccounts: readonly string[];
     };
@@ -308,6 +309,9 @@ export async function preflight(
   let simulation: SimulationOutcome;
   let simulatedAt: SimulatedAt | null = null;
   let owned: string[] = [];
+  // Token accounts only the simulation's state after shows the wallet owns,
+  // such as one the transaction creates: no read confirms them.
+  let ownedAfterOnly: string[] = [];
   // Whether the accounts were read before the simulation; with no read,
   // nothing shows which token accounts are the wallet's.
   let read = false;
@@ -375,7 +379,12 @@ export async function preflight(
         "an account limen watches changed on devnet during the check",
       );
     }
-    owned = ownedTokenAccounts(feePayer, watched, before, result.accounts);
+    ownedAfterOnly = ownedTokenAccounts(
+      feePayer,
+      watched,
+      [],
+      result.accounts,
+    ).filter((address) => !owned.includes(address));
     // A run that failed returns every account as null (anza-xyz/agave
     // a64fa73, rpc/src/rpc.rs:3554 and :3555), which shows nothing the
     // transaction would do, so a failed run lists no change.
@@ -429,6 +438,7 @@ export async function preflight(
   const authorizedAccounts = [
     ...new Set([
       ...userTokenAccounts(transaction, tables),
+      ...ownedAfterOnly,
       ...userAuthorizedTokenAccounts(transaction, tables, !read),
     ]),
   ]
