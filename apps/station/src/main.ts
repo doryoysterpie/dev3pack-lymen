@@ -1,8 +1,10 @@
 // Station display page (E-03). Shows the signed station QR and replaces it when the API says.
 // Open it as /?station=<station ID>#token=<that station's display token>, the address
-// `npm run station-link -w @limen/api` writes. The token sits in the
-// fragment, which the browser never sends to a server, and is removed from the address bar
-// before anything else happens, an error included. Requests go to /api, which the Vite server forwards to the limen API.
+// `npm run station-link -w @limen/api` writes. The token sits in the fragment, which the
+// browser never sends to a server. Once the module's imports have loaded and its elements are
+// found, and before the page reads its configuration or shows anything, an error included, the
+// token is removed from the address bar and the current history entry. Requests go to /api,
+// which the Vite dev and preview servers forward to the limen API.
 import QRCode from "qrcode";
 
 import {
@@ -59,8 +61,9 @@ function render(view: StationView): void {
   );
 }
 
-// The token leaves the address bar before anything renders, so no copy of this page's address,
-// even of an error page, carries it.
+// The token leaves the address bar and the current history entry before anything renders, an
+// error page included. The browser may still keep the address as it was opened elsewhere, such
+// as in its history, which the page cannot reach.
 const href = window.location.href;
 const bare = new URL(href);
 bare.hash = "";
