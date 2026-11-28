@@ -15,6 +15,7 @@ import {
   type CheckinRegistrations,
   type PassMinter,
 } from "./checkin.ts";
+import { hasRepeatedKey } from "./json-keys.ts";
 import { routeReports, type ReportOptions } from "./reports.ts";
 import { schemaVersion } from "./db.ts";
 import {
@@ -107,11 +108,17 @@ async function postCheckin(
     sendJson(res, 413, { error: "body_too_large" }, { connection: "close" });
     return;
   }
+  const text = raw.toString("utf8");
   let body: unknown;
   try {
-    body = JSON.parse(raw.toString("utf8"));
+    body = JSON.parse(text);
   } catch {
     sendJson(res, 400, { error: "invalid_json" });
+    return;
+  }
+  // JSON.parse keeps a repeated key's last value; another reader may keep its first.
+  if (hasRepeatedKey(text)) {
+    sendJson(res, 400, { error: "invalid_request", reason: "repeated_key" });
     return;
   }
   const outcome = await checkIn(

@@ -1157,6 +1157,48 @@ test("a registration ID sent in a key or in a value does not appear in the respo
   }
 });
 
+test("POST /checkins refuses a body that repeats a key, whichever value comes last, and binds and mints nothing", async () => {
+  const { db, deps, alice, minting } = setup();
+  const server = createApiServer({
+    db,
+    version: API_VERSION,
+    stationSigner: ORGANIZER,
+    stationDisplayToken: "test-display-token-0123456789abcdef",
+    nowMs: () => (T + 5) * 1000,
+    checkin: {
+      registrations: deps.registrations,
+      minter: deps.minter,
+      mintSecret: MINT_SECRET,
+    },
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/checkins`;
+  try {
+    const signed = request(alice, "LMN-0001");
+    const rest = `"qr":${JSON.stringify(signed.qr)},"wallet":${JSON.stringify(signed.wallet)},"signature":${JSON.stringify(signed.signature)}`;
+    // The signed value comes last, so JSON.parse alone would take it and check in.
+    for (const body of [
+      `{${rest},"registration_id":"LMN-0002","registration_id":"LMN-0001"}`,
+      `{${rest},"registration_id":"LMN-0002","registration\\u005fid":"LMN-0001"}`,
+    ]) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+      assert.deepEqual(
+        [res.status, await res.json()],
+        [400, { error: "invalid_request", reason: "repeated_key" }],
+        body,
+      );
+    }
+    assert.equal(deps.registrations.bindingOf(alice.address), null);
+    assert.equal(minting.calls.length, 0);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("POST /checkins runs the check-in end to end, and answers 503 on a server built without check-in", async () => {
   const { db, deps, alice } = setup();
   const clock = { now: T + 5 };

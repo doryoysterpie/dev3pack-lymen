@@ -33,6 +33,8 @@ import {
   type KeyObject,
 } from "node:crypto";
 
+import { hasRepeatedKey } from "./json-keys.ts";
+
 export const STATION_QR_PREFIX = "limen:station:";
 export const STATION_QR_VERSION = "v1";
 /** Longest window a QR may carry, and the oldest a QR may be when verified. */
@@ -118,7 +120,10 @@ function parsePayload(encoded: string): StationPayload | null {
     // parser requires (apps/mobile/src/checkin/station-qr.ts), so both accept the same payloads.
     const bytes = Buffer.from(encoded, "base64url");
     if (bytes.toString("base64url") !== encoded) return null;
-    value = JSON.parse(bytes.toString("utf8"));
+    const json = bytes.toString("utf8");
+    value = JSON.parse(json);
+    // A repeated key would leave the payload's meaning to whichever value a reader keeps.
+    if (hasRepeatedKey(json)) return null;
   } catch {
     return null;
   }

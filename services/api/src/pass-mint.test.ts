@@ -7,16 +7,21 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 
 import {
+  ACCOUNT_SIZE,
+  AccountLayout,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   decodeBurnCheckedInstruction,
   decodeInitializeMintInstruction,
   decodeMintToInstruction,
+  MINT_SIZE,
+  MintLayout,
   TOKEN_2022_PROGRAM_ID,
   TokenInstruction,
 } from "@solana/spl-token";
 import {
   Connection,
   Keypair,
+  PublicKey,
   SystemInstruction,
   SystemProgram,
   type Transaction,
@@ -457,7 +462,7 @@ test("a Connection from makeConnection fails on a redirect to another host, wher
   }
 });
 
-test('connectDevnet\'s own Connection sends each request to the devnet endpoint with redirect "error"', async () => {
+test('connectDevnet\'s own Connection sends its one request, getGenesisHash, to the devnet endpoint with redirect "error"', async () => {
   // The fetch is replaced for this test, so nothing leaves the machine.
   const seen: { url: string; redirect: string | undefined }[] = [];
   const real = globalThis.fetch;
@@ -477,6 +482,109 @@ test('connectDevnet\'s own Connection sends each request to the devnet endpoint 
   }
   assert.equal(connection.rpcEndpoint, DEVNET_URL);
   assert.deepEqual(seen, [{ url: DEVNET_URL, redirect: "error" }]);
+});
+
+/** A stand-in connection that answers getAccountInfo from `accounts` and fails for `failing`. */
+function accountsConnection(
+  accounts: ReadonlyMap<string, Buffer>,
+  failing: ReadonlySet<string> = new Set(),
+): Connection {
+  return {
+    rpcEndpoint: DEVNET_URL,
+    getGenesisHash: async () => DEVNET_GENESIS_HASH,
+    getAccountInfo: async (address: PublicKey) => {
+      if (failing.has(address.toBase58())) throw new Error("fetch failed");
+      const data = accounts.get(address.toBase58());
+      return data === undefined
+        ? null
+        : {
+            executable: false,
+            lamports: 1,
+            owner: TOKEN_2022_PROGRAM_ID,
+            data,
+            rentEpoch: 0,
+          };
+    },
+  } as unknown as Connection;
+}
+
+/** A Token-2022 mint account's data, as spl-token lays it out. */
+function mintData(supply: bigint, decimals = 0): Buffer {
+  const data = Buffer.alloc(MINT_SIZE);
+  MintLayout.encode(
+    {
+      mintAuthorityOption: 1,
+      mintAuthority: organizer.publicKey,
+      supply,
+      decimals,
+      isInitialized: true,
+      freezeAuthorityOption: 0,
+      freezeAuthority: PublicKey.default,
+    },
+    data,
+  );
+  return data;
+}
+
+/** A token account's data, as spl-token lays it out. */
+function tokenAccountData(
+  ofMint: PublicKey,
+  owner: PublicKey,
+  amount: bigint,
+): Buffer {
+  const data = Buffer.alloc(ACCOUNT_SIZE);
+  AccountLayout.encode(
+    {
+      mint: ofMint,
+      owner,
+      amount,
+      delegateOption: 0,
+      delegate: PublicKey.default,
+      state: 1,
+      isNativeOption: 0,
+      isNative: 0n,
+      delegatedAmount: 0n,
+      closeAuthorityOption: 0,
+      closeAuthority: PublicKey.default,
+    },
+    data,
+  );
+  return data;
+}
+
+test("passMintState says minted only for the holder's one token of that mint, and an RPC failure is an error, not other", async () => {
+  const passMint = Keypair.generate().publicKey;
+  const account = passTokenAccount(passMint, holder);
+  const accounts = new Map([
+    [passMint.toBase58(), mintData(1n)],
+    [account.toBase58(), tokenAccountData(passMint, holder, 1n)],
+  ]);
+  // Control: the pass as minted.
+  assert.equal(
+    await passMintState(accountsConnection(accounts), passMint, holder),
+    "minted",
+  );
+  // At the holder's address, a token of another mint, or another owner's; or a mint with decimals.
+  for (const [address, data] of [
+    [account, tokenAccountData(Keypair.generate().publicKey, holder, 1n)],
+    [account, tokenAccountData(passMint, Keypair.generate().publicKey, 1n)],
+    [passMint, mintData(1n, 6)],
+  ] as const) {
+    const changed = new Map(accounts).set(address.toBase58(), data);
+    assert.equal(
+      await passMintState(accountsConnection(changed), passMint, holder),
+      "other",
+    );
+  }
+  // The holder's account could not be read: that is no fact about the chain.
+  await assert.rejects(
+    passMintState(
+      accountsConnection(accounts, new Set([account.toBase58()])),
+      passMint,
+      holder,
+    ),
+    { message: "fetch failed" },
+  );
 });
 
 test("mintPass creates the pass at the mint keypair it is given", async () => {

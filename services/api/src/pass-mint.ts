@@ -29,6 +29,7 @@ import {
   getMintLen,
   LENGTH_SIZE,
   TOKEN_2022_PROGRAM_ID,
+  TokenError,
   TYPE_SIZE,
 } from "@solana/spl-token";
 import {
@@ -321,9 +322,10 @@ export async function mintPass(
 
 /**
  * Where a pass stands on chain, read without sending anything: "absent" when no account exists
- * at `mint`, "minted" when it is a Token-2022 mint with a supply of one and `holder`'s associated
- * token account holds that one token, and "other" for anything else. A connection to any other
- * endpoint or cluster than devnet's is refused first.
+ * at `mint`; "minted" when it is a Token-2022 mint with decimals 0 and a supply of one, and
+ * `holder`'s associated token account, holding that mint for that owner, holds the one token;
+ * and "other" for any other account there. A request that fails is thrown, not read as "other".
+ * A connection to any other endpoint or cluster than devnet's is refused first.
  */
 export async function passMintState(
   connection: Connection,
@@ -346,9 +348,19 @@ export async function passMintState(
       "confirmed",
       TOKEN_2022_PROGRAM_ID,
     );
-    return state.supply === 1n && held.amount === 1n ? "minted" : "other";
-  } catch {
-    return "other";
+    return state.supply === 1n &&
+      state.decimals === 0 &&
+      held.mint.equals(mint) &&
+      held.owner.equals(holder) &&
+      held.amount === 1n
+      ? "minted"
+      : "other";
+  } catch (err) {
+    // spl-token's refusals are facts about the accounts there: missing, not Token-2022's, or not
+    // a mint or token account. Any other error, such as a failed request, is no fact, so it is
+    // thrown rather than read as "other".
+    if (err instanceof TokenError) return "other";
+    throw err;
   }
 }
 

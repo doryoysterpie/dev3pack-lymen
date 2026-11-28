@@ -397,6 +397,34 @@ test("a payload re-spelled in non-canonical base64url is rejected as invalid_pay
   for (const qr of qrs) assert.equal(reasonOf(qr), "invalid_payload", qr);
 });
 
+/**
+ * A QR the organizer signed whose payload names its session twice. JSON.parse keeps the last
+ * value, day-3; another reader may keep day-2. The app's test builds the same QR, which the
+ * SHA-256 pinned below shows.
+ */
+const REPEATED_SESSION_QR_SHA256 =
+  "feffa49047995ec2b47a045f51228298712d5f0c61f09b84ccb9d6ea03bca5a2";
+function repeatedSessionQr(): string {
+  const json =
+    '{"station":"st-front","session":"day-2","session":"day-3","nonce":"AAECAwQFBgcICQoLDA0ODw","issued_at":1795000000,"expires_at":1795000060}';
+  const message = `limen:station:v1.${Buffer.from(json, "utf8").toString("base64url")}`;
+  const signature = sign(
+    null,
+    Buffer.from(message, "ascii"),
+    ORGANIZER.privateKey,
+  );
+  return `${message}.${signerId(ORGANIZER.publicKey)}.${signature.toString("base64url")}`;
+}
+
+test("a signed payload that repeats a key is rejected as invalid_payload, as the app rejects it", () => {
+  const qr = repeatedSessionQr();
+  assert.equal(
+    createHash("sha256").update(qr).digest("hex"),
+    REPEATED_SESSION_QR_SHA256,
+  );
+  assert.equal(reasonOf(qr), "invalid_payload");
+});
+
 test("text that is not a v1 station QR is rejected with the owed reason", () => {
   const text = issue();
   const [, payload, signer, signature] = text.split(".") as [
