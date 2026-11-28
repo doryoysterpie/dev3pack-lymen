@@ -1,5 +1,8 @@
 // Seeds stations and sessions from a JSON file (E-03), so the station display has a station and
 // an active session to sign QRs for. Seeding twice updates names and windows in place.
+// Sessions may not overlap: where two did, the API would issue for the later one while QRs from
+// the earlier one stayed valid for up to 60 s. Back-to-back sessions, one ending where the next
+// starts, do not overlap, since a session's end is exclusive.
 //
 //   npm run seed -w @limen/api -- ../../fixtures/demo-event.json
 //
@@ -100,7 +103,10 @@ export function parseEventSeed(value: unknown): EventSeed {
   return { stations, sessions };
 }
 
-/** Writes the seed into the database in one transaction. Returns how many rows it wrote. */
+/**
+ * Writes the seed into the database in one transaction, and rolls it back if any two sessions in
+ * the database would then overlap. Returns how many rows it wrote.
+ */
 export function seedEvent(
   db: DatabaseSync,
   seed: EventSeed,
@@ -117,6 +123,16 @@ export function seedEvent(
     for (const s of seed.stations) station.run(s.id, s.name, now);
     for (const s of seed.sessions)
       session.run(s.id, s.name, s.starts_at, s.ends_at);
+    const overlap = db
+      .prepare(
+        "SELECT a.id AS first, b.id AS second FROM sessions a JOIN sessions b ON a.id < b.id AND a.starts_at < b.ends_at AND b.starts_at < a.ends_at ORDER BY a.id, b.id LIMIT 1",
+      )
+      .get() as { first: string; second: string } | undefined;
+    if (overlap !== undefined)
+      fail(
+        "sessions",
+        `${overlap.first} and ${overlap.second} overlap; sessions may not overlap`,
+      );
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");
