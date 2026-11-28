@@ -603,6 +603,8 @@ test("with a 2 s response delay, a QR that expires in transit is not drawn, and 
     await settle();
     await clock.advance(2000);
     await settle();
+    await clock.advance(5000);
+    await settle();
     await clock.advance(2000);
     await settle();
     await clock.advance(30_000);
@@ -612,9 +614,9 @@ test("with a 2 s response delay, a QR that expires in transit is not drawn, and 
       `day-1's QR, expired on arrival, is not drawn: ${captions.join(" | ")}`,
     );
     assert.ok(captions.some((c) => c.includes("session day-2")));
-    // The next fetch starts on day-1's arrival, and day-2's refresh comes 30 s after its request
-    // left, at 32 s, not 30 s after it arrived.
-    assert.deepEqual(fetchedAt, [0, 2000, 32_000]);
+    // day-1's QR arrives stale at 2 s, so the next fetch waits the 5 s retry delay, to 7 s.
+    // day-2's refresh comes 30 s after its request left, at 37 s, not 30 s after it arrived.
+    assert.deepEqual(fetchedAt, [0, 7000, 37_000]);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

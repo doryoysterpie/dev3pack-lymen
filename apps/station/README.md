@@ -18,7 +18,7 @@ The page keeps the token in memory and sends it in the `Authorization` header. I
 
 ## Timing
 
-The page times each QR on its own clock against the signed `issued_at` and `expires_at`. It assumes the station's clock agrees with the API's within the verifier's 5 s skew, and does not check it, so it stops 5 s early: the deadline is `min(expires_at * 1000, sentAt + (expires_at - issued_at) * 1000) - 5000` ms, where `sentAt` is when the request left. A QR past its deadline on arrival is not drawn. After drawing a QR, the page reads its clock again, shows the QR only with time left, and arms a timer for that time to clear it; a busy browser may run the timer late. The next fetch comes 30 s after the request left, or at the deadline if sooner, timed from the clock after the draw. A failed fetch, or one with no answer in 10 s, shows why and is retried after 5 s.
+The page times each QR on its own clock against the signed `issued_at` and `expires_at`. It assumes the station's clock agrees with the API's within the verifier's 5 s skew, and does not check it, so it stops 5 s early: the deadline is `min(expires_at * 1000, sentAt + (expires_at - issued_at) * 1000) - 5000` ms, where `sentAt` is when the request left. A QR past its deadline on arrival is not drawn, and the next fetch waits 5 s, so stale QRs do not cause a refetch loop. After drawing a QR, the page reads its clock again, shows the QR only with time left, and arms a timer for that time to clear it; a busy browser may run the timer late. The next fetch comes 30 s after the request left, or at the deadline if sooner, timed from the clock after the draw. A failed fetch, or one with no answer in 10 s, shows why and is retried after 5 s.
 
 ## What the servers serve
 
