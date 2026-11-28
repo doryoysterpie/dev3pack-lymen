@@ -31,6 +31,12 @@ import type { CompiledInstruction } from "./wire.ts";
 
 export type TokenProgram = "token" | "token-2022";
 
+export type TokenNamedKind =
+  | "token-initialize-account"
+  | "token-sync-native"
+  | "token-initialize-account-3"
+  | "token-initialize-immutable-owner";
+
 export type UndecodedReason =
   | "unknown-program"
   | "instruction-not-decoded"
@@ -131,7 +137,7 @@ export type Decoded =
       readonly decimals: number | null;
     }
   | {
-      readonly kind: "token-other";
+      readonly kind: TokenNamedKind;
       readonly program: TokenProgram;
       readonly name: string;
       /** The token account each named instruction takes first. */
@@ -333,12 +339,20 @@ const TOKEN_AUTHORITY_TYPE_COUNT = 4;
 // an authority or freezes an account. Every other tag not decoded below,
 // FreezeAccount and ThawAccount among them, goes to the fallback card.
 const TOKEN_NAMED: Readonly<
-  Record<number, readonly [name: string, length: number, accounts: number]>
+  Record<
+    number,
+    readonly [
+      kind: TokenNamedKind,
+      name: string,
+      length: number,
+      accounts: number,
+    ]
+  >
 > = {
-  1: ["InitializeAccount", 1, 4],
-  17: ["SyncNative", 1, 1],
-  18: ["InitializeAccount3", 33, 2],
-  22: ["InitializeImmutableOwner", 1, 1],
+  1: ["token-initialize-account", "InitializeAccount", 1, 4],
+  17: ["token-sync-native", "SyncNative", 1, 1],
+  18: ["token-initialize-account-3", "InitializeAccount3", 33, 2],
+  22: ["token-initialize-immutable-owner", "InitializeImmutableOwner", 1, 1],
 };
 
 // Token-2022 tags limen does not decode, though their layout is the Token
@@ -495,10 +509,10 @@ function decodeToken(
     default: {
       const named = TOKEN_NAMED[tag];
       if (named !== undefined) {
-        const [name, length, minAccounts] = named;
+        const [kind, name, length, minAccounts] = named;
         const problem = shape(length, minAccounts);
         if (problem) return undecoded(id, problem);
-        return { kind: "token-other", program, name, account: accounts[0] };
+        return { kind, program, name, account: accounts[0] };
       }
       // Token-2022 extension instructions (25 and up), Batch (255) and
       // anything else.

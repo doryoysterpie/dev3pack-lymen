@@ -368,7 +368,10 @@ function effectOf(
           }
         : null;
     case "advance-nonce":
-    case "token-other":
+    case "token-initialize-account":
+    case "token-sync-native":
+    case "token-initialize-account-3":
+    case "token-initialize-immutable-owner":
     case "compute-budget":
     case "memo":
     case "undecoded":

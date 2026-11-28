@@ -123,8 +123,16 @@ function effectRow(
         value: `Asks to assign your wallet account to program ${effect.newOwner}, which would then control its SOL.`,
       };
     case "pays-for-token-account":
-      // The wallet pays only what the account lacks of its rent, and an
-      // idempotent create does nothing when the account exists.
+      // The wallet pays only what the account lacks of its rent
+      // (tools/account.rs:25 to :33). On the idempotent path, after checking
+      // the derived address (associated-token-account 34509e4,
+      // program/src/processor.rs:77 to :86), the program returns Ok without
+      // creating anything only when the existing account is owned by the
+      // named token program, its data unpacks as a token account, its owner
+      // matches the named wallet (else InvalidOwner) and its mint matches
+      // the named mint (else InvalidAccountData); otherwise it requires the
+      // account to be owned by the System Program (else IllegalOwner,
+      // processor.rs:88 to :105).
       return effect.idempotent
         ? {
             label: "May create a token account",
@@ -154,12 +162,13 @@ function effectRow(
       // the wallet's.
       const from = `from token account ${where(effect.account)}. Your wallet signs as the owner the instruction names.`;
       // The largest u64 is still an allowance each transfer spends down.
+      const amount =
+        effect.amount === U64_MAX
+          ? `${tokenAmount(U64_MAX, effect.decimals)}, the largest allowance a token account can hold,`
+          : tokenAmount(effect.amount, effect.decimals);
       return {
         label: "Approves a delegate",
-        value:
-          effect.amount === U64_MAX
-            ? `Asks to let ${who} move up to ${U64_MAX} base units, the largest allowance a token account can hold, ${from}`
-            : `Asks to let ${who} move up to ${tokenAmount(effect.amount, effect.decimals)} ${from}`,
+        value: `Asks to let ${who} move up to ${amount} ${from}`,
       };
     }
     case "delegate-revoked":
@@ -277,8 +286,14 @@ function otherText(kind: TransactionSummary["others"][number]["kind"]): string {
       return "A compute budget instruction.";
     case "memo":
       return "A memo. The card does not show its text.";
-    case "token-other":
-      return "A token program instruction whose details are not shown.";
+    case "token-initialize-account":
+      return "A token InitializeAccount instruction.";
+    case "token-sync-native":
+      return "A token SyncNative instruction.";
+    case "token-initialize-account-3":
+      return "A token InitializeAccount3 instruction.";
+    case "token-initialize-immutable-owner":
+      return "A token InitializeImmutableOwner instruction.";
     case "advance-nonce":
       return "Asks to advance a durable nonce.";
     case "sol-transfer":

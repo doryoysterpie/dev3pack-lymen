@@ -412,4 +412,52 @@ describe("the audit of 1856942", () => {
       "Asks your wallet to pay a priority fee of 0.00001 SOL: 50000 micro-lamports per compute unit for 200000 units.",
     );
   });
+
+  it("minor: a maximum checked approval includes its expected decimals", async () => {
+    for (const program of [SPL, T22]) {
+      const card = await cardFor(
+        offline,
+        tx(
+          spl.createApproveCheckedInstruction(
+            account,
+            mint,
+            attacker,
+            user,
+            BigInt("18446744073709551615"),
+            6,
+            [],
+            program,
+          ),
+        ),
+      );
+      assert.equal(
+        rowValue(card, "Approves a delegate"),
+        `Asks to let ${ATTACKER} move up to 18446744073709551615 base units (the instruction expects a mint with 6 decimals), the largest allowance a token account can hold, from token account ${ACCOUNT}. Your wallet signs as the owner the instruction names.`,
+      );
+    }
+  });
+
+  it("minor: InitializeAccount, SyncNative, InitializeAccount3 and InitializeImmutableOwner each get their own row", async () => {
+    for (const [instruction, owed] of [
+      [
+        spl.createInitializeAccountInstruction(account, mint, user, SPL),
+        "A token InitializeAccount instruction.",
+      ],
+      [
+        spl.createSyncNativeInstruction(account, SPL),
+        "A token SyncNative instruction.",
+      ],
+      [
+        spl.createInitializeAccount3Instruction(account, mint, user, T22),
+        "A token InitializeAccount3 instruction.",
+      ],
+      [
+        spl.createInitializeImmutableOwnerInstruction(account, T22),
+        "A token InitializeImmutableOwner instruction.",
+      ],
+    ] as const) {
+      const card = await cardFor(offline, tx(instruction));
+      assert.equal(rowValue(card, "Also in the transaction"), owed);
+    }
+  });
 });

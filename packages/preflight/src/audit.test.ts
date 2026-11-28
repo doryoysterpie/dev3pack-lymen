@@ -122,7 +122,28 @@ describe("audit 2: a freeze or a truncated named instruction is not decoded", ()
   it("SyncNative of the right length is still named", () => {
     const got = summary([spl.createSyncNativeInstruction(tokenAccount)]);
     assert.deepEqual(got.undecoded, []);
-    assert.deepEqual(got.others, [{ instruction: 0, kind: "token-other" }]);
+    assert.deepEqual(got.others, [
+      { instruction: 0, kind: "token-sync-native" },
+    ]);
+  });
+
+  it("each named token instruction gets its own kind in others", () => {
+    const got = summary([
+      spl.createInitializeAccountInstruction(tokenAccount, mint, user),
+      spl.createSyncNativeInstruction(tokenAccount),
+      spl.createInitializeAccount3Instruction(tokenAccount, mint, user),
+      spl.createInitializeImmutableOwnerInstruction(
+        tokenAccount,
+        spl.TOKEN_2022_PROGRAM_ID,
+      ),
+    ]);
+    assert.deepEqual(got.undecoded, []);
+    assert.deepEqual(got.others, [
+      { instruction: 0, kind: "token-initialize-account" },
+      { instruction: 1, kind: "token-sync-native" },
+      { instruction: 2, kind: "token-initialize-account-3" },
+      { instruction: 3, kind: "token-initialize-immutable-owner" },
+    ]);
   });
 });
 

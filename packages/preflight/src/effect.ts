@@ -281,7 +281,10 @@ export function instructionEffect(
     // InitializeAccount, SyncNative, InitializeAccount3 and
     // InitializeImmutableOwner each read their first account as a token
     // account (token :104, :760 and :808; token-2022 :186, :1505 and :1585).
-    case "token-other":
+    case "token-initialize-account":
+    case "token-sync-native":
+    case "token-initialize-account-3":
+    case "token-initialize-immutable-owner":
       return tokenState(decoded.program, [decoded.account], []) ?? OTHER;
     case "advance-nonce":
     case "compute-budget":
