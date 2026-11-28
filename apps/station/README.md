@@ -24,9 +24,9 @@ If a fetch fails, or gets no answer within 10 s, the page clears the QR, shows t
 What the servers serve (`vite.config.ts`):
 
 - **The dev server.** In this folder it serves `index.html`, the `.ts` and `.css` files under `src`, and Vite's dependency cache, where `qrcode` is bundled. Any other file here gets 403, by its path or by `/@fs/`, a key named `organizer.json` in `src` included.
-- **The preview server.** It answers `/` and paths ending `.html`, `.js`, `.css` or `.svg`, and 403 to any other path outside `/api`.
+- **The preview server.** It answers `/` and the files Vite's manifest names, and 403 to any other path outside `/api`.
 - **Both.** They refuse, by name, key and certificate files, keypair files, databases, `.env` files and the `node_modules/@limen` workspace links, except under `/api`, which they forward to the API, so a station named `keys` still works. They send no CORS header.
-- **The build.** It copies no public folder, and it fails when its output holds anything but the page's `.html`, `.js`, `.css` and `.svg` files.
+- **The build.** It copies no public folder, and it fails when its output holds a file Vite's manifest does not name.
 
 The API also refuses to start with an organizer key file inside this folder (see `services/api/README.md`).
 
@@ -40,7 +40,7 @@ npm test -w @limen/station
 
 - 403 from both servers for a stand-in key named `organizer.json` in `build/`, and 403 from the dev server for this folder's `vite.config.ts`, `package.json` and `README.md`, while the page and every module it loads answer 200;
 - that a station named `keys` reaches a stand-in API through both servers' proxy;
-- that a build whose output holds an extra `organizer.json` fails.
+- that a build whose output holds a plugin's stray `organizer.json`, or a `notes.html` left there, fails, and that the preview refuses a `notes.html` added after the build.
 
 `src/page.test.ts` loads the page itself, `src/main.ts`, with a stand-in document and window. It checks:
 

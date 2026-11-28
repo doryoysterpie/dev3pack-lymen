@@ -308,7 +308,7 @@ test("a station named keys reaches the API through the dev and preview servers' 
   }
 });
 
-test("the build fails when its output holds anything but the page's html, js, css and svg", async () => {
+test("the build fails when its output holds a file Vite's manifest does not name, as a plugin's stray organizer.json", async () => {
   const outDir = mkdtempSync(join(tmpdir(), "limen-station-build-"));
   try {
     await assert.rejects(
@@ -331,7 +331,7 @@ test("the build fails when its output holds anything but the page's html, js, cs
           },
         ],
       }),
-      /not the page's html, js, css or svg: organizer\.json/,
+      /not named in Vite's manifest: organizer\.json/,
     );
   } finally {
     rmSync(outDir, { recursive: true, force: true });
@@ -379,5 +379,52 @@ test("in the station folder the dev server serves only source files: a key named
   } finally {
     await dev.close();
     for (const file of written) rmSync(file, { force: true });
+  }
+});
+
+test("a notes.html left in the output folder fails the build, and one added after it is not served by the preview", async () => {
+  const outDir = mkdtempSync(join(tmpdir(), "limen-station-build-"));
+  const config = {
+    configFile: join(APP, "vite.config.ts"),
+    root: APP,
+    logLevel: "silent" as const,
+  };
+  let previewServer: Awaited<ReturnType<typeof preview>> | null = null;
+  try {
+    // A file already in the output folder, kept since emptyOutDir is off.
+    writeFileSync(join(outDir, "notes.html"), `${MARKER}\n`);
+    await assert.rejects(
+      build({ ...config, build: { outDir, emptyOutDir: false } }),
+      /not named in Vite's manifest: notes\.html/,
+    );
+    // A clean build, then the same file dropped in afterwards.
+    await build({ ...config, build: { outDir, emptyOutDir: true } });
+    writeFileSync(join(outDir, "notes.html"), `${MARKER}\n`);
+    previewServer = await preview({
+      ...config,
+      build: { outDir },
+      preview: { port: await freePort(), strictPort: true },
+    });
+    const port = (previewServer.httpServer.address() as AddressInfo).port;
+    const get = async (path: string) => {
+      const res = await fetch(`http://127.0.0.1:${port}${path}`);
+      const body = await res.text();
+      return { status: res.status, body };
+    };
+    const notes = await get("/notes.html");
+    assert.equal(notes.status, 403);
+    assert.ok(!notes.body.includes(MARKER));
+    assert.equal((await get("/.vite/manifest.json")).status, 403);
+    const page = await get("/");
+    assert.equal(page.status, 200);
+    const script = /src="(\/assets\/[^"]+\.js)"/.exec(page.body)?.[1];
+    assert.ok(script !== undefined, "the built page names its script");
+    assert.equal((await get(script)).status, 200);
+  } finally {
+    if (previewServer !== null)
+      await new Promise<void>((resolve) =>
+        previewServer!.httpServer.close(() => resolve()),
+      );
+    rmSync(outDir, { recursive: true, force: true });
   }
 });
