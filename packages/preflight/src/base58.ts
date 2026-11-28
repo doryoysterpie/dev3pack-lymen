@@ -44,6 +44,33 @@ export function decodeBase58(text: string): Uint8Array | null {
   return bytes;
 }
 
+/** Encodes bytes as base58. Each leading zero byte encodes as one "1". */
+export function encodeBase58(bytes: Uint8Array): string {
+  let leadingZeros = 0;
+  while (leadingZeros < bytes.length && bytes[leadingZeros] === 0) {
+    leadingZeros += 1;
+  }
+
+  // Base 58 digits of the value, least significant first.
+  const digits: number[] = [];
+  for (const byte of bytes) {
+    let carry = byte;
+    for (let i = 0; i < digits.length; i += 1) {
+      carry += digits[i] * 256;
+      digits[i] = carry % 58;
+      carry = Math.floor(carry / 58);
+    }
+    while (carry > 0) {
+      digits.push(carry % 58);
+      carry = Math.floor(carry / 58);
+    }
+  }
+
+  let text = "1".repeat(leadingZeros);
+  for (let i = digits.length - 1; i >= 0; i -= 1) text += ALPHABET[digits[i]];
+  return text;
+}
+
 /**
  * Decodes the text as a Solana public key: base58 that decodes to exactly 32
  * bytes. Returns null otherwise. It does not check that the key is on the
