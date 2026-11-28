@@ -1,10 +1,11 @@
 // Rule 8: the command the docs give for making a secret must not print it. Every secret
 // .env.example documents (each variable whose comment asks for at least 32 characters), and every
 // mention of `openssl rand` in .env.example or in any README, must be the one command form that
-// appends the value to .env and prints nothing. Each such command runs here, in a copy of the
-// repository's .env.example, and owes that it prints nothing and leaves a fresh value of at least
-// 32 characters that Node reads from .env. For STATION_DISPLAY_TOKEN and REGISTRATION_SALT the
-// command their errors recommend must be the documented one.
+// appends the value to .env and prints nothing. Each such line runs here whole, with its comment
+// marker and indentation removed, in a copy of the repository's .env.example, and owes that it
+// prints nothing and leaves a fresh value of at least 32 characters that Node reads from .env.
+// For STATION_DISPLAY_TOKEN and REGISTRATION_SALT the command their errors recommend must be the
+// documented one.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
@@ -36,17 +37,19 @@ const RFC_KEYPAIR = [
   ),
 ];
 
-/** The command .env.example documents for `name`: the comment line just above `name=`. */
+/** A documented line as a command: the whole line without its comment marker and indentation. */
+function lineCommand(line: string): string {
+  return line.replace(/^#?\s*/, "").trimEnd();
+}
+
+/** The command .env.example documents for `name`: the whole comment line just above `name=`. */
 function documentedCommand(name: string): string {
   const lines = EXAMPLE.split("\n");
   const at = lines.indexOf(`${name}=`);
   assert.ok(at > 0, `.env.example has a ${name}= line`);
   const comment = lines[at - 1]!;
   assert.match(comment, /^#/, `a comment sits above ${name}=`);
-  return comment
-    .replace(/^#\s*/, "")
-    .replace(/^.*Generate with:\s*/, "")
-    .trim();
+  return lineCommand(comment);
 }
 
 /** The command a diagnostic recommends: the text after its last ": ". */
@@ -127,10 +130,39 @@ test("the REGISTRATION_SALT commands in .env.example and the import error write 
   );
 });
 
-// The one command form that writes a secret without printing it, for the variable it names.
+// The one command form that writes a secret without printing it, for the variable it names. It
+// must be the whole command: nothing may come before or after it on its line.
 const WRITE_COMMAND =
-  /printf '\\n([A-Z][A-Z0-9_]*)=%s\\n' "\$\(openssl rand -base64 32\)" >> \.env/;
+  /^printf '\\n([A-Z][A-Z0-9_]*)=%s\\n' "\$\(openssl rand -base64 32\)" >> \.env$/;
 const MAKES_A_SECRET = /openssl\s+rand/;
+
+/**
+ * Checks one documented line that makes a secret: the whole line, without its comment marker and
+ * indentation, must be the write command, and the whole line is what runs.
+ */
+function assertSecretLine(line: string, where: string): void {
+  const command = lineCommand(line);
+  const match = WRITE_COMMAND.exec(command);
+  assert.ok(
+    match,
+    `${where}: ${JSON.stringify(line)} is not the write command alone`,
+  );
+  assertWritesWithoutPrinting(command, match[1]!);
+}
+
+test("a documented secret line runs whole: a write command with more on its line is refused", () => {
+  const write = `printf '\\nX_TOKEN=%s\\n' "$(openssl rand -base64 32)" >> .env`;
+  for (const line of [write, `#   ${write}`])
+    assert.doesNotThrow(() => assertSecretLine(line, "test"), line);
+  for (const line of [
+    `${write}; cat .env`,
+    `#   ${write} && cat .env`,
+    `echo "$(openssl rand -base64 32)"; ${write}`,
+    `Run ${write} from the repository root.`,
+  ])
+    assert.throws(() => assertSecretLine(line, "test"), line);
+});
+
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 /** The secrets .env.example documents: each NAME= whose comment block asks for 32 characters. */
@@ -176,29 +208,19 @@ test("every secret .env.example documents comes with a command that writes it in
     ["REGISTRATION_SALT", "STATION_DISPLAY_TOKEN", "TRIAGE_TOKEN"],
   );
   for (const { name, comment } of secrets) {
-    const commands = comment
-      .map((c) => WRITE_COMMAND.exec(c))
-      .filter((m) => m !== null);
+    const lines = comment.filter((c) => MAKES_A_SECRET.test(c));
     assert.deepEqual(
-      commands.map((m) => m[1]),
+      lines.map((c) => WRITE_COMMAND.exec(lineCommand(c))?.[1]),
       [name],
-      `the comment above ${name}= gives one command that writes ${name}`,
+      `the comment above ${name}= gives one command, and it writes ${name}`,
     );
-    for (const c of comment) {
-      if (MAKES_A_SECRET.test(c)) {
-        assert.match(c, WRITE_COMMAND, `${name}: ${JSON.stringify(c)}`);
-      }
-    }
-    assertWritesWithoutPrinting(commands[0]![0], name);
+    assertSecretLine(lines[0]!, `.env.example, ${name}`);
   }
 });
 
 test("every openssl rand line in .env.example is a command that writes its secret without printing it", () => {
   for (const line of EXAMPLE.split("\n")) {
-    if (!MAKES_A_SECRET.test(line)) continue;
-    const command = WRITE_COMMAND.exec(line);
-    assert.ok(command, `.env.example: ${JSON.stringify(line)}`);
-    assertWritesWithoutPrinting(command[0], command[1]!);
+    if (MAKES_A_SECRET.test(line)) assertSecretLine(line, ".env.example");
   }
 });
 
@@ -213,11 +235,8 @@ test("every secret command in a README writes into .env without printing", () =>
     readFileSync(file, "utf8")
       .split("\n")
       .forEach((line, i) => {
-        if (!MAKES_A_SECRET.test(line)) return;
-        const where = `${relative(ROOT, file)}:${i + 1}`;
-        const command = WRITE_COMMAND.exec(line);
-        assert.ok(command, `${where} gives a command that prints its secret`);
-        assertWritesWithoutPrinting(command[0], command[1]!);
+        if (MAKES_A_SECRET.test(line))
+          assertSecretLine(line, `${relative(ROOT, file)}:${i + 1}`);
       });
   }
 });
