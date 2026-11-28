@@ -73,6 +73,7 @@ if ("error" in config) {
     fetchQr: (signal) =>
       fetchStationQr(window.fetch.bind(window), "/api", config, signal),
     render,
+    now: () => window.performance.now(),
     setTimeout: (fn, ms) => window.setTimeout(fn, ms),
     clearTimeout: (handle) => window.clearTimeout(handle as number),
   });

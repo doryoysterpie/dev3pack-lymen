@@ -64,6 +64,7 @@ function response(n: number): StationQr {
     issuedAt: 1000 + 30 * n,
     expiresAt: 1060 + 30 * n,
     refreshAfterS: 30,
+    expiresInMs: 60_000,
   };
 }
 
@@ -86,6 +87,7 @@ function wireBody(n: number, station = "st-front") {
     issued_at: r.issuedAt,
     expires_at: r.expiresAt,
     refresh_after_s: r.refreshAfterS,
+    expires_in_ms: r.expiresInMs,
   };
 }
 
@@ -100,6 +102,7 @@ test("the display shows a fresh QR from the API at 0 s, 30 s and 60 s", async ()
       return response(++n);
     },
     render: (view) => shown.push(view),
+    now: () => clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
   });
@@ -122,6 +125,7 @@ test("the display shows a fresh QR from the API at 0 s, 30 s and 60 s", async ()
     issuedAt: 1090,
     expiresAt: 1150,
     refreshAfterS: 30,
+    expiresInMs: 60_000,
   });
 });
 
@@ -138,6 +142,7 @@ test("a failed fetch clears the QR, shows why, and retries after 5 s", async () 
       return response(calls);
     },
     render: (view) => shown.push(view),
+    now: () => clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
   });
@@ -160,6 +165,7 @@ test("stop ends the rotation", async () => {
   const rotation = startRotation({
     fetchQr: async () => response(++calls),
     render: () => {},
+    now: () => clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
   });
@@ -351,6 +357,7 @@ test("a fetch that never answers is abandoned after 10 s, shown as a failure, an
       return Promise.resolve(response(calls));
     },
     render: (view) => shown.push(view),
+    now: () => clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
   });
@@ -384,6 +391,7 @@ test("a QR that outlives its lifetime on screen is cleared and the page says it 
       );
     },
     render: (view) => shown.push(view),
+    now: () => clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
   });
@@ -403,4 +411,38 @@ test("a QR that outlives its lifetime on screen is cleared and the page says it 
     shown.map((v) => v.kind),
     ["qr", "refreshing", "error"],
   );
+});
+
+test("with a 2 s response delay, a shown QR is cleared at its server expiry, not 2 s late", async () => {
+  const clock = fakeClock();
+  const shown: { at: number; kind: string }[] = [];
+  let calls = 0;
+  startRotation({
+    fetchQr: (signal) => {
+      calls++;
+      // The first answer takes 2 s and has 10 s left as it leaves the API; the next one hangs.
+      if (calls === 1)
+        return new Promise<StationQr>((resolve) => {
+          clock.setTimeout(
+            () => resolve({ ...response(1), expiresInMs: 10_000 }),
+            2000,
+          );
+        });
+      return new Promise<StationQr>((_, reject) =>
+        signal.addEventListener("abort", () => reject(new Error("aborted"))),
+      );
+    },
+    render: (view) => shown.push({ at: clock.now, kind: view.kind }),
+    now: () => clock.now,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+  });
+  await flush();
+  await clock.advance(9_999);
+  assert.deepEqual(shown, [{ at: 2000, kind: "qr" }]);
+  await clock.advance(1);
+  assert.deepEqual(shown, [
+    { at: 2000, kind: "qr" },
+    { at: 10_000, kind: "refreshing" },
+  ]);
 });

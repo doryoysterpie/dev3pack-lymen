@@ -42,6 +42,11 @@ export interface ApiContext {
   readonly stationDisplayToken: string;
   /** The current Unix time in whole seconds. */
   readonly now: () => number;
+  /**
+   * The current Unix time in milliseconds, for checks that must not round to the second, such
+   * as a station QR's 60 s window (E-05). Unset: now() * 1000.
+   */
+  readonly nowMs?: () => number;
 }
 
 const STATION_QR_PATH = /^\/stations\/([A-Za-z0-9_-]{1,64})\/qr$/;
@@ -105,7 +110,9 @@ function stationQr(
     sendJson(res, 404, { error: "unknown_station" });
     return;
   }
-  const now = ctx.now();
+  // One reading of the clock serves the session choice, the QR and its remaining time.
+  const nowMs = ctx.nowMs?.() ?? ctx.now() * 1000;
+  const now = Math.floor(nowMs / 1000);
   const session = ctx.db
     .prepare(
       "SELECT id, ends_at FROM sessions WHERE starts_at <= ? AND ? < ends_at ORDER BY starts_at DESC, id LIMIT 1",
@@ -132,6 +139,9 @@ function stationQr(
     // Near a session's end the QR expires early, so the page refreshes when it does and picks
     // up the next session's QR then, rather than waiting the full 30 s with nothing shown.
     refresh_after_s: Math.min(STATION_QR_ROTATION_S, payload.expires_at - now),
+    // How long the QR has left as it leaves the API, to the millisecond. The page counts its
+    // own round trip off this, so it never draws a QR that expired on the way.
+    expires_in_ms: payload.expires_at * 1000 - nowMs,
   });
 }
 
