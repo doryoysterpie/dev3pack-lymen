@@ -4,8 +4,9 @@
 // (default http://127.0.0.1:8787). It is read here, for the proxy.
 //
 // What the servers may serve:
-// - server.fs.allow is this app's folder alone. Vite serves its own client and its dependency
-//   cache by its own exemption, and the page loads with nothing else allowed
+// - server.fs.allow is this app's src folder and index.html, and nothing else in apps/station.
+//   Vite serves its own client and its dependency cache, where the page's one dependency,
+//   qrcode, is bundled, by its own exemption; no node_modules path is allowed
 //   (src/dev-server.test.ts).
 // - server.fs.deny adds, to Vite 8.3.8's six default entries, which a deny list replaces, the
 //   workspace links in node_modules/@limen (one of them leads to services/api), databases, key
@@ -13,9 +14,15 @@
 // - publicDir is false, so no file is copied into the build or served from a public folder.
 // - CORS is off on both servers, so another page on localhost cannot read their answers.
 // - refuseSecretPaths, a middleware ahead of Vite's own on both servers, answers 403 to any
-//   request whose decoded path names one of those kinds of file, because Vite applies fs.deny to
-//   /@fs/ paths but not to a file inside the app folder requested by its own path.
+//   request whose decoded path names one of those kinds of file. It leaves /api requests, which
+//   the proxy forwards, alone, so a station named "keys" still reaches the API.
+// - The preview server answers / and paths ending .html, .js, .css or .svg, and 403 to any
+//   other path outside /api, so it serves the built page and nothing else.
+// - checkBuildOutput fails the build when the output folder holds anything but the page's
+//   .html, .js, .css and .svg files.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { defineConfig, loadEnv, type Plugin } from "vite";
@@ -51,6 +58,10 @@ function refuseSecretPaths(): Plugin {
       res.end();
       return;
     }
+    if (path === "/api" || path.startsWith("/api/")) {
+      next();
+      return;
+    }
     if (SECRET_PATHS.some((pattern) => pattern.test(path))) {
       res.statusCode = 403;
       res.end("Forbidden");
@@ -65,6 +76,48 @@ function refuseSecretPaths(): Plugin {
     },
     configurePreviewServer(server) {
       server.middlewares.use(guard);
+      server.middlewares.use((req, res, next) => {
+        const path = new URL(req.url ?? "/", "http://station.invalid").pathname;
+        if (
+          path === "/" ||
+          path === "/api" ||
+          path.startsWith("/api/") ||
+          PAGE_FILE.test(path)
+        ) {
+          next();
+          return;
+        }
+        res.statusCode = 403;
+        res.end("Forbidden");
+      });
+    },
+  };
+}
+
+/** The kinds of file the built page is made of. */
+const PAGE_FILE = /\.(html|js|css|svg)$/;
+
+/** Every file under `dir`, as paths relative to it. */
+function filesUnder(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory()
+      ? filesUnder(join(dir, entry.name)).map((f) => join(entry.name, f))
+      : [entry.name],
+  );
+}
+
+function checkBuildOutput(): Plugin {
+  return {
+    name: "limen-check-build-output",
+    apply: "build",
+    writeBundle(options) {
+      const dir = options.dir;
+      if (dir === undefined) return;
+      const others = filesUnder(dir).filter((file) => !PAGE_FILE.test(file));
+      if (others.length > 0)
+        throw new Error(
+          `the station build output holds files that are not the page's html, js, css or svg: ${others.join(", ")}`,
+        );
     },
   };
 }
@@ -86,7 +139,7 @@ export default defineConfig(({ mode }) => {
     },
   };
   return {
-    plugins: [refuseSecretPaths()],
+    plugins: [refuseSecretPaths(), checkBuildOutput()],
     publicDir: false,
     server: {
       host: "127.0.0.1",
@@ -95,7 +148,7 @@ export default defineConfig(({ mode }) => {
       proxy,
       cors: false,
       fs: {
-        allow: [appRoot],
+        allow: [join(appRoot, "src"), join(appRoot, "index.html")],
         deny: [
           ".env",
           ".env.*",

@@ -19,7 +19,14 @@ The page keeps the token in memory and sends it in the `Authorization` header of
 
 If a fetch fails, or gets no answer within 10 s, the page clears the QR, shows the reason, and tries again after 5 s. Every time the page acts on comes from the QR's signed payload, `issued_at` and `expires_at`, and none from the answer's other fields. The API signed the QR within a second after `issued_at`, while the request was out. So on the page's clock the QR expires no earlier than its deadline, `sentAt + (expires_at - issued_at) * 1000 - 999` ms, where `sentAt` is when the request left. A QR past its deadline when it arrives is not drawn, and the next one is fetched at once. A shown QR is cleared at its deadline, and the page says it is refreshing. The deadline is checked again after the QR is drawn, just before it is shown.
 
-The servers' `fs.allow` is this folder, and Vite also serves its own client and dependency cache. Both servers also refuse, by name, key and certificate files, keypair files, databases, `.env` files and the `node_modules/@limen` workspace links, and send no CORS header (`vite.config.ts`). The build copies no public folder.
+What the servers serve (`vite.config.ts`):
+
+- **The dev server.** Its `fs.allow` is `src` and `index.html`, and nothing else in this folder. Vite serves its own client and its dependency cache, where `qrcode` is bundled, by its own exemption.
+- **The preview server.** It answers `/` and paths ending `.html`, `.js`, `.css` or `.svg`, and 403 to any other path outside `/api`.
+- **Both.** They refuse, by name, key and certificate files, keypair files, databases, `.env` files and the `node_modules/@limen` workspace links, except under `/api`, which they forward to the API, so a station named `keys` still works. They send no CORS header.
+- **The build.** It copies no public folder, and it fails when its output holds anything but the page's `.html`, `.js`, `.css` and `.svg` files.
+
+The API also refuses to start with an organizer key file inside this folder (see `services/api/README.md`).
 
 ## Test
 
@@ -27,7 +34,11 @@ The servers' `fs.allow` is this folder, and Vite also serves its own client and 
 npm test -w @limen/station
 ```
 
-`src/dev-server.test.ts` starts the dev server with this app's `vite.config.ts`. It puts uniquely named stand-ins for a key file in `keys/`, keypair files, databases and a plain repository file where the repository keeps such files, and checks that each gets 403 or 404. The requests use the `/@fs/` path, `?raw` or `?import&raw`, the `node_modules/@limen/api` workspace link, and the station folder's own path. It also checks that the preview server, after a build to a temporary folder, refuses a station keypair by its name and by `/@fs/` and a database through the workspace link; that neither server sends a CORS header with the page; and that the dev server still serves the page module and the preview server the page.
+`src/dev-server.test.ts` starts the dev server with this app's `vite.config.ts`. It puts uniquely named stand-ins for a key file in `keys/`, keypair files, databases and a plain repository file where the repository keeps such files, and checks that each gets 403 or 404. The requests use the `/@fs/` path, `?raw` or `?import&raw`, the `node_modules/@limen/api` workspace link, and the station folder's own path. It also checks that the preview server, after a build to a temporary folder, refuses a station keypair by its name and by `/@fs/` and a database through the workspace link; that neither server sends a CORS header with the page; and that the dev server still serves the page module and the preview server the page. Three more tests owe:
+
+- 403 from both servers for a stand-in key named `organizer.json` in `build/`, and 403 from the dev server for this folder's `vite.config.ts`, `package.json` and `README.md`, while the page and every module it loads answer 200;
+- that a station named `keys` reaches a stand-in API through both servers' proxy;
+- that a build whose output holds an extra `organizer.json` fails.
 
 `src/page.test.ts` loads the page itself, `src/main.ts`, with a stand-in document and window. It checks:
 

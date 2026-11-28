@@ -2,14 +2,21 @@
 // loads .env), loads the organizer key, migrates the database and serves HTTP.
 import type { Server } from "node:http";
 import { isIPv6, type AddressInfo } from "node:net";
+import { fileURLToPath } from "node:url";
 
 import { chainabuseHook, parseChainabuseMode } from "./chainabuse.ts";
 import { openDatabase } from "./db.ts";
 import { isMainModule } from "./main-module.ts";
 import { loadOrganizerKey } from "./organizer-key.ts";
+import { isInsideFolder } from "./served-path.ts";
 import { API_VERSION, createApiServer } from "./server.ts";
 import { parseStationDisplaySecret } from "./station-token.ts";
 import { bundledLists, type DomainLists } from "./triage.ts";
+
+/** The station page's folder, which its dev server serves (apps/station/vite.config.ts). */
+const STATION_APP = fileURLToPath(
+  new URL("../../../apps/station", import.meta.url),
+);
 
 export interface StartedApi {
   readonly server: Server;
@@ -41,6 +48,11 @@ export async function start(
 ): Promise<StartedApi> {
   // Loaded first so a bad key file stops start-up before anything else happens.
   const organizerKey = loadOrganizerKey(env.ORGANIZER_KEYPAIR_PATH);
+  // loadOrganizerKey has read the file, so its path is set and resolves.
+  if (isInsideFolder(env.ORGANIZER_KEYPAIR_PATH as string, STATION_APP))
+    throw new Error(
+      "The file ORGANIZER_KEYPAIR_PATH names is inside apps/station, which the station page's dev server serves. Move it out of the repository.",
+    );
   const stationDisplayToken = parseStationDisplaySecret(
     env.STATION_DISPLAY_TOKEN,
   );
