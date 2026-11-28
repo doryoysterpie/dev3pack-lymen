@@ -37,6 +37,14 @@ export type Place =
   | { readonly address: string }
   | { readonly table: string; readonly index: number };
 
+/**
+ * What a decoded instruction the user's wallet pays for or authorizes asks
+ * for, as decoded. An effect does not say the instruction succeeds: a
+ * transfer whose source and destination are one account moves nothing, and
+ * the token programs refuse a SetAuthority that removes a token account's
+ * owner and a close into the account itself, yet each is listed as asked.
+ * The card says which (apps/mobile/src/tx/card-text.ts).
+ */
 export type Effect =
   | {
       readonly kind: "sol-out";
@@ -166,8 +174,9 @@ export interface Signers {
 export interface TransactionSummary {
   readonly effects: readonly Effect[];
   /**
-   * Decoded instructions that the user's wallet does not authorize, each cut
-   * to its index and kind.
+   * Decoded instructions that name the user's wallet neither as their payer
+   * nor as their authority, each cut to its index and kind. The wallet's
+   * signature may still count toward one, as a signer of a multisig.
    */
   readonly others: readonly {
     readonly instruction: number;
