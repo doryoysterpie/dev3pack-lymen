@@ -666,7 +666,7 @@ describe("the owner's audit: what the card claims", () => {
       },
       {
         label: "Changes an authority",
-        value: `Asks to set no close authority on ${userTokenAccount}. If accepted, the account's owner can still close it.`,
+        value: `Asks to set no close authority on ${userTokenAccount}.`,
       },
       {
         label: "Changes an authority",
@@ -906,8 +906,14 @@ describe("the owner's audit: what the card claims", () => {
       "truncated",
       "unsupported-version",
     ] as const) {
+      const card = transactionCardText(LINK, null, {
+        kind: "malformed",
+        problem,
+      });
+      // Ruling 20a, item 7: the heading says limen cannot read it, too.
+      assert.equal(card.title, "limen cannot read this transaction");
       assert.equal(
-        transactionCardText(LINK, null, { kind: "malformed", problem }).status,
+        card.status,
         `limen flags this transaction: limen cannot read it as a legacy or version 0 Solana transaction (${problem}).`,
       );
     }
