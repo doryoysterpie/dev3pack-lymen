@@ -65,3 +65,54 @@ describe("m10: the transaction request link has a time limit", () => {
     );
   });
 });
+
+describe("re-audit 2, item 7: a redirected request is refused", () => {
+  const REDIRECTED =
+    "redirected: the request was redirected to another address, so limen will not show what it answered";
+  // A link that answers a transaction from the given final URL.
+  const from =
+    (url: string): Fetch =>
+    async () => ({
+      ok: true,
+      status: 200,
+      url,
+      text: JSON.stringify({ transaction: "AQ==" }),
+    });
+
+  it("refuses an answer from another host", async () => {
+    assert.equal(
+      await reasonOf(from("https://elsewhere.example/solana-pay?order=7")),
+      REDIRECTED,
+    );
+  });
+
+  it("refuses an answer from another path or query on the same host", async () => {
+    assert.equal(
+      await reasonOf(from("https://pay.example/other?order=7")),
+      REDIRECTED,
+    );
+    assert.equal(
+      await reasonOf(from("https://pay.example/solana-pay?order=8")),
+      REDIRECTED,
+    );
+  });
+
+  it("refuses an answer that gives no final URL, or one written differently", async () => {
+    assert.equal(await reasonOf(from("")), REDIRECTED);
+    assert.equal(
+      await reasonOf(from("https://PAY.example/solana-pay?order=7")),
+      REDIRECTED,
+    );
+  });
+
+  it("reads an answer from the link itself, whose fragment is never sent", async () => {
+    assert.equal(await reasonOf(from(LINK)), "answered");
+    const answer = await requestTransaction(
+      from(LINK),
+      `${LINK}#top`,
+      ACCOUNT,
+      50,
+    );
+    assert.deepEqual(answer, { transaction: "AQ==", message: null });
+  });
+});
