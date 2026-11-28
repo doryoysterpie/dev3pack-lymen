@@ -136,8 +136,9 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
 
 /**
  * The value of `name` in an address fragment such as "#token=abc&x=1". Percent escapes are
- * decoded, but "+" stays "+": the fragment is not form data, and a base64 token such as
- * `openssl rand -base64 32` makes often holds "+", "/" and "=".
+ * decoded, but "+" stays "+", since the fragment is not form data. The display token itself is
+ * a base64url HMAC (services/api/src/station-token.ts), with no "+", "/" or "=", so neither
+ * rule changes it.
  */
 export function fragmentParam(hash: string, name: string): string | null {
   for (const part of hash.replace(/^#/, "").split("&")) {
