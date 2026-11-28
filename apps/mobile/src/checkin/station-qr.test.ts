@@ -20,6 +20,8 @@ const FIXTURE = JSON.parse(
   valid: string;
   stranger: string;
   tampered: string;
+  cut_short: string;
+  cut_at_end: string;
 };
 const T = FIXTURE.issued_at;
 const ALLOWLIST = new Set([FIXTURE.organizer_signer_id]);
@@ -81,6 +83,20 @@ test("an expired QR is refused: ok at 60 s, expired at 61 s", () => {
   assert.equal(reasonAt(FIXTURE.valid, T + 60.001), "expired");
   assert.equal(reasonAt(FIXTURE.valid, T + 60.999), "expired");
   assert.equal(reasonAt(FIXTURE.valid, T - 6), "not_yet_valid");
+});
+
+test("a QR cut short by its session's end is refused from its expires_at on, as E-03 does", () => {
+  // Issued at T with expires_at T + 30: the session ends then, and the API issues for the next
+  // session (or none) from that instant, so the QR is refused at it, not 1 ms later.
+  assert.equal(reasonAt(FIXTURE.cut_short, T + 30 - 0.001), "ok");
+  assert.equal(reasonAt(FIXTURE.cut_short, T + 30), "expired");
+  // E-03 cuts a QR whose 60 s would end exactly at the session's end to 59 s, so it reads as
+  // cut short too and is refused from T + 59.
+  assert.equal(reasonAt(FIXTURE.cut_at_end, T + 59 - 0.001), "ok");
+  assert.equal(reasonAt(FIXTURE.cut_at_end, T + 59), "expired");
+  // A full-length QR keeps its 60 s: ok at exactly 60,000 ms, expired 1 ms later.
+  assert.equal(reasonAt(FIXTURE.valid, T + 60), "ok");
+  assert.equal(reasonAt(FIXTURE.valid, T + 60.001), "expired");
 });
 
 test("a QR with one payload byte changed is refused as bad_signature", () => {

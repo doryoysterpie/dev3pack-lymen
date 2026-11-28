@@ -2,19 +2,19 @@
 
 The app half of the check-in flow (E-05). The backend half is `POST /checkins` in `services/api/src/checkin.ts` (#45). When a scanned QR is a station QR, `App.tsx` shows `CheckinPanel` under it.
 
-| File                | What it does                                                                                                                                                                            |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `station-qr.ts`     | Verifies a station QR on the device with E-03's rules, in E-03's order: allowlisted signer, Ed25519 signature, the five payload fields, no more than 60 s after issue, in milliseconds. |
-| `ed25519.ts`        | The device's Ed25519, `@noble/curves` with strict RFC 8032 checks (`zip215: false`), the rule the backend's OpenSSL applies.                                                            |
-| `message.ts`        | The check-in message the wallet signs, byte for byte the text the backend rebuilds, and the registration ID check (ASCII letters, digits, `_` and `-`).                                 |
-| `mwa-signer.ts`     | Signs through Mobile Wallet Adapter: authorize on devnet, build the message for the account's base58 address, sign, and check the signature locally before anything is sent.            |
-| `mwa.ts`            | Binds `mwa-signer.ts` to the real `transact` from `@solana-mobile/mobile-wallet-adapter-protocol`. Only the app imports it.                                                             |
-| `client.ts`         | Posts `{ qr, wallet, registration_id, signature }` to `<EXPO_PUBLIC_API_URL>/checkins` and turns each answer into a sentence for the participant.                                       |
-| `flow.ts`           | Runs a check-in: verify the QR, check the registration ID, have the wallet sign, post. Nothing reaches the wallet or the server until the earlier steps pass.                           |
-| `CheckinPanel.tsx`  | The registration ID field, the Check in button and the answer.                                                                                                                          |
-| `config.ts`         | Reads `EXPO_PUBLIC_API_URL` (the name the report panel uses too) and `EXPO_PUBLIC_STATION_SIGNERS`, the allowlisted station signer IDs.                                                 |
-| `wallet-address.ts` | Turns an MWA account's base64 public key into its base58 address, which the backend takes.                                                                                              |
-| `base64.ts`         | Strict base64 and base64url, without `Buffer`.                                                                                                                                          |
+| File                | What it does                                                                                                                                                                                                                                 |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `station-qr.ts`     | Verifies a station QR on the device with E-03's rules, in E-03's order: allowlisted signer, Ed25519 signature, the five payload fields, no more than 60 s after issue, in milliseconds, and a cut-short QR refused from its `expires_at` on. |
+| `ed25519.ts`        | The device's Ed25519, `@noble/curves` with strict RFC 8032 checks (`zip215: false`), the rule the backend's OpenSSL applies.                                                                                                                 |
+| `message.ts`        | The check-in message the wallet signs, byte for byte the text the backend rebuilds, and the registration ID check (ASCII letters, digits, `_` and `-`).                                                                                      |
+| `mwa-signer.ts`     | Signs through Mobile Wallet Adapter: authorize on devnet, build the message for the account's base58 address, sign, and check the signature locally before anything is sent.                                                                 |
+| `mwa.ts`            | Binds `mwa-signer.ts` to the real `transact` from `@solana-mobile/mobile-wallet-adapter-protocol`. Only the app imports it.                                                                                                                  |
+| `client.ts`         | Posts `{ qr, wallet, registration_id, signature }` to `<EXPO_PUBLIC_API_URL>/checkins` and turns each answer into a sentence for the participant.                                                                                            |
+| `flow.ts`           | Runs a check-in: verify the QR, check the registration ID, have the wallet sign, post. Nothing reaches the wallet or the server until the earlier steps pass.                                                                                |
+| `CheckinPanel.tsx`  | The registration ID field, the Check in button and the answer.                                                                                                                                                                               |
+| `config.ts`         | Reads `EXPO_PUBLIC_API_URL` (the name the report panel uses too) and `EXPO_PUBLIC_STATION_SIGNERS`, the allowlisted station signer IDs.                                                                                                      |
+| `wallet-address.ts` | Turns an MWA account's base64 public key into its base58 address, which the backend takes.                                                                                                                                                   |
+| `base64.ts`         | Strict base64 and base64url, without `Buffer`.                                                                                                                                                                                               |
 
 Every module but `mwa.ts` and `CheckinPanel.tsx` is pure TypeScript with no React Native imports, so `npm test --workspace @limen/mobile` runs the code the app runs. The tests drive the wallet through a fake `transact`.
 
@@ -30,6 +30,7 @@ Set both when building the app. Expo inlines them into the bundle, so neither ma
 - `station-qr.test.ts`: E-03's own fixture QRs (`fixtures/station-qr/e05-app.json`, made by E-03's `issueStationQr`) verify to the answers E-03's verifier gives:
   - a valid QR verifies to its exact payload;
   - an expired one is accepted at 60 s and refused at 60.001 s, 60.999 s and 61 s;
+  - a QR cut short by its session's end is accepted 1 ms before its `expires_at` and refused at it, including one E-03 cut to 59 s because its 60 s would have ended exactly at the session's end;
   - one changed payload byte gives `bad_signature`, and no QR with any single character changed is accepted;
   - a key off the allowlist gives `signer_not_allowlisted`.
 - `ed25519.test.ts`: `@noble/curves` agrees with Node's OpenSSL on the RFC 8032 vectors, on the fixture QRs and on 200 random signatures, valid and altered.

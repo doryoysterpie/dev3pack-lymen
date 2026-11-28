@@ -6,8 +6,9 @@
 // prefix, shape, version, canonical base64url signer, signer on the allowlist, canonical
 // signature, Ed25519 over the ASCII text "limen:station:v1.<payload>", exactly the five payload
 // fields, a window of at most 60 s, issued no more than 5 s ahead of the device clock, no more
-// than 60 s after issued_at and not past expires_at, measured in milliseconds. Ed25519 itself is
-// passed in, so this module stays pure.
+// than 60 s after issued_at and not past expires_at, measured in milliseconds, and a cut-short QR
+// (expires_at < issued_at + 60) refused from its expires_at on. Ed25519 itself is passed in, so
+// this module stays pure.
 
 import { decodeBase64Url } from "./base64.ts";
 
@@ -162,9 +163,15 @@ export function verifyStationQrOnDevice(
   const issuedMs = parsed.issued_at * 1000;
   if (options.nowMs < issuedMs - CLOCK_SKEW_S * 1000)
     return reject("not_yet_valid");
+  // As E-03's verifyStationQr: a full-length QR is accepted up to and including 60,000 ms after
+  // issue. A cut-short QR (expires_at < issued_at + 60) is refused from its expires_at on, since
+  // E-03 cuts short every QR whose 60 s would reach its session's end, to that end or earlier.
+  const cutShort = parsed.expires_at < parsed.issued_at + LIFETIME_S;
+  const expiresMs = parsed.expires_at * 1000;
   if (
     options.nowMs - issuedMs > LIFETIME_S * 1000 ||
-    options.nowMs > parsed.expires_at * 1000
+    options.nowMs > expiresMs ||
+    (cutShort && options.nowMs >= expiresMs)
   ) {
     return reject("expired");
   }
