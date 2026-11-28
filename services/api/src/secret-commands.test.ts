@@ -1,13 +1,21 @@
-// Rule 8: the command the docs give for making a secret must not print it. For each secret in
-// .env.example (E-03's STATION_DISPLAY_TOKEN and E-07's REGISTRATION_SALT) this runs the command
-// .env.example documents and the one the start-up diagnostic recommends, in a copy of the
-// repository's .env.example, and owes that each prints nothing and leaves a fresh value of at
-// least 32 characters that Node reads from .env.
+// Rule 8: the command the docs give for making a secret must not print it. Every secret
+// .env.example documents (each variable whose comment asks for at least 32 characters), and every
+// mention of `openssl rand` in .env.example or in any README, must be the one command form that
+// appends the value to .env and prints nothing. Each such command runs here, in a copy of the
+// repository's .env.example, and owes that it prints nothing and leaves a fresh value of at least
+// 32 characters that Node reads from .env. For STATION_DISPLAY_TOKEN and REGISTRATION_SALT the
+// command their errors recommend must be the documented one.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -117,4 +125,99 @@ test("the REGISTRATION_SALT commands in .env.example and the import error write 
     () => loadRegistrationSalt(undefined),
     (err: Error) => recommendedCommand(err.message) === documented,
   );
+});
+
+// The one command form that writes a secret without printing it, for the variable it names.
+const WRITE_COMMAND =
+  /printf '\\n([A-Z][A-Z0-9_]*)=%s\\n' "\$\(openssl rand -base64 32\)" >> \.env/;
+const MAKES_A_SECRET = /openssl\s+rand/;
+const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+
+/** The secrets .env.example documents: each NAME= whose comment block asks for 32 characters. */
+function documentedSecrets(): { name: string; comment: string[] }[] {
+  const lines = EXAMPLE.split("\n");
+  const found: { name: string; comment: string[] }[] = [];
+  lines.forEach((line, i) => {
+    const match = /^([A-Z][A-Z0-9_]*)=$/.exec(line);
+    if (match === null) return;
+    const comment: string[] = [];
+    for (let j = i - 1; j >= 0 && lines[j]!.startsWith("#"); j--) {
+      comment.unshift(lines[j]!);
+    }
+    if (comment.some((c) => /at least 32 characters/.test(c))) {
+      found.push({ name: match[1]!, comment });
+    }
+  });
+  return found;
+}
+
+/** Every README.md in the repository, outside dependencies and build output. */
+function readmes(dir: string = ROOT): string[] {
+  const skip = new Set([
+    "node_modules",
+    ".git",
+    "dist",
+    "build",
+    "android",
+    "ios",
+  ]);
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.isDirectory()) {
+      return skip.has(entry.name) ? [] : readmes(join(dir, entry.name));
+    }
+    return entry.name === "README.md" ? [join(dir, entry.name)] : [];
+  });
+}
+
+test("every secret .env.example documents comes with a command that writes it into .env without printing it", () => {
+  const secrets = documentedSecrets();
+  assert.deepEqual(
+    secrets.map((s) => s.name),
+    ["REGISTRATION_SALT", "STATION_DISPLAY_TOKEN", "TRIAGE_TOKEN"],
+  );
+  for (const { name, comment } of secrets) {
+    const commands = comment
+      .map((c) => WRITE_COMMAND.exec(c))
+      .filter((m) => m !== null);
+    assert.deepEqual(
+      commands.map((m) => m[1]),
+      [name],
+      `the comment above ${name}= gives one command that writes ${name}`,
+    );
+    for (const c of comment) {
+      if (MAKES_A_SECRET.test(c)) {
+        assert.match(c, WRITE_COMMAND, `${name}: ${JSON.stringify(c)}`);
+      }
+    }
+    assertWritesWithoutPrinting(commands[0]![0], name);
+  }
+});
+
+test("every openssl rand line in .env.example is a command that writes its secret without printing it", () => {
+  for (const line of EXAMPLE.split("\n")) {
+    if (!MAKES_A_SECRET.test(line)) continue;
+    const command = WRITE_COMMAND.exec(line);
+    assert.ok(command, `.env.example: ${JSON.stringify(line)}`);
+    assertWritesWithoutPrinting(command[0], command[1]!);
+  }
+});
+
+test("every secret command in a README writes into .env without printing", () => {
+  const files = readmes();
+  assert.ok(
+    files.some(
+      (f) => relative(ROOT, f) === join("services", "api", "README.md"),
+    ),
+  );
+  for (const file of files) {
+    readFileSync(file, "utf8")
+      .split("\n")
+      .forEach((line, i) => {
+        if (!MAKES_A_SECRET.test(line)) return;
+        const where = `${relative(ROOT, file)}:${i + 1}`;
+        const command = WRITE_COMMAND.exec(line);
+        assert.ok(command, `${where} gives a command that prints its secret`);
+        assertWritesWithoutPrinting(command[0], command[1]!);
+      });
+  }
 });
