@@ -79,9 +79,9 @@ function response(n: number): StationQr {
 function wireBody(
   n: number,
   station = "st-front",
-  signed: { issuedAt: number; expiresAt: number } = response(n),
+  payloadTimes: { issuedAt: number; expiresAt: number } = response(n),
 ) {
-  const r = { ...response(n), ...signed };
+  const r = { ...response(n), ...payloadTimes };
   const payload = Buffer.from(
     JSON.stringify({
       station,
@@ -135,8 +135,8 @@ test("the display shows a fresh QR from the API at 0 s, 30 s and 60 s", async ()
     session: "day-2",
     issuedAt: 1090,
     expiresAt: 1150,
-    // Fetched at 60 s: the earlier of its signed expiry, 1150 s, and 60 s of signed window after
-    // the request left, less the 5 s skew.
+    // Fetched at 60 s: the earlier of its payload's expiry, 1150 s, and its 60 s window after the
+    // request left, less the 5 s skew.
     deadline: 60_000 + 60_000 - 5_000,
   });
 });
@@ -223,7 +223,7 @@ test("one fetch asks the API for the station's QR with the token and returns its
   ]);
 });
 
-test("an answer whose QR is signed for another station, or carries no payload, is refused", async () => {
+test("an answer whose QR's payload names another station, or that carries no payload, is refused", async () => {
   const config = { station: "st-front", token: "tok" };
   const answering = (body: unknown) =>
     (async () =>
@@ -371,10 +371,10 @@ test("a fetch that does not answer is abandoned after 10 s, shown as a failure, 
 });
 
 /**
- * A fetch that answers after `delayMs` on the fake clock with a QR signed for `windowS` seconds,
- * while the answer's own expires_at field claims 60 s.
+ * A fetch that answers after `delayMs` on the fake clock with a QR whose payload gives a window of
+ * `windowS` seconds, while the answer's own expires_at field claims 60 s.
  */
-function signedAnswer(
+function payloadAnswer(
   clock: ReturnType<typeof fakeClock>,
   delayMs: number,
   windowS: number,
@@ -389,7 +389,7 @@ function signedAnswer(
   }) as unknown as typeof fetch;
 }
 
-test("a QR signed for 20 s carries the deadline 15 s after its request left, 5 s early, and the next fetch comes then", async () => {
+test("a QR whose payload gives 20 s carries the deadline 15 s after its request left, 5 s early, and the next fetch comes then", async () => {
   const clock = fakeClock();
   const fetchedAt: number[] = [];
   const deadlines: number[] = [];
@@ -430,7 +430,7 @@ test("with a 2 s response delay, the deadline is counted from when the request l
   startRotation({
     fetchQr: (signal) => {
       calls++;
-      // The first answer takes 2 s and is signed for 10 s; the next fetch hangs.
+      // The first answer takes 2 s and its payload gives 10 s; the next fetch hangs.
       if (calls === 1)
         return new Promise<StationQr>((resolve) => {
           clock.setTimeout(
@@ -455,8 +455,8 @@ test("with a 2 s response delay, the deadline is counted from when the request l
   assert.deepEqual(deadlines, [{ at: 2000, deadline: 10_000 - 5_000 }]);
 });
 
-test("a genuine full-length QR issued 2 minutes ago is not drawn, and the next fetch waits the retry delay", async () => {
-  // The page's clock reads T; the API signed this QR at T - 120 s for 60 s.
+test("a full-length QR issued 2 minutes ago, by its payload, is not drawn, and the next fetch waits the retry delay", async () => {
+  // The page's clock reads T; the QR's payload gives T - 120 s and a 60 s window.
   const T = 1_795_000_000;
   const clock = fakeClock(T * 1000);
   const shown: string[] = [];
@@ -491,12 +491,12 @@ test("a genuine full-length QR issued 2 minutes ago is not drawn, and the next f
   assert.equal(calls, 2, "the next fetch comes after the retry delay");
 });
 
-test("the deadline and the next fetch come from the signed times, not from the answer's other fields", async () => {
-  // The answer's expires_at claims 60 s; the QR itself is signed for 8 s.
+test("the deadline and the next fetch come from the payload's times, not from the answer's other fields", async () => {
+  // The answer's expires_at claims 60 s; the QR's payload gives 8 s.
   const clock = fakeClock();
   const fetchedAt: number[] = [];
   const shown: { at: number; kind: string }[] = [];
-  const answer = signedAnswer(clock, 0, 8);
+  const answer = payloadAnswer(clock, 0, 8);
   startRotation({
     fetchQr: (signal) => {
       fetchedAt.push(clock.now);
@@ -516,20 +516,20 @@ test("the deadline and the next fetch come from the signed times, not from the a
   });
   await clock.advance(0);
   assert.deepEqual(shown, [{ at: 0, kind: "qr" }]);
-  // The signed window is 8 s, so the next fetch comes 5 s before it ends, at 3 s, not at the
-  // answer's 30 s.
+  // The payload's window is 8 s, so the next fetch comes 5 s before it ends, at 3 s, not at the
+  // 30 s rotation or by the answer's expires_at.
   await clock.advance(2_999);
   assert.deepEqual(fetchedAt, [0]);
   await clock.advance(1);
   assert.deepEqual(fetchedAt, [0, 3_000]);
 });
 
-test("a QR whose signed window has passed when it arrives is not drawn, whatever the answer's other fields say", async () => {
+test("a QR whose payload's window has passed when it arrives is not drawn, whatever the answer's other fields say", async () => {
   // Signed for 1 s, arriving 2 s after the request left; the answer's expires_at claims 60 s.
   const clock = fakeClock();
   const shown: { at: number; kind: string }[] = [];
   let calls = 0;
-  const late = signedAnswer(clock, 2000, 1);
+  const late = payloadAnswer(clock, 2000, 1);
   startRotation({
     fetchQr: (signal) => {
       calls++;
@@ -556,7 +556,7 @@ test("a QR whose signed window has passed when it arrives is not drawn, whatever
   assert.deepEqual(shown, [{ at: 2000, kind: "refreshing" }]);
 });
 
-test("with the station's clock 2 s behind the API's, the QR stops showing 5 s before its signed window ends, still before the API's expiry", async () => {
+test("with the station's clock 2 s behind the API's, the QR stops showing 5 s before its window ends, still before the API's expiry", async () => {
   const T = 1_795_000_000;
   // The API signs at T for 60 s; the station's clock reads T - 2 s.
   const clock = fakeClock(T * 1000 - 2000);
