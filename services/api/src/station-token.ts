@@ -1,0 +1,27 @@
+// Station display credentials (E-03). STATION_DISPLAY_TOKEN is a secret that stays with the API.
+// Each station's display page holds its own token, derived from that secret and the station
+// ID, so the token a page holds gets QRs for its own station and no other.
+import { createHmac } from "node:crypto";
+
+/** The shortest STATION_DISPLAY_TOKEN accepted. */
+export const MIN_STATION_SECRET_LENGTH = 32;
+
+/** Reads STATION_DISPLAY_TOKEN. The error says whether it is unset or short, never what it holds. */
+export function parseStationDisplaySecret(value: string | undefined): string {
+  if (value === undefined || value.length < MIN_STATION_SECRET_LENGTH) {
+    throw new Error(
+      `STATION_DISPLAY_TOKEN must be set to at least ${MIN_STATION_SECRET_LENGTH} characters (${value === undefined || value === "" ? "it is not set" : "it is too short"}). To add one to .env without printing it, run from the repository root: printf '\\nSTATION_DISPLAY_TOKEN=%s\\n' "$(openssl rand -base64 32)" >> .env`,
+    );
+  }
+  return value;
+}
+
+/**
+ * The display token for `station`: HMAC-SHA256, keyed with the secret, of
+ * "limen:station-display:v1:<station>", in base64url without padding (43 characters).
+ */
+export function stationDisplayToken(secret: string, station: string): string {
+  return createHmac("sha256", secret)
+    .update(`limen:station-display:v1:${station}`, "utf8")
+    .digest("base64url");
+}

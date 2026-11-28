@@ -1,5 +1,6 @@
 // Station display page (E-03). Shows the signed station QR and replaces it every 30 s.
-// Open it as /?station=<station ID>#token=<STATION_DISPLAY_TOKEN>. The token sits in the
+// Open it as /?station=<station ID>#token=<that station's display token>, the address
+// `npm run station-link -w @limen/api` writes. The token sits in the
 // fragment, which the browser never sends to a server, and is removed from the address bar
 // once read. Requests go to /api, which the Vite server forwards to the limen API.
 import QRCode from "qrcode";
