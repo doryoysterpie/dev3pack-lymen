@@ -37,6 +37,8 @@ export type StationView =
   | { readonly kind: "error"; readonly message: string }
   | { readonly kind: "refreshing" };
 
+/** The API's rotation interval: a new QR every 30 s. */
+export const ROTATION_S = 30;
 export const RETRY_AFTER_MS = 5_000;
 /** A fetch that takes longer than this is abandoned and retried. */
 export const FETCH_TIMEOUT_MS = 10_000;
@@ -90,7 +92,7 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
       if (stopped) return;
       clearStale();
       // The QR's time left, less the whole round trip: the API may have issued it as the
-      // request left, so this is the most that can be left.
+      // request left, so this is the least that can be left.
       const elapsed = deps.now() - sentAt;
       const left = res.expiresInMs - elapsed;
       if (left <= 0) {
@@ -211,7 +213,14 @@ export function stationPayloadOf(qr: string): {
 
 /** The caption under a shown QR: its signed station and session, and the server's interval. */
 export function captionFor(view: StationQr): string {
-  return `Station ${view.station}, session ${view.session}. Next QR in ${view.refreshAfterS} s.`;
+  // A statement of the interval, not a countdown, since the caption is not updated while the QR
+  // is shown. The API asks for a refresh in under 30 s only when the QR expires at its
+  // session's end.
+  const when =
+    view.refreshAfterS >= ROTATION_S
+      ? `A new QR every ${ROTATION_S} s.`
+      : "This QR lasts until the session ends.";
+  return `Station ${view.station}, session ${view.session}. ${when}`;
 }
 
 function isQrResponse(value: unknown): value is StationQrResponse {
