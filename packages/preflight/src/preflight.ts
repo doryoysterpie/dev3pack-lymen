@@ -32,6 +32,7 @@ import {
   scrubWithin,
   USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER,
   WALLET_SIGNED_ACCOUNT_MARKER,
+  USER_MARKER,
   USER_TOKEN_ACCOUNT_MARKER,
   withMarker,
   withMarkers,
@@ -61,6 +62,7 @@ import {
   userAuthorizedTokenAccounts,
   walletSignedAccounts,
   userTokenAccounts,
+  type Place,
   type TransactionSummary,
 } from "./summary.ts";
 import {
@@ -146,6 +148,23 @@ export type Preflight =
        * "account in a wallet-signed instruction N".
        */
       readonly walletSignedAccounts: readonly string[];
+      /**
+       * For an evidence bundle's `recipients` (E-10): every address a
+       * decoded effect asks to send SOL or tokens to or give control to (a
+       * SOL or token transfer's destination, a delegate, a new authority, a
+       * close's or a mint's destination, a new owner program), in the
+       * effects' order, from the unmarked decode (bundleLists). It leaves out
+       * the wallet and the token accounts a read shows it owns, and an
+       * address behind a lookup table limen could not read, which is not
+       * known. A report (toReport) never holds it: a report marks every
+       * account a wallet-signed instruction names, these included.
+       */
+      readonly recipients: readonly string[];
+      /**
+       * For an evidence bundle's `program_ids`: every program the message's
+       * instructions call, in the order first called. Never in a report.
+       */
+      readonly programIds: readonly string[];
     };
 
 export function signBlocks(
@@ -429,7 +448,67 @@ export async function preflight(
     userTokenAccounts: tokenAccounts,
     userAuthorizedTokenAccounts: authorizedAccounts,
     walletSignedAccounts: signedAccounts,
+    ...bundleLists(transaction, summary, tokenAccounts),
   };
+}
+
+/**
+ * The recipients and program IDs an evidence bundle carries (Preflight, ready),
+ * from the decoded summary before any marker is written: the summary holds
+ * every address but the wallet's, which it writes as USER_MARKER.
+ */
+function bundleLists(
+  transaction: ParsedTransaction,
+  summary: TransactionSummary,
+  owned: readonly string[],
+): { recipients: string[]; programIds: string[] } {
+  const recipients: string[] = [];
+  const add = (address: string) => {
+    if (
+      address !== USER_MARKER &&
+      !owned.includes(address) &&
+      !recipients.includes(address)
+    ) {
+      recipients.push(address);
+    }
+  };
+  const addPlace = (place: Place) => {
+    if ("address" in place) add(place.address);
+  };
+  for (const effect of summary.effects) {
+    switch (effect.kind) {
+      case "sol-out":
+        addPlace(effect.to);
+        break;
+      case "token-out":
+        addPlace(effect.destination);
+        break;
+      case "delegate-approved":
+        addPlace(effect.delegate);
+        break;
+      case "authority-changed":
+        if (effect.newAuthority !== null) add(effect.newAuthority);
+        break;
+      case "account-closed":
+        addPlace(effect.destination);
+        break;
+      case "tokens-minted":
+        addPlace(effect.destination);
+        break;
+      case "owner-assigned":
+        add(effect.newOwner);
+        break;
+      default:
+        break;
+    }
+  }
+  const { staticKeys, instructions } = transaction.message;
+  const programIds: string[] = [];
+  for (const instruction of instructions) {
+    const program = staticKeys[instruction.programIdIndex];
+    if (!programIds.includes(program)) programIds.push(program);
+  }
+  return { recipients, programIds };
 }
 
 /**
@@ -512,7 +591,7 @@ export function toReport(result: Preflight): PreflightReport {
 
 /**
  * For a server holding transaction bytes, such as a stored evidence bundle:
- * simulates on devnet through the Rpc given and decodes the result into the
+ * simulates on devnet through the JSON-RPC endpoint given and decodes the result into the
  * same report the app's card shows, with drainPattern (drain.ts) applied to
  * it, and the slot the simulation ran at. It keeps no blockhash from the
  * RPC: limen can check it only against the message's accounts, and an RPC
