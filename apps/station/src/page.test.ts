@@ -217,12 +217,22 @@ async function loadPage(
     keep.writes.push(`${what}(${String(value)})`);
     address = String(value);
   };
+  // The parts of the address the page may read, and a record of any read of the rest.
+  const reads: string[] = [];
+  const url = new URL(href);
   const location = {
+    pathname: url.pathname,
+    search: url.search,
     get href() {
+      reads.push("href");
       return address;
     },
     set href(value: string) {
       record("location.href =")(value);
+    },
+    get hash() {
+      reads.push("hash");
+      return new URL(address, url).hash;
     },
     assign: record("location.assign"),
     replace: record("location.replace"),
@@ -273,6 +283,7 @@ async function loadPage(
     writes: keep.writes,
     clock,
     address: () => address,
+    reads,
   };
 }
 
@@ -315,8 +326,9 @@ test("the token goes in the Authorization header and nowhere else: not the addre
   );
   await clock.advance(30_000);
   assert.deepEqual(page.sent, [`Bearer ${TOKEN}`, `Bearer ${TOKEN}`]);
-  assert.deepEqual(page.writes, []);
-  assert.equal(page.address(), STATION_URL);
+  // The one write is the address without a fragment, made at load.
+  assert.deepEqual(page.writes, ["history.replaceState(/?station=st-front)"]);
+  assert.ok(!page.writes.some((w) => w.includes(TOKEN)));
   assert.ok(!page.log.some((l) => l.includes(TOKEN)));
 });
 
@@ -338,6 +350,18 @@ test("a reload asks for the token again: the page keeps nothing that lets it sta
   );
   assert.equal(second.elements["token-prompt"].hidden, false);
   assert.ok(!second.log.some((l) => l.startsWith("fetch: ")));
+});
+
+test("a fragment left by an earlier version's link is cleared from the address, and never read", async () => {
+  const page = await loadPage(
+    "http://127.0.0.1:5173/?station=st-front#token=old-link-token",
+    never,
+  );
+  assert.deepEqual(page.writes, ["history.replaceState(/?station=st-front)"]);
+  assert.ok(!page.address().includes("#"));
+  assert.deepEqual(page.reads, [], "neither href nor hash was read");
+  assert.equal(page.elements["token-prompt"].hidden, false);
+  assert.ok(!page.log.some((l) => l.includes("old-link-token")));
 });
 
 test("an address with no valid station shows the station error and asks for no token", async () => {

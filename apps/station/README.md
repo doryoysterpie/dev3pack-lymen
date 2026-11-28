@@ -12,10 +12,12 @@ npm run dev -w @limen/station
 
 Copy the station's display token with `npm run station-token -w @limen/api -- st-front`, on macOS (see `services/api/README.md`). Then open `http://127.0.0.1:5173/?station=st-front` and paste the token into the page's password field. Each station's token is its own, not `STATION_DISPLAY_TOKEN`, and the API refuses it any other station's QR. The page sends its requests to `/api`, and the Vite dev and preview servers forward them to the API at `http://127.0.0.1:8787`, or at `STATION_API_URL` if set.
 
-The page keeps the token in memory and sends it in the `Authorization` header of its requests. It does not put it in the address, the history, a cookie or storage (`src/page.test.ts`). So a reload asks for it again, whether by hand or the one the Vite dev server makes when a source file changes. An earlier version delivered the token in a link file and the address fragment; that is removed. Two copies remain outside the page:
+The page keeps the token in memory and sends it in the `Authorization` header of its requests. It does not put it in the address, the history, a cookie or storage (`src/page.test.ts`). So a reload asks for it again, whether by hand or the one the Vite dev server makes when a source file changes. Two copies remain outside the page:
 
 - **The clipboard,** until something else is copied over it.
 - **The browser's password manager,** if the browser offers to save the field and the offer is accepted. Decline it.
+
+**Upgrading from link files.** An earlier version wrote each station's address, token included, to a link file in `~/limen-station-links`, or in `.station-links/` in the repository. If any exist, delete them and set a new `STATION_DISPLAY_TOKEN`: every station's token derives from it, so the old tokens stop working. The page clears any fragment from its address on load, without reading it, and `.gitignore` still ignores `*.url` files and `.station-links/`.
 
 If a fetch fails, or gets no answer within 10 s, the page clears the QR, shows the reason, and tries again after 5 s. Every time the page acts on comes from the QR's signed `issued_at` and `expires_at`, read against the page's own clock, and none from the answer's other fields. That assumes the station's clock agrees with the API's within the verifier's 5 s skew; the page does not check it. A QR's deadline is `min(expires_at * 1000, sentAt + (expires_at - issued_at) * 1000)` ms, where `sentAt` is when the request left. A QR whose deadline has passed when it arrives is not drawn, and the next one is fetched at once. After drawing a QR, the page reads its clock again. It shows the QR only if the deadline is still ahead, and clears it at the deadline, when the page says it is refreshing.
 

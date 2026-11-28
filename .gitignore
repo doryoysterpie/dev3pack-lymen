@@ -13,6 +13,10 @@ coverage/
 keys/
 *.keypair.json
 id.json
+# Legacy: an earlier version of E-03 wrote station display links, which hold a display token, as
+# *.url files, some in a .station-links/ folder. They stay ignored.
+*.url
+.station-links/
 
 # Local databases
 *.db
