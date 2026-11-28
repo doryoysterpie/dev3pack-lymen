@@ -19,12 +19,18 @@ export interface TransactionResponse {
 }
 
 export class RequestError extends Error {
-  readonly reason: "http" | "not-json" | "no-transaction" | "timeout";
+  readonly reason:
+    "http" | "not-json" | "no-transaction" | "redirected" | "timeout";
   constructor(reason: RequestError["reason"], message: string) {
     super(message);
     this.reason = reason;
   }
 }
+
+const withoutFragment = (url: string): string => {
+  const hash = url.indexOf("#");
+  return hash < 0 ? url : url.slice(0, hash);
+};
 
 /**
  * POSTs the account to the link. The answer, its body read as text, must
@@ -57,6 +63,17 @@ export async function requestTransaction(
     response = readAnswer(raw);
   } catch {
     throw new RequestError("not-json", "the link did not answer with text");
+  }
+  // fetch follows redirects, and its answer's url is the final URL with no
+  // fragment (on Android, the URL OkHttp last requested). Any difference
+  // from the link, or no URL at all, is refused, so limen shows only what
+  // the link itself answered. A 307 or 308 redirect has already resent the
+  // POST, account included, to wherever it pointed (README).
+  if (withoutFragment(response.url) !== withoutFragment(link)) {
+    throw new RequestError(
+      "redirected",
+      "the request was redirected to another address, so limen will not show what it answered",
+    );
   }
   if (!response.ok) {
     throw new RequestError("http", `the link answered HTTP ${response.status}`);
