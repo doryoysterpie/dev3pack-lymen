@@ -905,7 +905,74 @@ test("the running API checks in with E-07's binding: refusals only the salted bi
   }
 });
 
-test("the running API's minter is E-06's mintPass through connectDevnet: a cluster that is not devnet is refused before anything is sent", async () => {
+test("the API refuses a SOLANA_RPC_URL that is not the allowlisted devnet endpoint at start-up, without echoing it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "limen-checkin-"));
+  const keyPath = join(dir, "organizer.json");
+  writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
+  const env = (extra: Record<string, string>) => ({
+    ORGANIZER_KEYPAIR_PATH: keyPath,
+    STATION_DISPLAY_TOKEN: "test-display-token-0123456789abcdef",
+    DATABASE_PATH: join(dir, "limen.db"),
+    ...extra,
+  });
+  const started: { server: { close(cb: () => void): void } }[] = [];
+  try {
+    for (const url of [
+      "http://api.devnet.solana.com",
+      "https://api.devnet.solana.com/",
+      "https://api.devnet.solana.com.example.test",
+      "http://127.0.0.1:8899",
+      "https://rpc.example.test/?api-key=secret-value-0123",
+    ]) {
+      for (const salt of [{ REGISTRATION_SALT: SALT }, {}] as Record<
+        string,
+        string
+      >[]) {
+        // A server that starts is kept so it can be closed, and then the test fails.
+        const outcome = await start(
+          env({
+            ...salt,
+            SOLANA_RPC_URL: url,
+            API_PORT: String(await freePort()),
+          }),
+        ).then(
+          (s) => {
+            started.push(s);
+            return null;
+          },
+          (err: Error) => err,
+        );
+        assert.ok(outcome instanceof Error, `started with ${url}`);
+        assert.equal(
+          outcome.message,
+          "SOLANA_RPC_URL must be https://api.devnet.solana.com, the one devnet endpoint limen calls (D-03); unset, it is used.",
+        );
+        assert.ok(!outcome.message.includes("secret-value"));
+      }
+    }
+    // The allowlisted endpoint, and no setting at all, both start.
+    for (const extra of [
+      { SOLANA_RPC_URL: "https://api.devnet.solana.com" },
+      {},
+    ] as Record<string, string>[]) {
+      started.push(
+        await start(
+          env({
+            REGISTRATION_SALT: SALT,
+            ...extra,
+            API_PORT: String(await freePort()),
+          }),
+        ),
+      );
+    }
+  } finally {
+    for (const s of started)
+      await new Promise<void>((resolve) => s.server.close(() => resolve()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the minter reaches only the allowlisted devnet endpoint: another URL is refused when it is built, and another cluster after one getGenesisHash", async () => {
   const { db, deps, alice } = setup();
   const dir = mkdtempSync(join(tmpdir(), "limen-checkin-"));
   const keyPath = join(dir, "organizer.json");
@@ -927,8 +994,22 @@ test("the running API's minter is E-06's mintPass through connectDevnet: a clust
     },
   ) as unknown as Connection;
   try {
+    // A URL off the allowlist is refused before any connection is made.
+    assert.throws(
+      () =>
+        devnetMinter("http://127.0.0.1:9/", loadOrganizerKey(keyPath), (url) =>
+          connectDevnet(url, () => otherCluster),
+        ),
+      {
+        message:
+          "SOLANA_RPC_URL must be https://api.devnet.solana.com, the one devnet endpoint limen calls (D-03); unset, it is used.",
+      },
+    );
+    assert.deepEqual(calls, []);
+    // The genesis check stays as a second guard: an endpoint that answers another cluster's
+    // genesis hash is refused after that one call, and nothing is sent.
     const minter = devnetMinter(
-      "http://127.0.0.1:9/",
+      "https://api.devnet.solana.com",
       loadOrganizerKey(keyPath),
       (url) => connectDevnet(url, () => otherCluster),
     );

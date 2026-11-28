@@ -27,6 +27,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { Connection } from "@solana/web3.js";
 
+import { devnetEndpoint } from "./devnet-endpoint.ts";
 import type { OrganizerKey } from "./organizer-key.ts";
 import {
   bindRegistration,
@@ -95,17 +96,19 @@ export function registrationsFrom(
 }
 
 /**
- * E-06's pass mint on devnet, paid for and signed by the organizer key, at `url` or, when it is
- * undefined, the public devnet endpoint. The connection is made at the first mint, through
- * connectDevnet, which refuses any cluster but devnet before anything is sent; a failed
- * connection is tried again at the next mint. E-06's code and @solana/web3.js load at that first
- * mint too, so the API starts without them where no check-in mints.
+ * E-06's pass mint on devnet, paid for and signed by the organizer key. `url` must be unset or
+ * the one devnet endpoint (devnet-endpoint.ts); any other URL is refused here, when the minter is
+ * built, before any connection. The connection is made at the first mint, through connectDevnet,
+ * which also refuses a cluster whose genesis hash is not devnet's before anything is sent; a
+ * failed connection is tried again at the next mint. E-06's code and @solana/web3.js load at that
+ * first mint too, so the API starts without them where no check-in mints.
  */
 export function devnetMinter(
   url: string | undefined,
   organizer: OrganizerKey,
   connect?: (url: string) => Promise<Connection>,
 ): PassMinter {
+  const endpoint = devnetEndpoint(url);
   let ready: Promise<{
     mint: (
       wallet: string,
@@ -114,9 +117,8 @@ export function devnetMinter(
   }> | null = null;
   const prepare = async () => {
     const { Keypair, PublicKey } = await import("@solana/web3.js");
-    const { connectDevnet, DEVNET_URL, mintPass } =
-      await import("./pass-mint.ts");
-    const connection = await (connect ?? connectDevnet)(url ?? DEVNET_URL);
+    const { connectDevnet, mintPass } = await import("./pass-mint.ts");
+    const connection = await (connect ?? connectDevnet)(endpoint);
     const payer = Keypair.fromSecretKey(organizer.secretKeyBytes());
     return {
       mint: async (

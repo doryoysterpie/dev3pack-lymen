@@ -258,7 +258,7 @@ test("a cluster whose genesis hash is not devnet's is refused", async () => {
     ({ getGenesisHash: async () => hash }) as unknown as Connection;
   await assert.rejects(
     connectDevnet(
-      "http://127.0.0.1:8899",
+      "https://api.devnet.solana.com",
       fake("SomeOtherGenesisHash1111111111111111111111"),
     ),
     {
@@ -267,10 +267,36 @@ test("a cluster whose genesis hash is not devnet's is refused", async () => {
     },
   );
   const ok = await connectDevnet(
-    "http://127.0.0.1:8899",
+    "https://api.devnet.solana.com",
     fake(DEVNET_GENESIS_HASH),
   );
   assert.equal(typeof ok.getGenesisHash, "function");
+});
+
+test("connectDevnet refuses a URL that is not the allowlisted devnet endpoint before any connection is made", async () => {
+  let made = 0;
+  const make = () => {
+    made += 1;
+    return {
+      getGenesisHash: async () => DEVNET_GENESIS_HASH,
+    } as unknown as Connection;
+  };
+  for (const url of [
+    "http://127.0.0.1:8899",
+    "http://api.devnet.solana.com",
+    "https://api.devnet.solana.com/",
+    "https://api.devnet.solana.com.example.test",
+  ]) {
+    await assert.rejects(
+      connectDevnet(url, make),
+      {
+        message:
+          "SOLANA_RPC_URL must be https://api.devnet.solana.com, the one devnet endpoint limen calls (D-03); unset, it is used.",
+      },
+      url,
+    );
+  }
+  assert.equal(made, 0);
 });
 
 /** A genesis hash that is not devnet's. A stand-in, so no other cluster's value is in the repo. */

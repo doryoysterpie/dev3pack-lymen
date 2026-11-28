@@ -6,7 +6,8 @@
 //   - MetadataPointer pointing at the mint itself, which holds TokenMetadata: the name, the
 //     symbol, and the station, session and check-in time as additional fields.
 // The organizer key is the mint authority and the metadata update authority, and pays for
-// everything. Devnet only (D-03): connectDevnet, mintPass and revokePass each refuse a connection
+// everything. Devnet only (D-03): connectDevnet connects only to DEVNET_URL, refusing any other URL
+// before a connection is made, and connectDevnet, mintPass and revokePass each refuse a connection
 // whose cluster's genesis hash is not devnet's, before anything is sent.
 import {
   createAssociatedTokenAccountIdempotentInstruction,
@@ -34,7 +35,10 @@ import {
   Transaction,
 } from "@solana/web3.js";
 
-export const DEVNET_URL = "https://api.devnet.solana.com";
+import { DEVNET_ENDPOINT, devnetEndpoint } from "./devnet-endpoint.ts";
+
+/** The one devnet endpoint limen calls (devnet-endpoint.ts). */
+export const DEVNET_URL = DEVNET_ENDPOINT;
 /** getGenesisHash on devnet, read from api.devnet.solana.com on 2026-11-27. */
 export const DEVNET_GENESIS_HASH =
   "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
@@ -234,12 +238,16 @@ async function requireDevnet(connection: Connection): Promise<void> {
   }
 }
 
-/** Opens a connection and refuses it unless the cluster's genesis hash is devnet's. */
+/**
+ * Opens a connection to the devnet endpoint. A URL other than DEVNET_URL is refused before any
+ * connection is made, and a cluster whose genesis hash is not devnet's is refused after that one
+ * call.
+ */
 export async function connectDevnet(
   url: string = DEVNET_URL,
   make = (u: string) => new Connection(u, "confirmed"),
 ): Promise<Connection> {
-  const connection = make(url);
+  const connection = make(devnetEndpoint(url));
   await requireDevnet(connection);
   return connection;
 }

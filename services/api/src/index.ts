@@ -6,6 +6,7 @@ import { isIPv6, type AddressInfo } from "node:net";
 import { chainabuseHook, parseChainabuseMode } from "./chainabuse.ts";
 import { devnetMinter, registrationsFrom } from "./checkin.ts";
 import { openDatabase } from "./db.ts";
+import { devnetEndpoint } from "./devnet-endpoint.ts";
 import { isMainModule } from "./main-module.ts";
 import { loadOrganizerKey } from "./organizer-key.ts";
 import { loadRegistrationSalt } from "./registration.ts";
@@ -47,10 +48,13 @@ export async function start(
     env.STATION_DISPLAY_TOKEN,
   );
   const chainabuse = parseChainabuseMode(env.CHAINABUSE_POST);
+  // SOLANA_RPC_URL must be unset, empty or the one devnet endpoint; anything else stops start-up,
+  // whether or not check-in is wired, and the error does not echo it (devnet-endpoint.ts).
+  const rpcEndpoint = devnetEndpoint(env.SOLANA_RPC_URL);
   // Check-in (E-05) binds registrations with E-07's code under REGISTRATION_SALT and mints with
-  // E-06's mintPass on devnet (SOLANA_RPC_URL, or the public devnet endpoint), paid for by the
-  // organizer key. With REGISTRATION_SALT unset or empty, POST /checkins answers 503; a set but
-  // short salt stops start-up, as it stops the import tool.
+  // E-06's mintPass at that endpoint, paid for by the organizer key. With REGISTRATION_SALT unset
+  // or empty, POST /checkins answers 503; a set but short salt stops start-up, as it stops the
+  // import tool.
   const salt =
     env.REGISTRATION_SALT === undefined || env.REGISTRATION_SALT === ""
       ? undefined
@@ -81,7 +85,7 @@ export async function start(
         ? undefined
         : {
             registrations: registrationsFrom(db, salt),
-            minter: devnetMinter(env.SOLANA_RPC_URL || undefined, organizerKey),
+            minter: devnetMinter(rpcEndpoint, organizerKey),
           },
     reports: {
       triageToken: env.TRIAGE_TOKEN || undefined,
