@@ -35,10 +35,20 @@ const sol = (lamports: string) => `${withDecimals(lamports, 9)} SOL`;
 const shown = (address: string): string =>
   address === USER_MARKER ? "your wallet" : address;
 
+const unread = (place: { table: string; index: number }): string =>
+  `address in lookup table ${place.table} (index ${place.index}) that limen could not read`;
+
 function where(place: Place): string {
-  return "address" in place
-    ? shown(place.address)
-    : `an address in lookup table ${place.table} (index ${place.index}) that limen could not read`;
+  return "address" in place ? shown(place.address) : `an ${unread(place)}`;
+}
+
+/**
+ * where(), to start a sentence. An address is still shown exactly as
+ * written, since base58 is case-sensitive; only the words around it change.
+ */
+function whereFirst(place: Place): string {
+  if (!("address" in place)) return `An ${unread(place)}`;
+  return place.address === USER_MARKER ? "Your wallet" : place.address;
 }
 
 function tokenAmount(amount: string, decimals: number | null): string {
@@ -93,11 +103,7 @@ function effectRow(effect: Effect): CardRow {
         value: `${tokenAmount(effect.amount, effect.decimals)}${effect.mint === null ? "" : ` of mint ${where(effect.mint)}`} from token account ${where(effect.source)} to ${where(effect.destination)}.`,
       };
     case "delegate-approved": {
-      // An address is shown exactly as written: base58 is case-sensitive.
-      const who =
-        "address" in effect.delegate && effect.delegate.address === USER_MARKER
-          ? "Your wallet"
-          : where(effect.delegate);
+      const who = whereFirst(effect.delegate);
       // The largest u64 is still an allowance each transfer spends down.
       return {
         label: "Approves a delegate",
