@@ -386,14 +386,15 @@ function respelledPayloadQrs(): string[] {
   return qrs;
 }
 
-test("a payload re-spelled in non-canonical base64url is rejected as malformed, even signed by the organizer", () => {
+test("a payload re-spelled in non-canonical base64url is rejected as invalid_payload, even signed by the organizer, as the app rejects it", () => {
   const qrs = respelledPayloadQrs();
   assert.equal(qrs.length, 15);
   assert.equal(
     createHash("sha256").update(qrs.join("\n")).digest("hex"),
     RESPELLED_PAYLOAD_QRS_SHA256,
   );
-  for (const qr of qrs) assert.equal(reasonOf(qr), "malformed", qr);
+  // The signature over each text is good, so the payload's spelling is what refuses it.
+  for (const qr of qrs) assert.equal(reasonOf(qr), "invalid_payload", qr);
 });
 
 test("text that is not a v1 station QR is rejected with the owed reason", () => {

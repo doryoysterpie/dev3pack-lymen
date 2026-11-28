@@ -114,7 +114,11 @@ function isUnixSeconds(value: unknown): value is number {
 function parsePayload(encoded: string): StationPayload | null {
   let value: unknown;
   try {
-    value = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    // Only the canonical spelling: decoded and re-encoded, it must be the same text, as the app's
+    // parser requires (apps/mobile/src/checkin/station-qr.ts), so both accept the same payloads.
+    const bytes = Buffer.from(encoded, "base64url");
+    if (bytes.toString("base64url") !== encoded) return null;
+    value = JSON.parse(bytes.toString("utf8"));
   } catch {
     return null;
   }
@@ -236,13 +240,7 @@ export function verifyStationQr(
     string,
   ];
   if (version !== STATION_QR_VERSION) return reject("unsupported_version");
-  // The payload must be canonical base64url, decoded and re-encoded to the same text, as the
-  // app requires (apps/mobile/src/checkin/station-qr.ts), so both accept the same spellings.
-  if (
-    !BASE64URL.test(payload) ||
-    Buffer.from(payload, "base64url").toString("base64url") !== payload
-  )
-    return reject("malformed");
+  if (!BASE64URL.test(payload)) return reject("malformed");
 
   const signerBytes = decodeExact(signer, 32);
   if (signerBytes === null) return reject("malformed");
