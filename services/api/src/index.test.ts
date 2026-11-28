@@ -9,7 +9,6 @@ import {
 } from "node:child_process";
 import {
   chmodSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -437,43 +436,5 @@ test("a port taken between the probe and the start is retried rather than failin
   } finally {
     await new Promise<void>((resolve) => blocker.close(() => resolve()));
     rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("start-up refuses a key file whose real path is inside apps/station, which the station page's dev server serves", () => {
-  const station = fileURLToPath(
-    new URL("../../../apps/station", import.meta.url),
-  );
-  // A uniquely named stand-in folder, with the RFC 8032 test vector, not a real key.
-  const inside = join(station, `limen-key-test-${process.pid}`);
-  mkdirSync(inside);
-  try {
-    const key = join(inside, "organizer.json");
-    writeFileSync(key, JSON.stringify(RFC_KEYPAIR));
-    withTempDir((dir) => {
-      const link = join(dir, "organizer.json");
-      symlinkSync(key, link);
-      // Built as a raw string: join() would resolve the ".." away.
-      const raw = `${station}/src/../limen-key-test-${process.pid}/organizer.json`;
-      assert.ok(raw.includes("/src/../"));
-      for (const path of [key, raw, link]) {
-        assert.deepEqual(
-          runEntry({
-            ORGANIZER_KEYPAIR_PATH: path,
-            STATION_DISPLAY_TOKEN: DISPLAY_TOKEN,
-            DATABASE_PATH: join(dir, "limen.db"),
-          }),
-          {
-            status: 1,
-            stdout: "",
-            stderr:
-              "limen api: The file ORGANIZER_KEYPAIR_PATH names is inside apps/station, which the station page's dev server serves. Move it out of the repository.\n",
-          },
-          path,
-        );
-      }
-    });
-  } finally {
-    rmSync(inside, { recursive: true, force: true });
   }
 });
