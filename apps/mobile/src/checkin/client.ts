@@ -27,7 +27,7 @@ export type CheckinResult =
     }
   | { readonly ok: false; readonly error: string; readonly message: string };
 
-/** What the participant reads for each refusal the backend can give. */
+/** What the participant reads for each check-in refusal `POST /checkins` returns. */
 export const CHECKIN_MESSAGES: Readonly<Record<string, string>> = {
   already_checked_in: "You have already checked in to this session.",
   pass_revoked: "The pass for this check-in was revoked.",
@@ -49,6 +49,11 @@ export const CHECKIN_MESSAGES: Readonly<Record<string, string>> = {
   // at the check-in's one mint address and finishes it (services/api/README.md, Minting).
   mint_failed:
     "The pass may already be in your wallet. Try again to finish the check-in.",
+  // An account is already at the pass's derived mint address (for example a concurrent request's
+  // pass that just landed, or another account). A retry finishes a landed pass; otherwise an
+  // organizer must check the address.
+  mint_address_occupied:
+    "An account is already at this pass's mint address. Try again, or ask an organizer to check it.",
   check_in_unavailable: "Check-in is not available on this server yet.",
   invalid_request: "The server refused the request the app sent.",
   unreachable: "The check-in server cannot be reached.",

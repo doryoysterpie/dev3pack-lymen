@@ -186,18 +186,57 @@ test("a check-in whose pass was revoked reads as revoked, not as a server failur
   );
 });
 
+test("mint_address_occupied has its own sentence, distinct from mint_failed and the status fallback", async () => {
+  assert.deepEqual(
+    await postCheckin(
+      answering(502, { error: "mint_address_occupied" }).fn,
+      API,
+      REQ,
+    ),
+    {
+      ok: false,
+      error: "mint_address_occupied",
+      message:
+        "An account is already at this pass's mint address. Try again, or ask an organizer to check it.",
+    },
+  );
+});
+
 test("each refusal the backend gives becomes its sentence", async () => {
-  for (const [error, status] of [
-    ["already_checked_in", 409],
+  // Every named check-in refusal POST /checkins returns (services/api/README.md, Check-in).
+  const refusals = [
+    ["invalid_request", 400],
     ["station_qr_expired", 400],
+    ["station_qr_invalid", 400],
+    ["unknown_station", 404],
+    ["session_closed", 409],
+    ["bad_wallet_signature", 401],
     ["no_registration_binding", 403],
+    ["invalid_registration_id", 400],
+    ["unknown_registration", 403],
+    ["registration_bound_to_other_wallet", 403],
+    ["wallet_bound_to_other_registration", 403],
+    ["already_checked_in", 409],
+    ["pass_revoked", 409],
+    ["mint_failed", 502],
+    ["mint_address_occupied", 502],
     ["check_in_unavailable", 503],
-  ] as const) {
+  ] as const;
+  assert.deepEqual(
+    refusals.map(([error]) => error).sort(),
+    Object.keys(CHECKIN_MESSAGES)
+      .filter((key) => key !== "unreachable")
+      .sort(),
+  );
+  for (const [error, status] of refusals) {
+    const expected = CHECKIN_MESSAGES[error];
+    assert.equal(typeof expected, "string", error);
+    assert.doesNotMatch(expected!, /^The server answered with status /, error);
     const result = await postCheckin(answering(status, { error }).fn, API, REQ);
     assert.deepEqual(result, {
       ok: false,
       error,
-      message: CHECKIN_MESSAGES[error],
+      message: expected!,
     });
   }
 });

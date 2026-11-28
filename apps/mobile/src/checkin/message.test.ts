@@ -1,5 +1,6 @@
 // E-05 app half: the message bytes the wallet signs are exactly the ones the backend verifies.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
@@ -8,7 +9,7 @@ import {
   registrationIdInput,
 } from "./message.ts";
 
-// The same text the backend's test owes (services/api/src/checkin.test.ts on E-05, 56ed8c6).
+// The same text the backend's test owes (services/api/src/checkin.test.ts on E-05-held, PR #60, 56ed8c6).
 const OWED =
   "limen check-in v2\nstation: st-front\nsession: day-2\nnonce: AAECAwQFBgcICQoLDA0ODw\nwallet: wallet-alice";
 
@@ -44,4 +45,18 @@ test("a typed registration ID is trimmed, and refused unless 1 to 64 ASCII lette
   for (const bad of ["", "   ", "LMN 0001", "lmn-ſ1", "x".repeat(65)]) {
     assert.equal(registrationIdInput(bad), null, JSON.stringify(bad));
   }
+});
+
+test("the app check-in README and message test point to backend PR #60, not #45", () => {
+  const readme = readFileSync(new URL("./README.md", import.meta.url), "utf8");
+  const self = readFileSync(new URL(import.meta.url), "utf8");
+  assert.match(readme, /\(PR #60\)/);
+  assert.doesNotMatch(readme, /#45\b/);
+  assert.match(self, /E-05-held, PR #60/);
+  // Strip this test's own assertion literal before checking the rest of the file.
+  const headerOnly = self.slice(
+    0,
+    self.indexOf('test("the app check-in README'),
+  );
+  assert.doesNotMatch(headerOnly, /#45\b|on E-05,/);
 });
