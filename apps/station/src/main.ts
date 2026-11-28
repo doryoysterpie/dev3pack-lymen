@@ -1,4 +1,4 @@
-// Station display page (E-03). Shows the signed station QR and replaces it every 30 s.
+// Station display page (E-03). Shows the signed station QR and replaces it when the API says.
 // Open it as /?station=<station ID>#token=<that station's display token>, the address
 // `npm run station-link -w @limen/api` writes. The token sits in the
 // fragment, which the browser never sends to a server, and is removed from the address bar
@@ -6,6 +6,7 @@
 import QRCode from "qrcode";
 
 import {
+  captionFor,
   fetchStationQr,
   readStationConfig,
   startRotation,
@@ -51,7 +52,7 @@ function render(view: StationView): void {
     () => {
       canvas.dataset.qr = view.qr;
       canvas.hidden = false;
-      caption.textContent = `Station ${view.station}, session ${view.session}. A new QR every 30 s.`;
+      caption.textContent = captionFor(view);
       problem.hidden = true;
     },
     () => showProblem("This QR could not be drawn."),
