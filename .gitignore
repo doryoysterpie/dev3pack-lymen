@@ -25,10 +25,9 @@ id.json
 
 # OS files
 .DS_Store
-# No key belongs in the station page's folder: key-shaped files there stay out of git.
-apps/station/**/*.json
-!apps/station/package.json
-apps/station/**/*.pem
-apps/station/**/*.key
-apps/station/**/*.p12
-apps/station/**/*.pfx
+# Key files by extension, anywhere. Committed key material is caught by content in CI, whatever
+# its name (services/api/src/key-scan.ts).
+*.der
+*.pem
+*.key
+*.p12
