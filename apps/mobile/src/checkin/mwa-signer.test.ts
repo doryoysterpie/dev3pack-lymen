@@ -83,7 +83,7 @@ function fakeWallet(
 }
 
 const MESSAGE = new Uint8Array(
-  Buffer.from("limen check-in v1\nstation: st-front", "ascii"),
+  Buffer.from("limen check-in v2\nstation: st-front", "ascii"),
 );
 
 const signerFor = (w: ReturnType<typeof fakeWallet>) =>

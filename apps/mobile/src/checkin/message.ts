@@ -1,15 +1,15 @@
 // The check-in message the wallet signs (E-05, app half). It must match, byte for byte, the
-// text the backend rebuilds to verify the signature (services/api/src/checkin.ts on E-05, #45):
+// text the backend rebuilds to verify the signature (services/api/src/checkin.ts on E-05-held):
 //
-//   limen check-in v1
+//   limen check-in v2
 //   station: <station>
 //   session: <session>
 //   nonce: <nonce>
 //   wallet: <wallet address>
-//   registration: <registration ID, or empty>
 //
-// six lines joined by "\n", no trailing newline. Every part is ASCII, so the bytes are the
-// character codes. Pure module.
+// five lines joined by "\n", no trailing newline. The registration ID is not in it: it travels
+// only in the POST body, so neither the wallet nor MWA's bridge is handed it. Every part is
+// ASCII, so the bytes are the character codes. Pure module.
 
 import { asciiBytes } from "./station-qr.ts";
 
@@ -29,29 +29,21 @@ export interface CheckinMessageParts {
   readonly session: string;
   readonly nonce: string;
   readonly wallet: string;
-  readonly registrationId: string | null;
 }
 
 export function checkinMessage(p: CheckinMessageParts): string {
   return [
-    "limen check-in v1",
+    "limen check-in v2",
     `station: ${p.station}`,
     `session: ${p.session}`,
     `nonce: ${p.nonce}`,
     `wallet: ${p.wallet}`,
-    `registration: ${p.registrationId ?? ""}`,
   ].join("\n");
 }
 
 /** The bytes the wallet signs. Null if any part is not ASCII or holds a line break. */
 export function checkinMessageBytes(p: CheckinMessageParts): Uint8Array | null {
-  const parts = [
-    p.station,
-    p.session,
-    p.nonce,
-    p.wallet,
-    p.registrationId ?? "",
-  ];
+  const parts = [p.station, p.session, p.nonce, p.wallet];
   if (parts.some((part) => /[\r\n]/.test(part))) return null;
   return asciiBytes(checkinMessage(p));
 }

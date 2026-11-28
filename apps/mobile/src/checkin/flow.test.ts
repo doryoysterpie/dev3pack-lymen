@@ -21,6 +21,8 @@ import {
 } from "./flow.ts";
 import type { CheckinResult } from "./client.ts";
 import type { Ed25519Verify } from "./station-qr.ts";
+import { ed25519Verify } from "./ed25519.ts";
+import { mwaSigner, type MwaWallet, type Transact } from "./mwa-signer.ts";
 import { encodeBase58 } from "./wallet-address.ts";
 
 const FIXTURE = JSON.parse(
@@ -97,12 +99,11 @@ function fakeServer(walletKey: Buffer) {
       Buffer.from(String(body.qr).split(".")[1] ?? "", "base64url").toString(),
     ) as Record<string, string>;
     const message = [
-      "limen check-in v1",
+      "limen check-in v2",
       `station: ${payload.station}`,
       `session: ${payload.session}`,
       `nonce: ${payload.nonce}`,
       `wallet: ${body.wallet}`,
-      `registration: ${body.registration_id ?? ""}`,
     ].join("\n");
     const ok = verify(
       null,
@@ -152,7 +153,7 @@ async function prepareAndSign(
   return prepared.ok ? prepared.sign() : prepared;
 }
 
-test("nothing is signed while preparing: prepareCheckin gives its six lines, and only sign() has the wallet sign, exactly those bytes", async () => {
+test("nothing is signed while preparing: prepareCheckin gives its five lines without the registration ID, and only sign() has the wallet sign, exactly those bytes", async () => {
   const wallet = fakeWallet();
   const server = fakeServer(wallet.key);
   const prepared = await prepareCheckin(deps(wallet, server), {
@@ -160,14 +161,14 @@ test("nothing is signed while preparing: prepareCheckin gives its six lines, and
     registrationText: "  LMN-0001 ",
   });
   assert.ok(prepared.ok);
-  // What the panel shows before its Sign this message action: the account and nonce included.
+  // What the panel shows before its Sign this message action: the account and nonce included,
+  // and no registration ID.
   assert.deepEqual(prepared.preview.lines, [
-    "limen check-in v1",
+    "limen check-in v2",
     "station: st-front",
     "session: day-2",
     `nonce: ${FIXTURE.nonce}`,
     `wallet: ${wallet.address}`,
-    "registration: LMN-0001",
   ]);
   assert.deepEqual(wallet.events, ["connect"], "connected, nothing signed");
   assert.equal(server.posted.length, 0);
@@ -316,7 +317,7 @@ test("a wallet that does not connect, or does not sign, sends nothing, and no AP
   assert.deepEqual(wallet.events, []);
 });
 
-test("a later check-in without a registration ID signs an empty registration line", async () => {
+test("a later check-in without a registration ID signs the same five lines and posts registration_id null", async () => {
   const wallet = fakeWallet();
   const server = fakeServer(wallet.key);
   assert.equal(
@@ -328,12 +329,99 @@ test("a later check-in without a registration ID signs an empty registration lin
     ).ok,
     true,
   );
-  assert.ok(
-    Buffer.from(wallet.signed[0]!)
-      .toString("ascii")
-      .endsWith("\nregistration: "),
+  assert.equal(
+    Buffer.from(wallet.signed[0]!).toString("ascii"),
+    [
+      "limen check-in v2",
+      "station: st-front",
+      "session: day-2",
+      `nonce: ${FIXTURE.nonce}`,
+      `wallet: ${wallet.address}`,
+    ].join("\n"),
   );
   assert.equal(server.posted[0]!.registration_id, null);
+});
+
+/** Collects every string and decoded base64 string inside a value passed to MWA. */
+function collectMwaStrings(value: unknown, out: string[] = []): string[] {
+  if (typeof value === "string") {
+    out.push(value);
+    const decoded = Buffer.from(value, "base64").toString("utf8");
+    if (decoded.length > 0) out.push(decoded);
+  } else if (value instanceof Uint8Array) {
+    out.push(Buffer.from(value).toString("utf8"));
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectMwaStrings(item, out);
+  } else if (typeof value === "object" && value !== null) {
+    for (const [k, v] of Object.entries(value)) {
+      out.push(k);
+      collectMwaStrings(v, out);
+    }
+  }
+  return out;
+}
+
+test("nothing passed to MWA contains the registration ID, which travels only in the POST body", async () => {
+  const registrationId = "LMN-SECRET-9876";
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const key = Buffer.from(
+    publicKey.export({ format: "jwk" }).x ?? "",
+    "base64url",
+  );
+  const mwaParams: unknown[] = [];
+  const wallet: MwaWallet = {
+    async authorize(params) {
+      mwaParams.push(params);
+      return {
+        accounts: [{ address: key.toString("base64") }],
+        auth_token: "token-1",
+      };
+    },
+    async signMessages(params) {
+      mwaParams.push(params);
+      const msg = Buffer.from(params.payloads[0] ?? "", "base64");
+      const sig = sign(null, msg, privateKey);
+      return {
+        signed_payloads: [Buffer.concat([msg, sig]).toString("base64")],
+      };
+    },
+  };
+  const transact: Transact = (cb) => cb(wallet);
+  const signer = mwaSigner(transact, {
+    appName: "limen",
+    chain: "solana:devnet",
+    verify: ed25519Verify,
+  });
+  const server = fakeServer(key);
+  const result = await prepareAndSign(
+    {
+      apiBase: "http://10.0.2.2:8787",
+      allowlist: new Set([FIXTURE.organizer_signer_id]),
+      nowMs: () => (T + 10) * 1000,
+      verify: ed25519Verify,
+      signer,
+      fetchFn: server.fn,
+    },
+    { qr: FIXTURE.valid, registrationText: `  ${registrationId}  ` },
+  );
+  assert.equal(mwaParams.length, 3, "authorize, re-authorize, signMessages");
+  const seenStrings = collectMwaStrings(mwaParams);
+  const regBase64 = Buffer.from(registrationId, "utf8").toString("base64");
+  for (const s of seenStrings) {
+    assert.doesNotMatch(
+      s,
+      new RegExp(`${registrationId}|registration`, "i"),
+      `MWA received registration data: ${s}`,
+    );
+    assert.equal(
+      s.includes(regBase64),
+      false,
+      `MWA received base64 registration ID: ${s}`,
+    );
+  }
+  assert.equal(result.ok, true);
+  assert.equal(server.posted.length, 1);
+  assert.equal(server.posted[0]!.registration_id, registrationId);
 });
 
 test("the API URL and the signer allowlist come from the EXPO_PUBLIC_ settings, checked", () => {

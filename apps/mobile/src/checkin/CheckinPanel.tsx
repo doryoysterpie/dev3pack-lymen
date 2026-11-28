@@ -1,6 +1,7 @@
 // The check-in panel shown under a scanned station QR (E-05, app half). It runs the flow in
 // flow.ts with the real wallet signer, the device's Ed25519 and the configured API, in two steps:
-// "Check in" connects the wallet and shows the exact message, and only the separate "Sign this
+// "Check in" connects the wallet and shows the exact five-line message (which holds no
+// registration ID; the ID travels only in the POST body), and only the separate "Sign this
 // message" button, shown with that message, has the wallet sign it.
 
 import { useState } from "react";

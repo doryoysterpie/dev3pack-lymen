@@ -8,40 +8,31 @@ import {
   registrationIdInput,
 } from "./message.ts";
 
-// The same text the backend's test owes (services/api/src/checkin.test.ts on E-05, #45).
+// The same text the backend's test owes (services/api/src/checkin.test.ts on E-05, 56ed8c6).
 const OWED =
-  "limen check-in v1\nstation: st-front\nsession: day-2\nnonce: AAECAwQFBgcICQoLDA0ODw\nwallet: wallet-alice\nregistration: LMN-0001";
+  "limen check-in v2\nstation: st-front\nsession: day-2\nnonce: AAECAwQFBgcICQoLDA0ODw\nwallet: wallet-alice";
 
 const PARTS = {
   station: "st-front",
   session: "day-2",
   nonce: "AAECAwQFBgcICQoLDA0ODw",
   wallet: "wallet-alice",
-  registrationId: "LMN-0001",
 };
 
-test("the message is the six owed lines, and its bytes are their ASCII codes", () => {
-  assert.equal(checkinMessage(PARTS), OWED);
+test("the message is the five owed lines with no registration ID, and its bytes are their ASCII codes", () => {
+  const text = checkinMessage(PARTS);
+  assert.equal(text, OWED);
+  assert.doesNotMatch(text, /registration/i);
   const bytes = checkinMessageBytes(PARTS);
   assert.deepEqual(bytes, new Uint8Array(Buffer.from(OWED, "ascii")));
-  assert.equal(bytes?.length, 124); // counted independently with Python's len()
-  assert.equal(bytes?.at(-1), "1".charCodeAt(0), "no trailing newline");
-});
-
-test("a later check-in with no registration ID signs an empty last line", () => {
-  assert.equal(
-    checkinMessage({ ...PARTS, registrationId: null }),
-    OWED.replace("registration: LMN-0001", "registration: "),
-  );
+  assert.equal(bytes?.length, 101); // counted independently with Buffer.byteLength
+  assert.equal(bytes?.at(-1), "e".charCodeAt(0), "no trailing newline");
 });
 
 test("a part that is not ASCII, or holds a line break, gives no bytes to sign", () => {
   assert.equal(checkinMessageBytes({ ...PARTS, wallet: "wallet-é" }), null);
   assert.equal(
-    checkinMessageBytes({
-      ...PARTS,
-      registrationId: "LMN-0001\nstation: other",
-    }),
+    checkinMessageBytes({ ...PARTS, wallet: "wallet-alice\nstation: other" }),
     null,
   );
   assert.equal(checkinMessageBytes({ ...PARTS, station: "st\rfront" }), null);

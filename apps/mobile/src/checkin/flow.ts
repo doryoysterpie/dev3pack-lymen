@@ -2,7 +2,7 @@
 //
 //   prepareCheckin: verify the station QR on the device, check the registration ID, connect the
 //   wallet (authorize, which signs nothing), and build the check-in message for its account. It
-//   returns the message's six lines for the panel to show, and a sign() for the panel's separate
+//   returns the message's five lines (no registration ID) for the panel to show, and a sign() for the panel's separate
 //   "Sign this message" action.
 //
 //   sign(): check the QR is still in its window, have the wallet sign exactly the bytes shown,
@@ -47,7 +47,7 @@ export interface CheckinFlowDeps {
 
 /** The message a check-in will sign, as the panel shows it before anything is signed. */
 export interface CheckinPreview {
-  /** The six lines of the message; joined by "\n", they are exactly `bytes`. */
+  /** The five lines of the message (no registration ID); joined by "\n", they are exactly `bytes`. */
   readonly lines: readonly string[];
   /** The bytes the wallet will be asked to sign. */
   readonly bytes: Uint8Array;
@@ -134,7 +134,6 @@ export async function prepareCheckin(
   const bytes = checkinMessageBytes({
     ...qr.payload,
     wallet: account.wallet,
-    registrationId,
   });
   if (bytes === null) return refuse("no_message", FLOW_MESSAGES.no_message);
   // The message is ASCII, so each byte is one character of the text shown.
