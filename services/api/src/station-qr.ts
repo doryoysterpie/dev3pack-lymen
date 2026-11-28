@@ -12,14 +12,14 @@
 //   <signature>  base64url, unpadded, of the 64-byte Ed25519 signature over the ASCII text
 //                "limen:station:v1.<payload>", everything before the second dot.
 //
-// The signature covers the encoded payload text, so changing any character of it, even one
-// that decodes to the same bytes, breaks the signature. The station page shows a fresh QR
-// every 30 s and each QR lives 60 s, so a participant who scans just before a rotation has at
-// most 30 s left to finish: less by the page's round trip, by issued_at's rounding down to a
-// whole second, and near a session's end. A QR whose 60 s would reach its session's end is cut
-// short: it expires at that end, or one second before it when the 60 s would end exactly there,
-// so that every QR that reaches its session's end carries expires_at < issued_at + 60 and reads
-// as cut short.
+// The signature covers the encoded payload text, so changing any character of it, even one that
+// decodes to the same bytes, breaks the signature. Each part must also be canonical base64url, so a
+// re-spelled payload is refused even when the signer signed it. The station page shows a fresh QR
+// every 30 s and each QR lives 60 s, so a participant who scans just before a rotation has at most
+// 30 s left to finish: less by the page's round trip, by issued_at's rounding down to a whole
+// second, and near a session's end. A QR whose 60 s would reach its session's end is cut short: it
+// expires at that end, or one second before it when the 60 s would end exactly there, so that every
+// QR that reaches its session's end carries expires_at < issued_at + 60 and reads as cut short.
 //
 // The verifier measures time in milliseconds: a QR is refused at any instant more than 60 s
 // after issued_at, or after expires_at, not only from the next whole second. A cut-short QR is
@@ -236,7 +236,13 @@ export function verifyStationQr(
     string,
   ];
   if (version !== STATION_QR_VERSION) return reject("unsupported_version");
-  if (!BASE64URL.test(payload)) return reject("malformed");
+  // The payload must be canonical base64url, decoded and re-encoded to the same text, as the
+  // app requires (apps/mobile/src/checkin/station-qr.ts), so both accept the same spellings.
+  if (
+    !BASE64URL.test(payload) ||
+    Buffer.from(payload, "base64url").toString("base64url") !== payload
+  )
+    return reject("malformed");
 
   const signerBytes = decodeExact(signer, 32);
   if (signerBytes === null) return reject("malformed");

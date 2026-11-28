@@ -1,7 +1,13 @@
 // E-03 done test: a QR older than 60 s is rejected; a payload with one byte changed is rejected;
 // a payload signed by a non-allowlisted key is rejected. Plus the format the QR owes.
 import assert from "node:assert/strict";
-import { createPrivateKey, sign, verify, createPublicKey } from "node:crypto";
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  sign,
+  verify,
+} from "node:crypto";
 import { test } from "node:test";
 
 import {
@@ -343,6 +349,51 @@ test("a signer or signature re-spelled in non-canonical base64url is rejected as
   // 32 bytes leave 2 spare bits in the last signer character and 64 bytes leave 4 in the last
   // signature character, so 3 and 15 alternative spellings exist.
   assert.equal(respelled, 18);
+});
+
+/**
+ * QRs whose payload is a non-canonical base64url spelling, each signed by the organizer over its
+ * own text. The payload is 121 bytes, so its last character carries 4 spare bits and 15 other
+ * spellings decode to the same bytes. The app's test (apps/mobile/src/checkin/station-qr.test.ts)
+ * builds the same QRs, which the SHA-256 pinned below shows.
+ */
+const RESPELLED_PAYLOAD_QRS_SHA256 =
+  "febf959a807543922f905199635de4b09c6913e9fdb26e84bba654cc26f946f9";
+function respelledPayloadQrs(): string[] {
+  const json =
+    '{"station":"st-front","session":"day-21","nonce":"AAECAwQFBgcICQoLDA0ODw","issued_at":1795000000,"expires_at":1795000060}';
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const canonical = Buffer.from(json, "utf8").toString("base64url");
+  const qrs: string[] = [];
+  for (const c of alphabet) {
+    const payload = canonical.slice(0, -1) + c;
+    if (
+      payload === canonical ||
+      Buffer.from(payload, "base64url").toString("utf8") !== json
+    )
+      continue;
+    const message = `limen:station:v1.${payload}`;
+    const signature = sign(
+      null,
+      Buffer.from(message, "ascii"),
+      ORGANIZER.privateKey,
+    );
+    qrs.push(
+      `${message}.${signerId(ORGANIZER.publicKey)}.${signature.toString("base64url")}`,
+    );
+  }
+  return qrs;
+}
+
+test("a payload re-spelled in non-canonical base64url is rejected as malformed, even signed by the organizer", () => {
+  const qrs = respelledPayloadQrs();
+  assert.equal(qrs.length, 15);
+  assert.equal(
+    createHash("sha256").update(qrs.join("\n")).digest("hex"),
+    RESPELLED_PAYLOAD_QRS_SHA256,
+  );
+  for (const qr of qrs) assert.equal(reasonOf(qr), "malformed", qr);
 });
 
 test("text that is not a v1 station QR is rejected with the owed reason", () => {
