@@ -23,9 +23,12 @@ const DEMO = JSON.parse(
   ),
 ) as unknown;
 
+/** A clock that reads `seconds`, as seedEvent takes one. */
+const at = (seconds: number) => (): number => seconds;
+
 test("the demo seed writes the front desk station and the build window session in Unix seconds", () => {
   const db = openDatabase(":memory:");
-  assert.deepEqual(seedEvent(db, parseEventSeed(DEMO), 1_795_700_000), {
+  assert.deepEqual(seedEvent(db, parseEventSeed(DEMO), at(1_795_700_000)), {
     stations: 1,
     sessions: 1,
   });
@@ -56,11 +59,11 @@ test("the demo seed writes the front desk station and the build window session i
 test("seeding twice updates in place and adds no rows", () => {
   const db = openDatabase(":memory:");
   const seed = parseEventSeed(DEMO);
-  seedEvent(db, seed, 1);
+  seedEvent(db, seed, at(1));
   seedEvent(
     db,
     { ...seed, stations: [{ id: "st-front", name: "Main desk" }] },
-    2,
+    at(2),
   );
   assert.deepEqual(
     db
@@ -100,7 +103,7 @@ test("sessions may not overlap: a seed whose sessions overlap is refused, and no
             session("day-2", 1999, 3000),
           ],
         },
-        1,
+        at(1),
       ),
     {
       message:
@@ -116,13 +119,17 @@ test("sessions may not overlap: a seed whose sessions overlap is refused, and no
 
 test("a seed whose session overlaps one already in the database is refused, and the database keeps its rows", () => {
   const db = openDatabase(":memory:");
-  seedEvent(db, { stations: [], sessions: [session("day-1", 1000, 2000)] }, 1);
+  seedEvent(
+    db,
+    { stations: [], sessions: [session("day-1", 1000, 2000)] },
+    at(1),
+  );
   assert.throws(
     () =>
       seedEvent(
         db,
         { stations: [], sessions: [session("day-2", 1500, 2500)] },
-        2,
+        at(2),
       ),
     {
       message:
@@ -133,13 +140,17 @@ test("a seed whose session overlaps one already in the database is refused, and 
     { id: "day-1", starts_at: 1000, ends_at: 2000 },
   ]);
   // Moving a session onto another's window is refused the same way.
-  seedEvent(db, { stations: [], sessions: [session("day-2", 2000, 3000)] }, 3);
+  seedEvent(
+    db,
+    { stations: [], sessions: [session("day-2", 2000, 3000)] },
+    at(3),
+  );
   assert.throws(
     () =>
       seedEvent(
         db,
         { stations: [], sessions: [session("day-2", 1999, 3000)] },
-        4,
+        at(4),
       ),
     /day-1 and day-2 overlap/,
   );
@@ -147,10 +158,14 @@ test("a seed whose session overlaps one already in the database is refused, and 
 
 test("once a session has started, or starts within 60 s, a seed may change it only by moving its end later", () => {
   const db = openDatabase(":memory:");
-  seedEvent(db, { stations: [], sessions: [session("day-1", 1000, 2000)] }, 1);
+  seedEvent(
+    db,
+    { stations: [], sessions: [session("day-1", 1000, 2000)] },
+    at(1),
+  );
   const refused = (change: ReturnType<typeof session>, now: number) =>
     assert.throws(
-      () => seedEvent(db, { stations: [], sessions: [change] }, now),
+      () => seedEvent(db, { stations: [], sessions: [change] }, at(now)),
       {
         message:
           "seed sessions: day-1 has started, or starts within 60 s, so it may only change by ending later",
@@ -167,22 +182,23 @@ test("once a session has started, or starts within 60 s, a seed may change it on
   seedEvent(
     db,
     { stations: [], sessions: [session("day-1", 1000, 2000)] },
-    1500,
+    at(1500),
   );
   seedEvent(
     db,
     { stations: [], sessions: [session("day-1", 1000, 2500)] },
-    1500,
+    at(1500),
   );
   assert.deepEqual(sessionRows(db), [
     { id: "day-1", starts_at: 1000, ends_at: 2500 },
   ]);
-  // 59 s before it starts the session is fixed; 60 s before, it may still change.
+  // 59 s and exactly 60 s before it starts the session is fixed; 61 s before, it may still change.
   refused(session("day-1", 1000, 1900), 941);
+  refused(session("day-1", 1000, 1900), 940);
   seedEvent(
     db,
     { stations: [], sessions: [session("day-1", 1100, 1900)] },
-    940,
+    at(939),
   );
   assert.deepEqual(sessionRows(db), [
     { id: "day-1", starts_at: 1100, ends_at: 1900 },
@@ -195,7 +211,7 @@ test("the rescheduling probe: moving a live session's start later while adding a
   seedEvent(
     db,
     { stations: [], sessions: [session("s1", T0 - 100, T0 + 600)] },
-    T0 - 200,
+    at(T0 - 200),
   );
   // At T0, s1 is live. The guard reads s1 as stored, not as the seed would leave it.
   assert.throws(
@@ -209,7 +225,7 @@ test("the rescheduling probe: moving a live session's start later while adding a
             session("s2", T0 - 50, T0 + 200),
           ],
         },
-        T0,
+        at(T0),
       ),
     /s1 has started, or starts within 60 s, so it may only change by ending later/,
   );
@@ -225,7 +241,7 @@ test("the rescheduling probe: moving a live session's start later while adding a
             session("s1", T0 + 300, T0 + 600),
           ],
         },
-        T0,
+        at(T0),
       ),
     /s1 has started, or starts within 60 s, so it may only change by ending later/,
   );
@@ -242,7 +258,7 @@ test("back-to-back sessions do not overlap, since a session's end is exclusive",
       stations: [],
       sessions: [session("day-1", 1000, 2000), session("day-2", 2000, 3000)],
     },
-    1,
+    at(1),
   );
   assert.deepEqual(sessionRows(db), [
     { id: "day-1", starts_at: 1000, ends_at: 2000 },
@@ -332,4 +348,48 @@ test("the seed tool, run through a symlink, names a malformed file without quoti
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("the seed reads its clock inside its transaction: a seed that waits for the database is judged at the time it writes", () => {
+  const db = openDatabase(":memory:");
+  seedEvent(
+    db,
+    { stations: [], sessions: [session("s1", 10_100, 10_600)] },
+    at(9_000),
+  );
+  // Taking the write lock takes 100 s here, as it would behind another writer. Before it, s1
+  // starts in 100 s and may change; once it is taken, s1 has started.
+  let clock = 10_000;
+  const reads: string[] = [];
+  const waiting = new Proxy(db, {
+    get(target, key) {
+      const value = Reflect.get(target, key) as unknown;
+      if (typeof value !== "function") return value;
+      if (key === "exec")
+        return (sql: string) => {
+          if (sql === "BEGIN IMMEDIATE") {
+            reads.push("BEGIN");
+            clock += 100;
+          }
+          return target.exec(sql);
+        };
+      return (value as (...a: unknown[]) => unknown).bind(target);
+    },
+  });
+  assert.throws(
+    () =>
+      seedEvent(
+        waiting,
+        { stations: [], sessions: [session("s1", 10_200, 10_600)] },
+        () => {
+          reads.push(`clock ${clock}`);
+          return clock;
+        },
+      ),
+    /s1 has started, or starts within 60 s, so it may only change by ending later/,
+  );
+  assert.deepEqual(reads, ["BEGIN", "clock 10100"]);
+  assert.deepEqual(sessionRows(db), [
+    { id: "s1", starts_at: 10_100, ends_at: 10_600 },
+  ]);
 });
