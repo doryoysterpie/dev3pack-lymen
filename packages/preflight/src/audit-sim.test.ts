@@ -389,6 +389,80 @@ describe("audit 8: a malformed balance is refused, not thrown later", () => {
       assert.deepEqual(result.summary.blocks, ["simulation-not-run"], which);
     }
   });
+
+  // jsonRpc itself refuses each simulated balance that is not a whole amount:
+  // text, a sign, a fraction, a leading zero, past the largest u64, or a JSON
+  // number past 2^53, where precision is already lost.
+  const refusedAmounts: readonly unknown[] = [
+    "unknown",
+    "-1",
+    "01",
+    "18446744073709551616",
+    -1,
+    1.5,
+    2 ** 53 + 2,
+  ];
+  const simulateWith = (value: Json) =>
+    jsonRpc(
+      endpoint({
+        accounts: () => [],
+        simulation: (addresses) => ({
+          err: null,
+          logs: [],
+          accounts: addresses.map(() => system(1)),
+          preBalances: [5_000_000_000, 0, 1],
+          postBalances: [4_999_995_000, 0, 1],
+          preTokenBalances: [],
+          postTokenBalances: [],
+          ...value,
+        }),
+      }),
+      "x",
+    ).simulate(encodeBase64(build([transfer()])), [USER]);
+  const tokenEntry = (amount: unknown) => ({
+    accountIndex: 1,
+    mint: K.mint,
+    owner: USER,
+    uiTokenAmount: { amount },
+  });
+
+  for (const bad of refusedAmounts) {
+    it(`jsonRpc refuses the simulated balance ${JSON.stringify(bad)}`, async () => {
+      for (const value of [
+        { preBalances: [bad, 0, 1] },
+        { postBalances: [bad, 0, 1] },
+        { preTokenBalances: [tokenEntry(bad)] },
+        { postTokenBalances: [tokenEntry(bad)] },
+      ]) {
+        await assert.rejects(simulateWith(value), {
+          reason: "shape",
+          message: /not a whole amount/,
+        });
+      }
+    });
+  }
+
+  it("jsonRpc keeps each whole simulated balance, as a decimal string", async () => {
+    const simulation = await simulateWith({
+      preBalances: [5_000_000_000, "18446744073709551615", 0],
+      preTokenBalances: [tokenEntry("200")],
+      postTokenBalances: [tokenEntry(30)],
+    });
+    assert.deepEqual(simulation.preBalances, [
+      "5000000000",
+      "18446744073709551615",
+      "0",
+    ]);
+    assert.deepEqual(simulation.postBalances, ["4999995000", "0", "1"]);
+    assert.deepEqual(
+      simulation.preTokenBalances?.map((balance) => balance.amount),
+      ["200"],
+    );
+    assert.deepEqual(
+      simulation.postTokenBalances?.map((balance) => balance.amount),
+      ["30"],
+    );
+  });
 });
 
 describe("audit 12: more writable accounts than limen watches", () => {
