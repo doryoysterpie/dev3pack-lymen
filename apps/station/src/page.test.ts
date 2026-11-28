@@ -190,7 +190,7 @@ const INDEX_HTML = readFileSync(
   new URL("../index.html", import.meta.url),
   "utf8",
 );
-const STATION_URL = "http://127.0.0.1:5173/?station=st-front";
+const STATION_URL = "http://127.0.0.1:8787/station?station=st-front";
 const TOKEN = "station-token-0123456789";
 
 /**
@@ -329,7 +329,9 @@ test("the token goes in the Authorization header and nowhere else: not the addre
   await clock.advance(30_000);
   assert.deepEqual(page.sent, [`Bearer ${TOKEN}`, `Bearer ${TOKEN}`]);
   // The one write is the address without a fragment, made at load.
-  assert.deepEqual(page.writes, ["history.replaceState(/?station=st-front)"]);
+  assert.deepEqual(page.writes, [
+    "history.replaceState(/station?station=st-front)",
+  ]);
   assert.ok(!page.writes.some((w) => w.includes(TOKEN)));
   assert.ok(!page.log.some((l) => l.includes(TOKEN)));
 });
@@ -356,10 +358,12 @@ test("a reload asks for the token again: the page keeps nothing that lets it sta
 
 test("a fragment left by an earlier version's link is cleared from the address, and never read", async () => {
   const page = await loadPage(
-    "http://127.0.0.1:5173/?station=st-front#token=old-link-token",
+    "http://127.0.0.1:8787/station?station=st-front#token=old-link-token",
     never,
   );
-  assert.deepEqual(page.writes, ["history.replaceState(/?station=st-front)"]);
+  assert.deepEqual(page.writes, [
+    "history.replaceState(/station?station=st-front)",
+  ]);
   assert.ok(!page.address().includes("#"));
   assert.deepEqual(page.reads, [], "neither href nor hash was read");
   assert.equal(page.elements["token-prompt"].hidden, false);
@@ -368,8 +372,8 @@ test("a fragment left by an earlier version's link is cleared from the address, 
 
 test("an address with no valid station shows the station error and asks for no token", async () => {
   for (const href of [
-    "http://127.0.0.1:5173/",
-    "http://127.0.0.1:5173/?station=bad%20id",
+    "http://127.0.0.1:8787/station",
+    "http://127.0.0.1:8787/station?station=bad%20id",
   ]) {
     const page = await loadPage(href, never);
     assert.ok(
