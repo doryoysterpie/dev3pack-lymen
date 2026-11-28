@@ -2,10 +2,14 @@
 // E-03: the station display fetches a signed QR for its station in the active session.
 import assert from "node:assert/strict";
 import { createPrivateKey } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { after, before, test } from "node:test";
 
 import { openDatabase } from "./db.ts";
+import { seedEvent } from "./seed.ts";
 import { API_VERSION, createApiServer } from "./server.ts";
 import {
   stationAllowlist,
@@ -397,5 +401,99 @@ test("the QR endpoint reads the clock once, after its database reads, and signs 
     assert.deepEqual([body.issued_at, body.expires_at], [T + 104, T + 164]);
   } finally {
     await new Promise<void>((resolve) => timed.close(() => resolve()));
+  }
+});
+
+test("a re-seed that would shorten the session while a QR request is between its reads is refused, so the QR does not outlive the stored session", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "limen-qr-race-"));
+  const file = join(dir, "limen.db");
+  const apiDb = openDatabase(file);
+  const seedDb = openDatabase(file);
+  apiDb.exec(`
+    INSERT INTO stations (id, name, created_at) VALUES ('st-front', 'Front desk', 1);
+    INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('s1', 'S1', 1000, 2000);
+  `);
+  let seed = "not run";
+  const raced = createApiServer({
+    db: apiDb,
+    version: API_VERSION,
+    stationSigner: SIGNER,
+    stationDisplayToken: TOKEN,
+    now: () => 1010,
+    // Between its reads, the request lets a seed run on another connection. The seed's clock
+    // reads 900, when s1 has not started, so its rules allow moving s1's end to 1030.
+    nowMs: () => {
+      try {
+        seedEvent(
+          seedDb,
+          {
+            stations: [],
+            sessions: [
+              { id: "s1", name: "S1", starts_at: 1000, ends_at: 1030 },
+            ],
+          },
+          () => 900,
+        );
+        seed = "written";
+      } catch (err) {
+        seed = err instanceof Error ? err.message : String(err);
+      }
+      return 1010 * 1000;
+    },
+  });
+  await new Promise<void>((resolve) => raced.listen(0, "127.0.0.1", resolve));
+  try {
+    const url = `http://127.0.0.1:${(raced.address() as AddressInfo).port}`;
+    const res = await fetch(`${url}/stations/st-front/qr`, {
+      headers: { authorization: `Bearer ${displayCredential("st-front")}` },
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { expires_at: number };
+    const stored = seedDb
+      .prepare("SELECT ends_at FROM sessions WHERE id = 's1'")
+      .get() as { ends_at: number };
+    // The seed could not take the write lock the request holds, and the QR fits the session.
+    assert.match(seed, /database is locked/);
+    assert.equal(stored.ends_at, 2000);
+    assert.ok(body.expires_at <= stored.ends_at);
+  } finally {
+    await new Promise<void>((resolve) => raced.close(() => resolve()));
+    apiDb.close();
+    seedDb.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a QR request while a seed holds the write lock gets 503, not a QR from a session being changed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "limen-qr-race-"));
+  const file = join(dir, "limen.db");
+  const apiDb = openDatabase(file);
+  const seedDb = openDatabase(file);
+  apiDb.exec(`
+    INSERT INTO stations (id, name, created_at) VALUES ('st-front', 'Front desk', 1);
+    INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('s1', 'S1', 1000, 2000);
+  `);
+  const locked = createApiServer({
+    db: apiDb,
+    version: API_VERSION,
+    stationSigner: SIGNER,
+    stationDisplayToken: TOKEN,
+    now: () => 1010,
+  });
+  await new Promise<void>((resolve) => locked.listen(0, "127.0.0.1", resolve));
+  seedDb.exec("BEGIN IMMEDIATE");
+  try {
+    const url = `http://127.0.0.1:${(locked.address() as AddressInfo).port}`;
+    const res = await fetch(`${url}/stations/st-front/qr`, {
+      headers: { authorization: `Bearer ${displayCredential("st-front")}` },
+    });
+    assert.equal(res.status, 503);
+    assert.deepEqual(await res.json(), { error: "busy" });
+  } finally {
+    seedDb.exec("ROLLBACK");
+    await new Promise<void>((resolve) => locked.close(() => resolve()));
+    apiDb.close();
+    seedDb.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
