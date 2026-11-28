@@ -127,9 +127,16 @@ describe("E-10 app side: the report bundle for the fixture drainer", () => {
           },
           unresolvedAccounts: 0,
         },
+        verdicts: [
+          { instruction: 0, verdict: "other" },
+          { instruction: 1, verdict: "other" },
+          { instruction: 2, verdict: "other" },
+          { instruction: 3, verdict: "hands-over" },
+        ],
         simulation: {
           status: "not-run",
-          reason: "getGenesisHash: the endpoint could not be reached",
+          reason:
+            "limen could not confirm devnet: getGenesisHash: the endpoint could not be reached",
         },
         blocks: ["simulation-not-run"],
       },
