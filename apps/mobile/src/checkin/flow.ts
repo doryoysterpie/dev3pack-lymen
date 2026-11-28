@@ -27,7 +27,8 @@ export interface CheckinFlowDeps {
 export const FLOW_MESSAGES = {
   no_server:
     "This build has no check-in server. Set EXPO_PUBLIC_API_URL when building the app.",
-  wallet_declined: "The wallet did not sign. Nothing was sent.",
+  wallet_declined:
+    "The wallet did not sign, or its signature did not verify on this device. Nothing was sent.",
 } as const;
 
 const refuse = (error: string, message: string): CheckinResult => ({

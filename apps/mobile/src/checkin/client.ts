@@ -16,7 +16,11 @@ export type CheckinResult =
       readonly station: string;
       readonly session: string;
       readonly mint: string;
-      readonly signature: string;
+      /**
+       * The mint transaction's signature, or null when the backend found the pass already held
+       * by the wallet at its mint address and sent nothing (E-05: a retry after a lost answer).
+       */
+      readonly signature: string | null;
     }
   | { readonly ok: false; readonly error: string; readonly message: string };
 
@@ -89,16 +93,15 @@ export async function postCheckin(
   >;
   if (res.status === 201 && b.status === "checked_in") {
     if (
-      [b.station, b.session, b.mint, b.signature].every(
-        (v) => typeof v === "string",
-      )
+      [b.station, b.session, b.mint].every((v) => typeof v === "string") &&
+      (typeof b.signature === "string" || b.signature === null)
     ) {
       return {
         ok: true,
         station: b.station as string,
         session: b.session as string,
         mint: b.mint as string,
-        signature: b.signature as string,
+        signature: b.signature,
       };
     }
   }

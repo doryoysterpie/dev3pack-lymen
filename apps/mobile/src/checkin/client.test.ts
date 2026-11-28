@@ -54,6 +54,37 @@ test("the check-in is POSTed as JSON to <API>/checkins with a standard base64 si
   });
 });
 
+test("a check-in the backend completes from the chain, with no transaction signature, is a check-in", async () => {
+  // E-05's backend answers 201 with a null signature when a retry finds the pass already held by
+  // the wallet at its mint address, so nothing new was sent (services/api/README.md, Minting).
+  const checkedIn = {
+    status: "checked_in",
+    station: "st-front",
+    session: "day-2",
+    mint: "Mint1111",
+  };
+  assert.deepEqual(
+    await postCheckin(
+      answering(201, { ...checkedIn, signature: null }).fn,
+      "http://api",
+      REQ,
+    ),
+    {
+      ok: true,
+      station: "st-front",
+      session: "day-2",
+      mint: "Mint1111",
+      signature: null,
+    },
+  );
+  // A signature that is neither text nor null, or none at all, is still not a check-in.
+  for (const body of [{ ...checkedIn, signature: 7 }, checkedIn])
+    assert.equal(
+      (await postCheckin(answering(201, body).fn, "http://api", REQ)).ok,
+      false,
+    );
+});
+
 test("each refusal the backend gives becomes its sentence", async () => {
   for (const [error, status] of [
     ["already_checked_in", 409],
