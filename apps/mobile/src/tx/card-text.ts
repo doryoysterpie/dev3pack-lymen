@@ -163,14 +163,11 @@ function effectRow(effect: Effect): CardRow {
       }
       const what =
         AUTHORITY[effect.authorityType] ?? `${effect.authorityType} authority`;
-      // With no close authority, the account's owner closes it
-      // (solana-program/token 38de8d1, program/src/processor.rs:686 to 688;
-      // token-2022 efe55b4, :1364 to :1367).
       return {
         label: "Changes an authority",
         value:
           effect.newAuthority === null
-            ? `Asks to set no ${what} on ${where(effect.account)}.${effect.authorityType === "CloseAccount" ? " If accepted, the account's owner can still close it." : ""}`
+            ? `Asks to set no ${what} on ${where(effect.account)}.`
             : `Asks to set the ${what} of ${where(effect.account)} to ${shown(effect.newAuthority)}.`,
       };
     }
@@ -335,7 +332,9 @@ export function transactionCardText(
   }
   if (result.kind === "malformed") {
     return {
-      title: "Malformed transaction",
+      // Ruling 20a, item 7: the heading says what limen knows, that it
+      // cannot read the bytes, not that they break a format.
+      title: "limen cannot read this transaction",
       tone: "malformed",
       // limen reads legacy and version 0 transactions only, so it says what
       // it could not read, never that the transaction breaks Solana's rules.
