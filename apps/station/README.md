@@ -10,7 +10,7 @@ Start the API (see `services/api/README.md`) with `STATION_DISPLAY_TOKEN` set an
 npm run dev -w @limen/station
 ```
 
-On macOS, copy the station's display token with `npm run station-token -w @limen/api -- st-front`, open `http://127.0.0.1:5173/?station=st-front`, and paste the token into the password field. The dev and preview servers forward `/api` to the API at `STATION_API_URL`, or `http://127.0.0.1:8787`. The config loads that variable alone, from the environment or the repository's `.env` (`src/dev-server.test.ts`).
+On macOS, copy the station's display token by running `node --env-file=.env services/api/src/copy-station-token.ts st-front` from the repository root (see `services/api/README.md`), open `http://127.0.0.1:5173/?station=st-front`, and paste the token into the password field. The dev and preview servers forward `/api` to the API at `STATION_API_URL`, or `http://127.0.0.1:8787`. The config loads that variable alone, from the environment or the repository's `.env` (`src/dev-server.test.ts`).
 
 The page keeps the token in memory and sends it in the `Authorization` header. It puts it in no address, history entry, cookie or storage, so a reload asks again (`src/page.test.ts`). The token stays on the clipboard until something else is copied over it, and a browser may offer to save the field; decline it.
 

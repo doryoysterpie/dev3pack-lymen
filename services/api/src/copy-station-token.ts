@@ -1,6 +1,6 @@
 // Copies one station's display token to the macOS clipboard through pbcopy's standard input (E-03):
 //
-//   npm run station-token -w @limen/api -- <station ID>
+//   node --env-file=.env services/api/src/copy-station-token.ts <station ID>
 import { spawn } from "node:child_process";
 
 import { isMainModule } from "./main-module.ts";
@@ -10,7 +10,8 @@ import {
 } from "./station-token.ts";
 
 const STATION_ID = /^[A-Za-z0-9_-]{1,64}$/;
-const USAGE = "usage: npm run station-token -w @limen/api -- <station ID>";
+const USAGE =
+  "usage: node --env-file=.env services/api/src/copy-station-token.ts <station ID>";
 
 /** Copies the token for `args[0]` and returns what to print. Throws with the message to show. */
 export async function copyStationToken(

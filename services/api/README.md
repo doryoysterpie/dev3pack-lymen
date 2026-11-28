@@ -78,11 +78,13 @@ They mint a pass and check its extensions and metadata, send a transfer from the
 
 `GET /stations/<station ID>/qr` with `Authorization: Bearer <that station's display token>` returns `{ qr, station, session, issued_at, expires_at }`: a QR signed with the organizer key for the session whose window holds the current time, and its signed fields. It answers 401 without that station's token or with another, the secret included, 404 for an unknown station, 409 when no session's window holds the current time, and `503 {"error":"busy"}` while a seed holds the database's write lock. The sessions read, the clock reading and the signature share one `BEGIN IMMEDIATE` transaction, so a seed cannot change the session between them; nothing bounds the time between the reading and the signature. A QR's window is 60 s, cut short at its session's end: it expires at that end, or one second before it when the 60 s would end exactly there. Earlier heads also returned `refresh_after_s` and `expires_in_ms`; both are removed.
 
-Each station's display token is the HMAC-SHA256 of `limen:station-display:v1:<station ID>` keyed with `STATION_DISPLAY_TOKEN` (`src/station-token.ts`). On macOS this copies st-front's token to the clipboard through `pbcopy`'s standard input, with `PATH` alone in its environment, and prints only "Copied the display token for st-front."; off macOS it refuses:
+Each station's display token is the HMAC-SHA256 of `limen:station-display:v1:<station ID>` keyed with `STATION_DISPLAY_TOKEN` (`src/station-token.ts`). On macOS, run this from the repository root to copy st-front's token to the clipboard through `pbcopy`'s standard input. It prints only "Copied the display token for st-front."; off macOS it refuses (`src/copy-station-token.test.ts`):
 
 ```bash
-npm run station-token -w @limen/api -- st-front
+node --env-file=.env services/api/src/copy-station-token.ts st-front
 ```
+
+Keep `STATION_DISPLAY_TOKEN` in `.env` alone: `--env-file` gives it to this one process. Exported in a shell, it reaches every program that shell starts. The tool gives `pbcopy` an environment of `PATH`, to which Node adds `NODE_V8_COVERAGE` when coverage is being collected.
 
 Paste the token into the station page.
 

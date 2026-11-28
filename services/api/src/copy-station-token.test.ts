@@ -75,7 +75,7 @@ function assertOnlyStub(path: string, expected: string | null): void {
 }
 
 const USAGE =
-  "station-token: usage: npm run station-token -w @limen/api -- <station ID>\n";
+  "station-token: usage: node --env-file=.env services/api/src/copy-station-token.ts <station ID>\n";
 
 interface Run {
   readonly status: number | null;
@@ -95,6 +95,8 @@ function run(
     pbcopyExit?: number;
     pbcopy?: boolean;
     env?: Record<string, string>;
+    /** Pass the secret in a file named by --env-file, not in the environment. */
+    envFile?: boolean;
   } = {},
 ): Run {
   const dir = mkdtempSync(join(tmpdir(), "limen-station-token-"));
@@ -114,9 +116,13 @@ function run(
     assertOnlyStub(path, options.pbcopy === false ? null : stub);
     const platform = options.platform ?? "darwin";
     const secret = options.secret === undefined ? SECRET : options.secret;
+    const envFile = join(dir, ".env");
+    if (options.envFile === true && secret !== null)
+      writeFileSync(envFile, `STATION_DISPLAY_TOKEN=${secret}\n`);
     const result = spawnSync(
       process.execPath,
       [
+        ...(options.envFile === true ? [`--env-file=${envFile}`] : []),
         `--import=data:text/javascript,Object.defineProperty(process,"platform",{value:${JSON.stringify(platform)}})`,
         ENTRY,
         ...args,
@@ -125,7 +131,9 @@ function run(
         env: {
           ...options.env,
           PATH: path,
-          ...(secret === null ? {} : { STATION_DISPLAY_TOKEN: secret }),
+          ...(secret === null || options.envFile === true
+            ? {}
+            : { STATION_DISPLAY_TOKEN: secret }),
         },
         encoding: "utf8",
         timeout: 10_000,
@@ -286,4 +294,26 @@ test("with PATH unset or empty the tool refuses before it looks for pbcopy", asy
     await assert.rejects(copyStationToken(env, ["st-front"], "darwin"), {
       message: "PATH is not set, so pbcopy cannot be found.",
     });
+});
+
+test("no npm script runs the tool: it is run with node, the secret read from .env by --env-file", () => {
+  for (const file of ["../../../package.json", "../package.json"]) {
+    const manifest = JSON.parse(
+      readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8"),
+    ) as { scripts?: Record<string, string> };
+    for (const [name, command] of Object.entries(manifest.scripts ?? {}))
+      assert.ok(
+        !command.includes("copy-station-token"),
+        `${file} script ${name} runs the tool`,
+      );
+  }
+  const r = run(["st-front"], { envFile: true });
+  assert.deepEqual(
+    { status: r.status, stdout: r.stdout, copied: r.copied },
+    {
+      status: 0,
+      stdout: "Copied the display token for st-front.\n",
+      copied: FRONT_TOKEN,
+    },
+  );
 });
