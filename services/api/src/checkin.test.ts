@@ -22,7 +22,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { ed25519 } from "@noble/curves/ed25519.js";
-import { Keypair, PublicKey, type Connection } from "@solana/web3.js";
+import {
+  Keypair,
+  PublicKey,
+  SystemInstruction,
+  type Connection,
+  type Transaction,
+} from "@solana/web3.js";
 
 import {
   checkIn,
@@ -39,7 +45,7 @@ import {
 import { openDatabase } from "./db.ts";
 import { start } from "./index.ts";
 import { loadOrganizerKey } from "./organizer-key.ts";
-import { connectDevnet } from "./pass-mint.ts";
+import { DEVNET_GENESIS_HASH, passTokenAccount } from "./pass-mint.ts";
 import {
   bindRegistration,
   importRegistrations,
@@ -1110,6 +1116,123 @@ test("the running API checks in with E-07's binding: refusals only the salted bi
   }
 });
 
+test("the running API mints a check-in through devnetMinter, connectDevnet and mintPass at the devnet endpoint", async () => {
+  // start() is given a stand-in for the Connection constructor inside connectDevnet. It records
+  // every URL and call, so nothing reaches devnet and no devnet SOL is spent.
+  const dir = mkdtempSync(join(tmpdir(), "limen-checkin-"));
+  const keyPath = join(dir, "organizer.json");
+  writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
+  const dbPath = join(dir, "limen.db");
+  const now = Math.floor(Date.now() / 1000);
+  const db = openDatabase(dbPath);
+  db.exec(`
+    INSERT INTO stations (id, name, created_at) VALUES ('st-front', 'Front desk', ${now});
+    INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('day-2', 'Day 2', ${now - 3600}, ${now + 3600});
+  `);
+  importRegistrations(db, SALT, ["LMN-0001"]);
+  const alice = wallet();
+  const urls: string[] = [];
+  const calls: string[] = [];
+  const sent: Transaction[] = [];
+  const answers: Record<string, (arg: unknown) => unknown> = {
+    getGenesisHash: () => DEVNET_GENESIS_HASH,
+    getMinimumBalanceForRentExemption: () => 4_181_760,
+    sendTransaction: (tx) => {
+      sent.push(tx as Transaction);
+      return "stand-in-signature";
+    },
+    confirmTransaction: () => ({ context: { slot: 1 }, value: { err: null } }),
+  };
+  const standIn = new Proxy(
+    {},
+    {
+      get: (_target, name) =>
+        name === "then"
+          ? undefined
+          : async (arg: unknown) => {
+              calls.push(String(name));
+              const answer = answers[String(name)];
+              if (answer === undefined)
+                throw new Error(`unexpected call: ${String(name)}`);
+              return answer(arg);
+            },
+    },
+  ) as unknown as Connection;
+  let api: Awaited<ReturnType<typeof start>> | undefined;
+  try {
+    api = await start(
+      {
+        ORGANIZER_KEYPAIR_PATH: keyPath,
+        STATION_DISPLAY_TOKEN: "test-display-token-0123456789abcdef",
+        DATABASE_PATH: dbPath,
+        REGISTRATION_SALT: SALT,
+        PASS_MINT_SECRET: MINT_SECRET,
+        API_PORT: String(await freePort()),
+      },
+      (url) => {
+        urls.push(url);
+        return standIn;
+      },
+    );
+    const res = await fetch(`${api.url}/checkins`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request(alice, "LMN-0001", { issuedAt: now })),
+    });
+    const mint = passAddress("day-2", "LMN-0001");
+    assert.deepEqual(
+      [res.status, await res.json()],
+      [
+        201,
+        {
+          status: "checked_in",
+          station: "st-front",
+          session: "day-2",
+          mint,
+          signature: "stand-in-signature",
+        },
+      ],
+    );
+    // One connection, to the one devnet endpoint, made by connectDevnet.
+    assert.deepEqual(urls, ["https://api.devnet.solana.com"]);
+    // connectDevnet's genesis check, then mintPass's own, before the one transaction is sent.
+    assert.deepEqual(calls, [
+      "getGenesisHash",
+      "getGenesisHash",
+      "getMinimumBalanceForRentExemption",
+      "sendTransaction",
+      "confirmTransaction",
+    ]);
+    // The transaction is E-06's: it creates the pass at the derived address, paid for by the
+    // organizer key, and mints to the checking-in wallet's Token-2022 account.
+    const [tx] = sent;
+    assert.ok(tx !== undefined && sent.length === 1);
+    const create = SystemInstruction.decodeCreateAccount(tx.instructions[0]!);
+    assert.equal(create.newAccountPubkey.toBase58(), mint);
+    assert.equal(
+      create.fromPubkey.toBase58(),
+      Keypair.fromSecretKey(Uint8Array.from(RFC_KEYPAIR)).publicKey.toBase58(),
+    );
+    const holderAccount = passTokenAccount(
+      new PublicKey(mint),
+      new PublicKey(alice.address),
+    );
+    assert.ok(
+      tx.instructions.some((ix) =>
+        ix.keys.some((k) => k.pubkey.equals(holderAccount)),
+      ),
+    );
+    assert.deepEqual(mintRows(db), [{ mint, mint_status: "done" }]);
+  } finally {
+    if (api !== undefined) {
+      const { server } = api;
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the API refuses a SOLANA_RPC_URL that is not the allowlisted devnet endpoint at start-up, without echoing it", async () => {
   const dir = mkdtempSync(join(tmpdir(), "limen-checkin-"));
   const keyPath = join(dir, "organizer.json");
@@ -1203,8 +1326,10 @@ test("the minter reaches only the allowlisted devnet endpoint: another URL is re
     // A URL off the allowlist is refused before any connection is made.
     assert.throws(
       () =>
-        devnetMinter("http://127.0.0.1:9/", loadOrganizerKey(keyPath), (url) =>
-          connectDevnet(url, () => otherCluster),
+        devnetMinter(
+          "http://127.0.0.1:9/",
+          loadOrganizerKey(keyPath),
+          () => otherCluster,
         ),
       {
         message:
@@ -1217,7 +1342,7 @@ test("the minter reaches only the allowlisted devnet endpoint: another URL is re
     const minter = devnetMinter(
       "https://api.devnet.solana.com",
       loadOrganizerKey(keyPath),
-      (url) => connectDevnet(url, () => otherCluster),
+      () => otherCluster,
     );
     assert.deepEqual(
       await checkInAt({ ...deps, minter }, request(alice, "LMN-0001"), T + 5),

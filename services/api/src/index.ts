@@ -3,6 +3,8 @@
 import type { Server } from "node:http";
 import { isIPv6, type AddressInfo } from "node:net";
 
+import type { Connection } from "@solana/web3.js";
+
 import { chainabuseHook, parseChainabuseMode } from "./chainabuse.ts";
 import {
   devnetMinter,
@@ -42,9 +44,15 @@ export function listenUrl(host: string, port: number): string {
   return `http://${isIPv6(host) ? `[${host}]` : host}:${port}`;
 }
 
-/** Starts the API. Throws a configuration error with an operator-readable message. */
+/**
+ * Starts the API. Throws a configuration error with an operator-readable message. `makeConnection`
+ * is for tests only: it replaces the Connection constructor inside connectDevnet, so a test sees
+ * every call the running check-in path makes without reaching devnet. Unset, as `npm start`
+ * leaves it, the connection is web3.js's own.
+ */
 export async function start(
   env: NodeJS.ProcessEnv = process.env,
+  makeConnection?: (url: string) => Connection,
 ): Promise<StartedApi> {
   // Loaded first so a bad key file stops start-up before anything else happens.
   const organizerKey = loadOrganizerKey(env.ORGANIZER_KEYPAIR_PATH);
@@ -92,7 +100,7 @@ export async function start(
         ? undefined
         : {
             registrations: registrationsFrom(db, salt),
-            minter: devnetMinter(rpcEndpoint, organizerKey),
+            minter: devnetMinter(rpcEndpoint, organizerKey, makeConnection),
             mintSecret,
           },
     reports: {

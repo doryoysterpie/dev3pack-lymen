@@ -160,22 +160,24 @@ export function registrationsFrom(
 /**
  * E-06's pass mint on devnet, paid for and signed by the organizer key. `url` must be unset or
  * the one devnet endpoint (devnet-endpoint.ts); any other URL is refused here, when the minter is
- * built, before any connection. The connection is made at the first mint, through connectDevnet,
- * which also refuses a cluster whose genesis hash is not devnet's before anything is sent; a
- * failed connection is tried again at the next mint. E-06's code and @solana/web3.js load at that
- * first mint too, so the API starts without them where no check-in mints.
+ * built, before any connection. The connection is made at the first mint, always through
+ * connectDevnet, which checks the URL again and refuses a cluster whose genesis hash is not
+ * devnet's before anything is sent; a failed connection is tried again at the next mint. `make`
+ * replaces only the Connection constructor connectDevnet calls, so a test can see every call the
+ * minter makes without reaching devnet. E-06's code and @solana/web3.js load at that first mint
+ * too, so the API starts without them where no check-in mints.
  */
 export function devnetMinter(
   url: string | undefined,
   organizer: OrganizerKey,
-  connect?: (url: string) => Promise<Connection>,
+  make?: (url: string) => Connection,
 ): PassMinter {
   const endpoint = devnetEndpoint(url);
   const prepare = async (): Promise<PassMinter> => {
     const { Keypair, PublicKey } = await import("@solana/web3.js");
     const { connectDevnet, mintPass, passMintState } =
       await import("./pass-mint.ts");
-    const connection = await (connect ?? connectDevnet)(endpoint);
+    const connection = await connectDevnet(endpoint, make);
     const payer = Keypair.fromSecretKey(organizer.secretKeyBytes());
     return {
       async mint(wallet, seed, details) {
