@@ -10,9 +10,12 @@ import { parseReport, storeReport } from "./evidence.ts";
 import {
   autoEscalates,
   bundledLists,
+  caseEvidence,
+  decideCase,
   dedupHash,
   domainListed,
   holdQueue,
+  listCases,
   normalizeHostname,
   parseDomainLists,
   triageSighting,
@@ -366,4 +369,100 @@ test("the hold queue lists held cases only, most recently updated first", () => 
     holdQueue(db, lists).map((c) => c.id),
     [a, b],
   );
+});
+
+test("E-12 done test: a dismissed case does not re-open on a third sighting", () => {
+  // Two cases built the same way: two sightings from two devices, no reproduced drain pattern,
+  // so both hold. One is dismissed by a human; the other is left held as a control.
+  const run = (dismiss: boolean): TriageOutcome => {
+    const db = openDatabase(":memory:");
+    triageSighting(db, store(db, "drainer_device_1"), lists, clock++);
+    const second = triageSighting(
+      db,
+      store(db, "drainer_device_2"),
+      lists,
+      clock++,
+    );
+    assert.equal(second.case.status, "held");
+    if (dismiss) {
+      const decision = decideCase(
+        db,
+        second.case.id,
+        "dismiss",
+        lists,
+        clock++,
+      );
+      assert.equal(decision.outcome, "decided");
+      assert.ok("case" in decision);
+      assert.equal(decision.case.status, "dismissed");
+    }
+    // The third sighting comes from a third device and its re-simulation reproduced a drain
+    // summary, so on its own terms it meets the D-05 threshold.
+    return drainReport(db, "drainer_device_2", { device_id: device(3) });
+  };
+
+  const control = run(false);
+  assert.equal(control.case.status, "escalated");
+  assert.equal(control.case.decidedBy, "threshold");
+
+  const third = run(true);
+  assert.equal(third.case.sightings, 3);
+  assert.deepEqual(third.case.inputs, {
+    drainPattern: true,
+    independentDevices: 3,
+    domainListed: false,
+  });
+  assert.equal(third.case.status, "dismissed");
+  assert.equal(third.case.decidedBy, "human");
+  assert.equal(third.escalatedNow, false);
+});
+
+test("a human can escalate or dismiss a case; repeating an action changes nothing", () => {
+  const db = openDatabase(":memory:");
+  const id = triageSighting(db, store(db, "drainer_device_1"), lists, 10).case
+    .id;
+  const escalated = decideCase(db, id, "escalate", lists, 20);
+  assert.equal(escalated.outcome, "decided");
+  assert.ok("case" in escalated);
+  assert.equal(escalated.case.status, "escalated");
+  assert.equal(escalated.case.decidedBy, "human");
+  assert.equal(escalated.case.updatedAt, 20);
+  const again = decideCase(db, id, "escalate", lists, 30);
+  assert.equal(again.outcome, "unchanged");
+  assert.ok("case" in again);
+  assert.equal(again.case.updatedAt, 20);
+  assert.equal(
+    decideCase(db, id + 1, "dismiss", lists, 40).outcome,
+    "not_found",
+  );
+});
+
+test("the case list holds every status, and the evidence view lists each sighting's bundle", () => {
+  const db = openDatabase(":memory:");
+  const held = triageSighting(db, store(db, "drainer_device_1"), lists, 100)
+    .case.id;
+  triageSighting(db, store(db, "drainer_device_2"), lists, 110);
+  const other = triageSighting(
+    db,
+    store(db, "drainer_device_1", { url: "https://other-claim.example/" }),
+    lists,
+    120,
+  ).case.id;
+  decideCase(db, other, "dismiss", lists, 130);
+  assert.deepEqual(
+    listCases(db, lists).map((c) => [c.id, c.status]),
+    [
+      [other, "dismissed"],
+      [held, "held"],
+    ],
+  );
+  const evidence = caseEvidence(db, held);
+  assert.deepEqual(
+    evidence.map((b) => Buffer.from(b.transaction ?? []).toString("base64")),
+    [
+      FIXTURES.drainer_device_1.transaction,
+      FIXTURES.drainer_device_2.transaction,
+    ],
+  );
+  assert.deepEqual(caseEvidence(db, 999), []);
 });

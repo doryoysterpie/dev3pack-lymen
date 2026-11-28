@@ -7,6 +7,7 @@ import { openDatabase } from "./db.ts";
 import { isMainModule } from "./main-module.ts";
 import { loadOrganizerKey } from "./organizer-key.ts";
 import { API_VERSION, createApiServer } from "./server.ts";
+import { bundledLists, type DomainLists } from "./triage.ts";
 
 export interface StartedApi {
   readonly server: Server;
@@ -42,7 +43,23 @@ export async function start(
   const port = parsePort(env.API_PORT);
   const host = env.API_HOST || "127.0.0.1";
   const db = openDatabase(env.DATABASE_PATH || "limen.db");
-  const server = createApiServer({ db, version: API_VERSION });
+  // The triage lists load once, here. If they cannot, the API still starts and serves /health,
+  // and only the triage routes answer 503 (E-12).
+  let lists: DomainLists | null;
+  try {
+    lists = bundledLists();
+  } catch {
+    lists = null;
+    console.error(
+      "limen api: the triage domain lists did not load, so the triage routes answer 503.",
+    );
+  }
+  // The dashboard's JSON routes answer 503 until TRIAGE_TOKEN is set (E-12).
+  const server = createApiServer({
+    db,
+    version: API_VERSION,
+    reports: { triageToken: env.TRIAGE_TOKEN || undefined, lists },
+  });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, () => {

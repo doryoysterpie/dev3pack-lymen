@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 
-import { canonicalJson, loadBundle } from "./evidence.ts";
+import { canonicalJson, loadBundle, type StoredBundle } from "./evidence.ts";
 
 export type CaseStatus = "held" | "escalated" | "dismissed";
 export type DecidedBy = "threshold" | "human";
@@ -304,4 +304,53 @@ export function holdQueue(db: DatabaseSync, lists: DomainLists): CaseView[] {
     )
     .all() as unknown as CaseRow[];
   return rows.map((row) => caseView(db, row, lists));
+}
+
+/** Every case, most recently updated first (E-12). */
+export function listCases(db: DatabaseSync, lists: DomainLists): CaseView[] {
+  const rows = db
+    .prepare("SELECT * FROM cases ORDER BY updated_at DESC, id DESC")
+    .all() as unknown as CaseRow[];
+  return rows.map((row) => caseView(db, row, lists));
+}
+
+/** The evidence for a case: each sighting with its bundle, oldest first (E-12). */
+export function caseEvidence(db: DatabaseSync, caseId: number): StoredBundle[] {
+  const ids = db
+    .prepare("SELECT id FROM sightings WHERE case_id = ? ORDER BY id")
+    .all(caseId) as { id: number }[];
+  return ids.flatMap(({ id }) => {
+    const bundle = loadBundle(db, id);
+    return bundle === null ? [] : [bundle];
+  });
+}
+
+export type HumanAction = "escalate" | "dismiss";
+
+export type DecisionResult =
+  | { readonly outcome: "not_found" }
+  | { readonly outcome: "unchanged" | "decided"; readonly case: CaseView };
+
+/**
+ * A human's manual escalate or dismiss (E-12). Sets the status and records the human as the
+ * decider. A case already in the asked-for status is left as it is. A dismissed case stays
+ * dismissed when later sightings arrive, because triageSighting escalates only held cases.
+ */
+export function decideCase(
+  db: DatabaseSync,
+  caseId: number,
+  action: HumanAction,
+  lists: DomainLists,
+  now: number,
+): DecisionResult {
+  const status: CaseStatus = action === "escalate" ? "escalated" : "dismissed";
+  const current = loadCase(db, caseId, lists);
+  if (current === null) return { outcome: "not_found" };
+  if (current.status === status) return { outcome: "unchanged", case: current };
+  db.prepare(
+    "UPDATE cases SET status = ?, decided_by = 'human', updated_at = ? WHERE id = ?",
+  ).run(status, now, caseId);
+  const decided = loadCase(db, caseId, lists);
+  if (decided === null) throw new Error(`case ${caseId} vanished`);
+  return { outcome: "decided", case: decided };
 }
