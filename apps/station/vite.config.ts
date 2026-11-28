@@ -64,11 +64,11 @@ function refuseSecretPaths(): Plugin {
     },
     configurePreviewServer(server) {
       server.middlewares.use(guard);
-      // The files Vite's manifest names when the preview starts; the manifest itself is not served.
-      const served =
-        manifestFiles(
-          resolve(server.config.root, server.config.build.outDir),
-        ) ?? new Set<string>();
+      // The files Vite's manifest names when the preview starts, which throws on a manifest that
+      // is missing, not JSON or not its shape; the manifest itself is not served.
+      const served = manifestFiles(
+        resolve(server.config.root, server.config.build.outDir),
+      );
       server.middlewares.use((req, res, next) => {
         const path = new URL(req.url ?? "/", "http://station.invalid").pathname;
         if (
@@ -125,26 +125,55 @@ function importGraphOnly(server: ViteDevServer) {
 
 const MANIFEST = ".vite/manifest.json";
 
+/** A path the manifest may name: relative, inside the output folder, in plain characters. */
+const OUTPUT_PATH = /^(?!\/)(?!.*(^|\/)\.\.?(\/|$))[A-Za-z0-9._\-/]+$/;
+
 /**
  * The files Vite's manifest (build.manifest) names in `outDir`: each .html entry, and each
- * entry's file, CSS and assets, as paths relative to `outDir`. Null when there is no manifest.
+ * entry's file, CSS and assets, as paths relative to `outDir`. Throws when the manifest is
+ * missing, is not JSON, or is not the manifest's shape.
  */
-function manifestFiles(outDir: string): Set<string> | null {
-  let manifest: Record<
-    string,
-    { file: string; css?: string[]; assets?: string[] }
-  >;
+function manifestFiles(outDir: string): Set<string> {
+  const at = join(outDir, MANIFEST);
+  const refuse = (why: string): never => {
+    throw new Error(`no usable Vite manifest at ${at}: ${why}`);
+  };
+  let text: string;
   try {
-    manifest = JSON.parse(readFileSync(join(outDir, MANIFEST), "utf8"));
+    text = readFileSync(at, "utf8");
   } catch {
-    return null;
+    return refuse("missing");
   }
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(text);
+  } catch {
+    return refuse("not JSON");
+  }
+  if (
+    typeof manifest !== "object" ||
+    manifest === null ||
+    Array.isArray(manifest)
+  )
+    return refuse("not an object");
   const files = new Set<string>();
+  const add = (file: unknown) => {
+    if (typeof file !== "string" || !OUTPUT_PATH.test(file))
+      refuse(`${JSON.stringify(file)} is not a path inside the output`);
+    files.add(file as string);
+  };
   for (const [key, entry] of Object.entries(manifest)) {
-    if (key.endsWith(".html")) files.add(key);
-    files.add(entry.file);
-    for (const file of [...(entry.css ?? []), ...(entry.assets ?? [])])
-      files.add(file);
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+      refuse(`entry ${JSON.stringify(key)} is not an object`);
+    const { file, css = [], assets = [] } = entry as Record<string, unknown>;
+    if (!Array.isArray(css) || !Array.isArray(assets))
+      refuse(
+        `entry ${JSON.stringify(key)} has css or assets that are not lists`,
+      );
+    if (key.endsWith(".html")) add(key);
+    add(file);
+    for (const named of [...(css as unknown[]), ...(assets as unknown[])])
+      add(named);
   }
   return files;
 }
@@ -167,8 +196,6 @@ function checkBuildOutput(): Plugin {
       const dir = options.dir;
       if (dir === undefined) return;
       const named = manifestFiles(dir);
-      if (named === null)
-        throw new Error("the station build wrote no Vite manifest");
       const others = filesUnder(dir).filter(
         (file) => file !== MANIFEST && !named.has(file),
       );

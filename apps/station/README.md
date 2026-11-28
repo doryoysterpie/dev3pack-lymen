@@ -25,7 +25,7 @@ The page times each QR on its own clock against the signed `issued_at` and `expi
 See `vite.config.ts` and `src/dev-server.test.ts`.
 
 - **Dev:** the page's import graph: `/`, `index.html`, the module scripts it names, Vite's client, and each module the graph holds as imported by one already served. Any other request outside `/api` gets 403, so a file in `src` that nothing imports is not served. Git ignores key-shaped files (`.json` other than `package.json`, `.pem`, `.key`, `.p12`, `.pfx`) anywhere in this folder.
-- **Preview:** `/` and the files Vite's manifest names. Any other path outside `/api` gets 403.
+- **Preview:** `/` and the files Vite's manifest names. Any other path outside `/api` gets 403. A manifest that is missing, is not JSON, or is not the manifest's shape, a path outside the output folder included, stops the preview from starting.
 - **Both:** 403 by name, outside `/api`, for key and certificate files, keypair files, databases, `.env` files and the `node_modules/@limen` links, and no CORS header.
 - **Build:** no public folder, and a failure when the output holds a file Vite's manifest does not name.
 
