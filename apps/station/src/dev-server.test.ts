@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { createServer as createNetServer, type AddressInfo } from "node:net";
@@ -174,7 +175,7 @@ test("the dev and preview servers serve no key or database through a workspace l
   }
 });
 
-test("an organizer key with an ordinary JSON name in apps/station/build gets 403 from the dev and preview servers, and the dev server serves nothing in apps/station but src and index.html", async () => {
+test("an organizer key with an ordinary JSON name in apps/station/build gets 403 from the dev and preview servers, and the dev server refuses the folder's config, package file and README", async () => {
   const buildDir = join(APP, "build");
   const hadBuildDir = existsSync(buildDir);
   mkdirSync(buildDir, { recursive: true });
@@ -212,7 +213,8 @@ test("an organizer key with an ordinary JSON name in apps/station/build gets 403
       "/README.md",
     ])
       assert.equal((await status(devPort, path)).status, 403, `dev ${path}`);
-    // The page and every module it loads, followed import by import from main.ts, answer 200.
+    // Each module reached by following the absolute import paths in each served module, from
+    // /@vite/client and /src/main.ts, answers 200.
     assert.equal((await status(devPort, "/")).status, 200);
     const seen = new Set<string>();
     const queue = ["/@vite/client", "/src/main.ts"];
@@ -344,10 +346,12 @@ test("the build fails when its output holds a file Vite's manifest does not name
   }
 });
 
-test("in the station folder the dev server serves only source files: a key named organizer.json in src gets 403", async () => {
+test("the dev server serves the page's import graph alone: a key in src, even one named organizer.ts that nothing imports, gets 403", async () => {
   const src = join(APP, "src");
   const tag = `dev-server-test-${process.pid}`;
   const files = [
+    join(src, `${tag}-organizer.ts`),
+    join(src, `${tag}-unused.css`),
     join(src, `${tag}-organizer.json`),
     join(src, `${tag}-notes.md`),
   ];
@@ -361,7 +365,10 @@ test("in the station folder the dev server serves only source files: a key named
   try {
     // Stand-ins, each created with flag "wx", so an existing file is not overwritten.
     for (const file of files) {
-      writeFileSync(file, `${MARKER}\n`, { flag: "wx" });
+      const body = file.endsWith(".ts")
+        ? `export const key = "${MARKER}";\n`
+        : `${MARKER}\n`;
+      writeFileSync(file, body, { flag: "wx" });
       written.push(file);
     }
     await dev.listen();
@@ -386,6 +393,29 @@ test("in the station folder the dev server serves only source files: a key named
     await dev.close();
     for (const file of written) rmSync(file, { force: true });
   }
+});
+
+test("git ignores key-shaped files anywhere under apps/station, and not the folder's own files", () => {
+  const ignored = (path: string) =>
+    spawnSync("git", ["check-ignore", "-q", "--no-index", path], {
+      cwd: REPO,
+    }).status === 0;
+  for (const path of [
+    "apps/station/organizer.json",
+    "apps/station/src/organizer.json",
+    "apps/station/build/id.json",
+    "apps/station/src/station.pem",
+    "apps/station/src/station.key",
+    "apps/station/dist/organizer.p12",
+  ])
+    assert.ok(ignored(path), `${path} is ignored`);
+  for (const path of [
+    "apps/station/package.json",
+    "apps/station/index.html",
+    "apps/station/vite.config.ts",
+    "apps/station/src/main.ts",
+  ])
+    assert.ok(!ignored(path), `${path} is not ignored`);
 });
 
 test("a notes.html left in the output folder fails the build, and one added after it is not served by the preview", async () => {
