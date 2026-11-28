@@ -12,6 +12,7 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -228,5 +229,32 @@ test("the link tool refuses an existing link file, or a symlink with its name, a
     });
     assert.equal(readlinkSync(side), target);
     assert.equal(existsSync(target), false);
+  });
+});
+
+test("a link folder replaced between the checks and the file's creation is caught: no token is written, and an empty file is left where the replaced path leads", () => {
+  withHome((home) => {
+    const elsewhere = join(home, "elsewhere");
+    mkdirSync(elsewhere, { mode: 0o700 });
+    const moved = join(home, "moved");
+    assert.throws(
+      () =>
+        writeStationLink({ STATION_DISPLAY_TOKEN: SECRET }, ["st-front"], {
+          home,
+          // After the tool has checked and opened the folder: swap it for a symlink elsewhere.
+          beforeCreate: () => {
+            renameSync(folder(home), moved);
+            symlinkSync(elsewhere, folder(home));
+          },
+        }),
+      {
+        message: `${folder(home)} changed while the link was being written; nothing was written.`,
+      },
+    );
+    // Node has no openat, so the file was created by its path, in the folder the symlink leads
+    // to. It is empty: the token was not written.
+    assert.deepEqual(readdirSync(elsewhere), ["st-front.url"]);
+    assert.equal(readFileSync(join(elsewhere, "st-front.url"), "utf8"), "");
+    assert.deepEqual(readdirSync(moved), []);
   });
 });

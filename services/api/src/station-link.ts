@@ -10,10 +10,12 @@
 // 1 to 64 characters of [A-Za-z0-9_-], and ".url". The file is created new, at mode 600; the
 // tool refuses when a file or a symlink already has that name.
 //
-// Node has no openat, so the file is opened by path, not relative to the open folder. The tool
-// opens the folder without following a symlink and checks what it opened; after creating the
-// file, and before writing the token, it checks that the folder's path still names that folder
-// and the file's path still names the file it created. If either has changed, it writes nothing.
+// Node has no openat, so the file is created by its path, not relative to the open folder. The
+// tool opens the folder without following a symlink and checks what it opened; after creating
+// the file, and before writing the token, it checks that the folder's path still names that
+// folder and the file's path still names the file it created. If the folder is replaced in
+// between, the file is created, empty, where the replaced path leads; the tool then writes no
+// token and stops with an error, and that empty file stays (station-link.test.ts).
 import {
   closeSync,
   constants,
@@ -77,12 +79,17 @@ function checkFolder(folder: string, stats: Stats, uid: number): void {
 
 /**
  * Writes the link for `args[0]` into ~/limen-station-links and returns what to print. `home` and
- * `uid` default to the user's own; tests pass others.
+ * `uid` default to the user's own; tests pass others, and `beforeCreate`, which runs after the
+ * folder checks and before the file is created.
  */
 export function writeStationLink(
   env: NodeJS.ProcessEnv,
   args: readonly string[],
-  options: { readonly home?: string; readonly uid?: number } = {},
+  options: {
+    readonly home?: string;
+    readonly uid?: number;
+    readonly beforeCreate?: () => void;
+  } = {},
 ): string {
   const station = args[0];
   if (args.length !== 1 || station === undefined || !STATION_ID.test(station))
@@ -104,6 +111,7 @@ export function writeStationLink(
     const opened = fstatSync(folderFd);
     checkFolder(folder, opened, uid);
     const path = join(folder, `${station}.url`);
+    options.beforeCreate?.();
     let fd: number;
     try {
       fd = openSync(
