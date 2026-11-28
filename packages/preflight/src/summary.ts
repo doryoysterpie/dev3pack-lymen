@@ -30,16 +30,6 @@ import {
   priorityFeeLamports,
 } from "./fee.ts";
 import { withMarker } from "./marker.ts";
-import {
-  ADDRESS_LOOKUP_TABLE_PROGRAM,
-  ASSOCIATED_TOKEN_PROGRAM,
-  COMPUTE_BUDGET_PROGRAM,
-  MEMO_PROGRAM,
-  MEMO_V1_PROGRAM,
-  SYSTEM_PROGRAM,
-  TOKEN_2022_PROGRAM,
-  TOKEN_PROGRAM,
-} from "./programs.ts";
 import type { ParsedTransaction } from "./wire.ts";
 
 /** An account in the summary: its address, or where it sits when unknown. */

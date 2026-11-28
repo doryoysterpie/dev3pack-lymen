@@ -9,12 +9,10 @@ import * as web3 from "@solana/web3.js";
 
 import { decodePublicKey } from "./base58.ts";
 import { encodeBase64 } from "./base64.ts";
-import { encodeTransaction } from "./encode.ts";
 import { preflight, preflightTransaction } from "./preflight.ts";
 import {
   DEVNET_GENESIS_HASH,
   SYSTEM_PROGRAM,
-  TOKEN_2022_PROGRAM,
   TOKEN_PROGRAM,
 } from "./programs.ts";
 import { endpointFor, recordedEndpoint } from "../test-support/recorded.ts";
@@ -567,26 +565,6 @@ describe("re-audit A5: a slot, owner or mint that is not valid is not evidence",
 });
 
 describe("re-audit A4: the report names no address of the wallet's", () => {
-  const offline = () =>
-    endpointFor(async () => {
-      throw new Error("offline");
-    }, "x");
-  const other = key(K.userToken2022Account);
-  // A Token transfer, signed by the wallet, from one of its token accounts
-  // to another.
-  const between = () =>
-    build([
-      new web3.TransactionInstruction({
-        programId: new web3.PublicKey(TOKEN_PROGRAM),
-        keys: [
-          { pubkey: tokenAccount, isSigner: false, isWritable: true },
-          { pubkey: other, isSigner: false, isWritable: true },
-          { pubkey: user, isSigner: true, isWritable: false },
-        ],
-        data: Buffer.from([3, 5, 0, 0, 0, 0, 0, 0, 0]),
-      }),
-    ]);
-
   it("(ii) an address of the wallet's inside a longer run of RPC text is scrubbed", async () => {
     const approve = build([
       new web3.TransactionInstruction({
@@ -808,11 +786,6 @@ describe("re-audit 2, item 9: any address limen cannot resolve holds signing", (
 });
 
 describe("audit 9: the report JSON and the blockhash", () => {
-  const offline = () =>
-    endpointFor(async () => {
-      throw new Error("offline");
-    }, "x");
-
   it("an error keyed by the wallet's address loses the address", async () => {
     const result = await preflightTransaction(build([transfer()]), {
       endpoint: recordedEndpoint({
