@@ -10,7 +10,8 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#FFFFFF"
-      }
+      },
+      "package": "app.antelimen.limen"
     },
     "plugins": [
       [
@@ -20,7 +21,8 @@
           "microphonePermission": false,
           "recordAudioAndroid": false
         }
-      ]
+      ],
+      "./plugins/with-test-certificate.ts"
     ]
   }
 }

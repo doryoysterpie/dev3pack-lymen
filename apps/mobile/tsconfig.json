@@ -5,5 +5,5 @@
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true
   },
-  "exclude": ["node_modules", "android", "ios", "**/*.test.ts"]
+  "exclude": ["node_modules", "android", "ios", "plugins", "**/*.test.ts"]
 }
