@@ -8,6 +8,7 @@ import { openDatabase } from "./db.ts";
 import { isMainModule } from "./main-module.ts";
 import { loadOrganizerKey } from "./organizer-key.ts";
 import { API_VERSION, createApiServer } from "./server.ts";
+import { parseStationDisplaySecret } from "./station-token.ts";
 import { bundledLists, type DomainLists } from "./triage.ts";
 
 export interface StartedApi {
@@ -34,25 +35,13 @@ export function listenUrl(host: string, port: number): string {
   return `http://${isIPv6(host) ? `[${host}]` : host}:${port}`;
 }
 
-const MIN_TOKEN_LENGTH = 32;
-
-function parseStationDisplayToken(value: string | undefined): string {
-  if (value === undefined || value.length < MIN_TOKEN_LENGTH) {
-    // The message never echoes the value, only whether it is set.
-    throw new Error(
-      `STATION_DISPLAY_TOKEN must be set to at least ${MIN_TOKEN_LENGTH} characters (${value === undefined || value === "" ? "it is not set" : "it is too short"}). To add one to .env without printing it, run from the repository root: printf '\\nSTATION_DISPLAY_TOKEN=%s\\n' "$(openssl rand -base64 32)" >> .env`,
-    );
-  }
-  return value;
-}
-
 /** Starts the API. Throws a configuration error with an operator-readable message. */
 export async function start(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<StartedApi> {
   // Loaded first so a bad key file stops start-up before anything else happens.
   const organizerKey = loadOrganizerKey(env.ORGANIZER_KEYPAIR_PATH);
-  const stationDisplayToken = parseStationDisplayToken(
+  const stationDisplayToken = parseStationDisplaySecret(
     env.STATION_DISPLAY_TOKEN,
   );
   const chainabuse = parseChainabuseMode(env.CHAINABUSE_POST);
