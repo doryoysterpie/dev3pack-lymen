@@ -1,20 +1,22 @@
 // Balance changes from a simulation (E-09). Pure module. The amounts, the
 // wallet's SOL and each token account's balance, before and after, come from
 // the simulation's own run (its pre and post balances), so they cannot hold a
-// transaction that landed between a read and the simulation. The one
-// exception is a transaction with no token program among its accounts: it
-// cannot change a token account's amount, and the run lists no token
-// balances, so the amount before and after is the one read before
-// (balanceChanges). The rest, the wallet's owner and data length and each
-// token account's delegate, allowance, owner and close authority, compares
-// account state read before the simulation with the state the simulation
-// reports after it; the pre-flight uses that only when a second read, after
-// the simulation, agrees with the first (unchangedBetween).
+// transaction that landed between a read and the simulation. Each token
+// balance must agree with the account state the run returns and with the
+// read, or the run is not used. A transaction with no token program among
+// its accounts cannot change a token account, and the run lists no token
+// balances, so no token change is listed for it, and a run that shows one
+// changed is not used (balanceChanges). The rest, the wallet's owner and
+// data length and each token account's delegate, allowance, owner and close
+// authority, compares account state read before the simulation with the
+// state the simulation reports after it; the pre-flight uses that only when
+// a second read, after the simulation, agrees with the first
+// (unchangedBetween).
 
 import type { Account } from "./accounts.ts";
 import { TOKEN_2022_PROGRAM, TOKEN_PROGRAM } from "./programs.ts";
 import type { AccountState, TokenBalance } from "./rpc.ts";
-import { parseTokenAccount } from "./state.ts";
+import { parseTokenAccount, type TokenAccount } from "./state.ts";
 
 export type BalanceChange =
   | {
@@ -111,6 +113,24 @@ function isTokenProgram(owner: string): boolean {
   return owner === TOKEN_PROGRAM || owner === TOKEN_2022_PROGRAM;
 }
 
+/** Why a run's token balances are not used: they disagree with the read. */
+const READ_STATE =
+  "the simulation's token balances do not match the accounts read";
+/** Why: they disagree with the run's own account state. */
+const OWN_STATE =
+  "the simulation's token balances do not match its own account state";
+
+/** Whether two token account states agree on everything but the amount. */
+function sameState(a: TokenAccount, b: TokenAccount): boolean {
+  return (
+    a.mint === b.mint &&
+    a.owner === b.owner &&
+    a.delegate === b.delegate &&
+    a.delegatedAmount === b.delegatedAmount &&
+    a.closeAuthority === b.closeAuthority
+  );
+}
+
 /**
  * The watched token accounts the user owns, before the simulation or after
  * it, in the order of the watched addresses. after is empty when the
@@ -183,9 +203,9 @@ export function balanceChanges(
   // svm/src/transaction_balances.rs:83 and :96). Without one, no instruction
   // can reach a token program (program-runtime/src/invoke_context.rs:463 to
   // 470), and only a token account's owner program can change its data
-  // (transaction-context/src/instruction_accounts.rs:345 to 352), so its
-  // amount is the one read before the run, unchanged. An address behind a
-  // lookup table limen could not read may be a token program.
+  // (transaction-context/src/instruction_accounts.rs:345 to 352), so the
+  // account is as the read found it. An address behind a lookup table limen
+  // could not read may be a token program.
   const holdsTokenProgram = balances.keys.some(
     (key) => key === null || isTokenProgram(key),
   );
@@ -216,32 +236,68 @@ export function balanceChanges(
       }
       return;
     }
-    if (pre === null || !isTokenProgram(pre.owner)) return;
-    const was = parseTokenAccount(pre.data);
-    if (was === null || was.owner !== user) return;
-    const now =
-      post !== null && isTokenProgram(post.owner)
-        ? parseTokenAccount(post.data)
+    const was =
+      pre !== null && isTokenProgram(pre.owner)
+        ? parseTokenAccount(pre.data)
         : null;
-    const index = indexOf(address);
-    let amountBefore = was.amount;
-    let amountAfter = was.amount;
-    if (holdsTokenProgram) {
-      const preBalance = balances.preToken.find(
-        (balance) => balance.accountIndex === index,
-      );
-      if (preBalance === undefined || preBalance.owner !== user) {
-        throw new Error(
-          "the simulation's token balances do not match the accounts read",
-        );
-      }
-      const postBalance = balances.postToken.find(
-        (balance) => balance.accountIndex === index,
-      );
-      amountBefore = preBalance.amount;
-      // A closed account has no balance after.
-      amountAfter = postBalance?.amount ?? "0";
+    const readOwned = was !== null && was.owner === user;
+    // The run's own account state: a token account, or not one any more,
+    // since a closed account is handed to the System Program with no data
+    // (solana-program/token 38de8d1, program/src/processor.rs:1042 to 1045).
+    const postIsToken = post !== null && isTokenProgram(post.owner);
+    const now = postIsToken ? parseTokenAccount(post.data) : null;
+    if (!holdsTokenProgram) {
+      if (!readOwned) return;
+      // Nothing in the transaction can change the account (see above), so a
+      // run that shows it changed is not evidence about this transaction.
+      if (now === null || !sameState(was, now)) throw new Error(OWN_STATE);
+      return;
     }
+    const index = indexOf(address);
+    // The run's own pre balance names the owner as the run starts. The
+    // account is the wallet's only when that and the read agree, with one
+    // entry for its mint; any disagreement leaves the run unused.
+    const preEntries = balances.preToken.filter(
+      (balance) => balance.accountIndex === index,
+    );
+    if (!readOwned && !preEntries.some((balance) => balance.owner === user)) {
+      return;
+    }
+    const preBalance = preEntries[0];
+    if (
+      !readOwned ||
+      preEntries.length !== 1 ||
+      preBalance.owner !== user ||
+      preBalance.mint !== was.mint
+    ) {
+      throw new Error(READ_STATE);
+    }
+    // Each post balance must agree with the account the run returns: one
+    // entry with its mint, owner and amount for a token account, none for a
+    // closed one. agave leaves an entry out when it cannot read the mint
+    // (svm/src/transaction_balances.rs:96 to 104), so a missing entry does
+    // not show the account closed.
+    const postEntries = balances.postToken.filter(
+      (balance) => balance.accountIndex === index,
+    );
+    if (postIsToken) {
+      const postBalance = postEntries[0];
+      if (
+        now === null ||
+        now.mint !== was.mint ||
+        postEntries.length !== 1 ||
+        postBalance.mint !== now.mint ||
+        postBalance.owner !== now.owner ||
+        postBalance.amount !== now.amount
+      ) {
+        throw new Error(OWN_STATE);
+      }
+    } else if (postEntries.length !== 0) {
+      throw new Error(OWN_STATE);
+    }
+    const amountBefore = preBalance.amount;
+    // A closed account has no balance after.
+    const amountAfter = now?.amount ?? "0";
     const change: BalanceChange = {
       kind: "token",
       account: address,
