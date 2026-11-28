@@ -1,15 +1,31 @@
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type Server } from "node:http";
+import { registerHooks } from "node:module";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 
-import {
-  CHECKIN_MESSAGES,
-  checkinBody,
-  postCheckin,
-  type CheckinRequest,
-} from "./client.ts";
-import { appFetch } from "./http.ts";
+import type { CheckinRequest } from "./client.ts";
+import type { HttpFetch } from "./http.ts";
+
+const nodeHttpFetch = globalThis.fetch;
+(
+  globalThis as unknown as { __limenTestExpoFetch?: HttpFetch }
+).__limenTestExpoFetch ??= (url, init) => nodeHttpFetch(url, init);
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === "expo/fetch") {
+      return {
+        shortCircuit: true,
+        url: "data:text/javascript,export const fetch = (...args) => globalThis.__limenTestExpoFetch(...args);",
+      };
+    }
+    return nextResolve(specifier, context);
+  },
+});
+
+const { CHECKIN_MESSAGES, checkinBody, postCheckin } =
+  await import("./client.ts");
+const { appFetch } = await import("./http.ts");
 
 const API = "https://api.example.test";
 const SIGNATURE = new Uint8Array(64).map((_, i) => i);

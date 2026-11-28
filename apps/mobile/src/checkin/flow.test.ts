@@ -8,22 +8,36 @@ import {
   verify,
 } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { registerHooks } from "node:module";
 import { test } from "node:test";
 
-import { CHECKIN_MESSAGES } from "./client.ts";
-import { parseApiUrl, parseStationSigners } from "./config.ts";
-import {
-  FLOW_MESSAGES,
-  prepareCheckin,
-  type CheckinFlowDeps,
-  type WalletAccount,
-  type WalletSigner,
-} from "./flow.ts";
 import type { CheckinResult } from "./client.ts";
-import type { Ed25519Verify } from "./station-qr.ts";
+import { parseApiUrl, parseStationSigners } from "./config.ts";
 import { ed25519Verify } from "./ed25519.ts";
+import type { CheckinFlowDeps, WalletAccount, WalletSigner } from "./flow.ts";
+import type { HttpFetch } from "./http.ts";
 import { mwaSigner, type MwaWallet, type Transact } from "./mwa-signer.ts";
+import type { Ed25519Verify } from "./station-qr.ts";
 import { encodeBase58 } from "./wallet-address.ts";
+
+const nodeHttpFetch = globalThis.fetch;
+(
+  globalThis as unknown as { __limenTestExpoFetch?: HttpFetch }
+).__limenTestExpoFetch ??= (url, init) => nodeHttpFetch(url, init);
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === "expo/fetch") {
+      return {
+        shortCircuit: true,
+        url: "data:text/javascript,export const fetch = (...args) => globalThis.__limenTestExpoFetch(...args);",
+      };
+    }
+    return nextResolve(specifier, context);
+  },
+});
+
+const { CHECKIN_MESSAGES } = await import("./client.ts");
+const { FLOW_MESSAGES, prepareCheckin } = await import("./flow.ts");
 
 const FIXTURE = JSON.parse(
   readFileSync(
