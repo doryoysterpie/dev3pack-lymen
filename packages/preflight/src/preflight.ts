@@ -262,9 +262,11 @@ export async function preflight(
         "the simulation returned a balance that is not a whole amount",
       );
     }
-    // The amounts come from the simulation's own run. The other fields come
-    // from the read before it, which a second read must confirm, so a change
-    // another transaction made in between is not taken for this one's.
+    // The amounts come from the simulation's own run, except a token
+    // account's in a transaction with no token program, which cannot change
+    // (simulate.ts, balanceChanges). The other fields come from the read
+    // before it, which a second read must confirm, so a change another
+    // transaction made in between is not taken for this one's.
     const again = await rpc.getAccounts(watched);
     if (!unchangedBetween(before, again)) {
       throw new Error(

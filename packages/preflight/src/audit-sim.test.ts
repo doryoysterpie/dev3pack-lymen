@@ -184,22 +184,10 @@ describe("audit 6: the balance change comes from the simulation's own run", () =
           ),
           preBalances: [5_000_000_000, 2_039_280, 1],
           postBalances: [4_999_995_000, 2_039_280, 1],
-          preTokenBalances: [
-            {
-              accountIndex: 1,
-              mint: K.mint,
-              owner: USER,
-              uiTokenAmount: { amount: "9" },
-            },
-          ],
-          postTokenBalances: [
-            {
-              accountIndex: 1,
-              mint: K.mint,
-              owner: USER,
-              uiTokenAmount: { amount: "9" },
-            },
-          ],
+          // No token program is among the accounts, so agave lists no token
+          // balances (svm/src/transaction_balances.rs:83 and :96).
+          preTokenBalances: [],
+          postTokenBalances: [],
         }),
       }),
       "x",
@@ -598,7 +586,8 @@ describe("audit 6: the rest of the same-run evidence", () => {
 
   it("a token account's amounts come from the run, not from a stale read", async () => {
     // The read shows 250 base units; the run starts from 200 and leaves 30,
-    // more than a tenth, so there is no sweep.
+    // more than a tenth, so there is no sweep. The unknown program moves the
+    // tokens by a call to the token program, which is among the accounts.
     const rpc = jsonRpc(
       endpoint({
         accounts: (addresses) =>
@@ -615,8 +604,8 @@ describe("audit 6: the rest of the same-run evidence", () => {
           accounts: addresses.map((address) =>
             address === USER ? system(4_999_995_000) : tokenState(30, null),
           ),
-          preBalances: [5_000_000_000, 2_039_280, 1],
-          postBalances: [4_999_995_000, 2_039_280, 1],
+          preBalances: [5_000_000_000, 2_039_280, 1, 1],
+          postBalances: [4_999_995_000, 2_039_280, 1, 1],
           preTokenBalances: [
             {
               accountIndex: 1,
@@ -642,6 +631,11 @@ describe("audit 6: the rest of the same-run evidence", () => {
       keys: [
         { pubkey: user, isSigner: true, isWritable: true },
         { pubkey: tokenAccount, isSigner: false, isWritable: true },
+        {
+          pubkey: new web3.PublicKey(TOKEN_PROGRAM),
+          isSigner: false,
+          isWritable: false,
+        },
       ],
       data: Buffer.from([1]),
     });
@@ -657,6 +651,132 @@ describe("audit 6: the rest of the same-run evidence", () => {
     assert.equal(change.before, "200");
     assert.equal(change.after, "30");
     assert.equal(result.drainPattern, false);
+  });
+});
+
+describe("fix check N2: token balances come only with a token program", () => {
+  // agave a64fa73, svm/src/transaction_balances.rs:83 and :96: the
+  // simulation lists token balances only when a token program is among the
+  // transaction's accounts, so without one both lists are empty.
+  it("a System transfer into the wallet's own token account is simulated, with no token change", async () => {
+    const rpc = jsonRpc(
+      endpoint({
+        accounts: (addresses) =>
+          addresses.map((address) =>
+            address === USER
+              ? system(5_000_000_000)
+              : address === K.userTokenAccount
+                ? tokenState(9, null)
+                : null,
+          ),
+        simulation: (addresses) => ({
+          err: null,
+          logs: [],
+          accounts: addresses.map((address) =>
+            address === USER ? system(4_999_994_000) : tokenState(9, null),
+          ),
+          preBalances: [5_000_000_000, 2_039_280, 1],
+          postBalances: [4_999_994_000, 2_040_280, 1],
+          preTokenBalances: [],
+          postTokenBalances: [],
+        }),
+      }),
+      "x",
+    );
+    const result = await preflightTransaction(
+      build([
+        web3.SystemProgram.transfer({
+          fromPubkey: user,
+          toPubkey: tokenAccount,
+          lamports: 1000,
+        }),
+      ]),
+      { rpc, user: USER },
+    );
+    assert.ok(result.summary.kind === "ready");
+    assert.deepEqual(result.summary.simulation, {
+      status: "ran",
+      err: null,
+      changes: [
+        {
+          kind: "sol",
+          account: "user",
+          before: "5000000000",
+          after: "4999994000",
+          ownerBefore: SYSTEM_PROGRAM,
+          ownerAfter: SYSTEM_PROGRAM,
+          dataLengthBefore: 0,
+          dataLengthAfter: 0,
+        },
+      ],
+    });
+    assert.deepEqual(result.summary.blocks, []);
+    assert.equal(result.drainPattern, false);
+  });
+
+  it("an address behind a lookup table limen could not read may be a token program, so the token balances are still owed", async () => {
+    const table = new web3.AddressLookupTableAccount({
+      key: web3.PublicKey.unique(),
+      state: {
+        deactivationSlot: BigInt("18446744073709551615"),
+        lastExtendedSlot: 0,
+        lastExtendedSlotStartIndex: 0,
+        addresses: [new web3.PublicKey(TOKEN_PROGRAM)],
+      },
+    });
+    const call = new web3.TransactionInstruction({
+      programId: key(K.unknownProgram),
+      keys: [
+        { pubkey: user, isSigner: true, isWritable: true },
+        { pubkey: tokenAccount, isSigner: false, isWritable: true },
+        {
+          pubkey: new web3.PublicKey(TOKEN_PROGRAM),
+          isSigner: false,
+          isWritable: false,
+        },
+      ],
+      data: Buffer.from([1]),
+    });
+    const message = new web3.TransactionMessage({
+      payerKey: user,
+      recentBlockhash: K.mint,
+      instructions: [call],
+    }).compileToV0Message([table]);
+    assert.equal(message.addressTableLookups.length, 1);
+    const rpc = jsonRpc(
+      endpoint({
+        accounts: (addresses) =>
+          addresses.map((address) =>
+            address === USER
+              ? system(5_000_000_000)
+              : address === K.userTokenAccount
+                ? tokenState(9, null)
+                : null,
+          ),
+        simulation: (addresses) => ({
+          err: null,
+          logs: [],
+          accounts: addresses.map((address) =>
+            address === USER ? system(4_999_995_000) : tokenState(0, null),
+          ),
+          preBalances: [5_000_000_000, 2_039_280, 1, 1],
+          postBalances: [4_999_995_000, 2_039_280, 1, 1],
+          preTokenBalances: [],
+          postTokenBalances: [],
+        }),
+      }),
+      "x",
+    );
+    const result = await preflightTransaction(
+      new web3.VersionedTransaction(message, [new Uint8Array(64)]).serialize(),
+      { rpc, user: USER },
+    );
+    assert.ok(result.summary.kind === "ready");
+    assert.deepEqual(result.summary.simulation, {
+      status: "not-run",
+      reason: "the simulation's token balances do not match the accounts read",
+    });
+    assert.deepEqual(result.summary.blocks, ["simulation-not-run"]);
   });
 });
 

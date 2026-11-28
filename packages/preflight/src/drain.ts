@@ -5,10 +5,13 @@
 // this definition as written, its false alarms kept (ruling 7a).
 //
 // "A simulation that ran without an error" means one the pre-flight used: its
-// amounts come from the simulation's own run, and it is not used when it
-// cannot cover every account the transaction writes or when the accounts
-// changed between the reads around it (preflight.ts). Ownership is taken from
-// the token programs' own authority rule (summary.ts, authorizedByUser).
+// amounts come from the simulation's own run (a token account's, when no
+// token program is among the transaction's accounts, is the amount read
+// before, which the transaction cannot change; simulate.ts), and it is not
+// used when it cannot cover every account the transaction writes or when the
+// accounts changed between the reads around it (preflight.ts). Ownership is
+// taken from the token programs' own authority rule (summary.ts,
+// authorizedByUser).
 //
 // A ready report shows a drain pattern when, for the user's wallet (the
 // transaction's fee payer, written "user" in the report), any of these holds:

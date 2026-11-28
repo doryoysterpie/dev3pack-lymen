@@ -118,6 +118,15 @@ const writable = (pubkey: web3.PublicKey): web3.AccountMeta => ({
   isWritable: true,
 });
 
+// A program reaches the token program by a cross-program call only when the
+// token program is among the transaction's accounts (anza-xyz/agave a64fa73,
+// program-runtime/src/invoke_context.rs:463 to 470).
+const tokenProgram: web3.AccountMeta = {
+  pubkey: new web3.PublicKey(TOKEN_PROGRAM),
+  isSigner: false,
+  isWritable: false,
+};
+
 async function drain(
   transaction: Uint8Array,
   recording: Recording,
@@ -179,7 +188,7 @@ describe("M1: a token sweep shows a drain pattern", () => {
 
   it("P2b: an unknown program empties and closes the account by a cross-program call", async () => {
     const transaction = build([
-      unknown([writable(tokenAccount), writable(attacker)]),
+      unknown([writable(tokenAccount), writable(attacker), tokenProgram]),
     ]);
     assert.equal(await drain(transaction, tokenRecording(null)), true);
   });
@@ -239,13 +248,17 @@ describe("M2: the wallet handed to a program by a cross-program call", () => {
 
 describe("m2: control handed over by a cross-program call", () => {
   it("P2c: a close authority moved to another address", async () => {
-    const transaction = build([unknown([writable(tokenAccount)])]);
+    const transaction = build([
+      unknown([writable(tokenAccount), tokenProgram]),
+    ]);
     const after = token({ amount: BigInt(1000), closeAuthority: K.attacker });
     assert.equal(await drain(transaction, tokenRecording(after)), true);
   });
 
   it("P2d: an existing delegate's allowance raised", async () => {
-    const transaction = build([unknown([writable(tokenAccount)])]);
+    const transaction = build([
+      unknown([writable(tokenAccount), tokenProgram]),
+    ]);
     const recording: Recording = {
       accounts: {
         [USER]: wallet(5_000_000_000),
@@ -271,7 +284,9 @@ describe("m2: control handed over by a cross-program call", () => {
   });
 
   it("an allowance lowered for the same delegate shows none", async () => {
-    const transaction = build([unknown([writable(tokenAccount)])]);
+    const transaction = build([
+      unknown([writable(tokenAccount), tokenProgram]),
+    ]);
     const recording: Recording = {
       accounts: {
         [USER]: wallet(5_000_000_000),

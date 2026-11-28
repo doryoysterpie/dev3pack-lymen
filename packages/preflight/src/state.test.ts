@@ -65,6 +65,8 @@ describe("account data readers", () => {
 });
 
 describe("balance changes", () => {
+  // Each transaction here lists its token program, as agave requires before
+  // it reports token balances (svm/src/transaction_balances.rs:83 and :96).
   it("reports a closed token account as emptied, with no owner after", () => {
     const changes = balanceChanges(
       USER,
@@ -75,9 +77,9 @@ describe("balance changes", () => {
       ],
       [state(SYSTEM_PROGRAM, new Uint8Array(), "100"), null],
       {
-        keys: [USER, ACCOUNT],
-        pre: ["100", "1"],
-        post: ["100", "0"],
+        keys: [USER, ACCOUNT, TOKEN_PROGRAM],
+        pre: ["100", "1", "1"],
+        post: ["100", "0", "1"],
         preToken: [{ accountIndex: 1, mint: MINT, owner: USER, amount: "5" }],
         postToken: [],
       },
@@ -107,9 +109,9 @@ describe("balance changes", () => {
       [null, state(TOKEN_2022_PROGRAM, token(USER, 5, 200))],
       [null, state(TOKEN_2022_PROGRAM, token(OTHER, 5, 200))],
       {
-        keys: [USER, ACCOUNT],
-        pre: ["0", "1"],
-        post: ["0", "1"],
+        keys: [USER, ACCOUNT, TOKEN_2022_PROGRAM],
+        pre: ["0", "1", "1"],
+        post: ["0", "1", "1"],
         preToken: [{ accountIndex: 1, mint: MINT, owner: USER, amount: "5" }],
         postToken: [{ accountIndex: 1, mint: MINT, owner: OTHER, amount: "5" }],
       },
@@ -132,9 +134,9 @@ describe("balance changes", () => {
         state(TOKEN_PROGRAM, token(OTHER, 0)),
       ],
       {
-        keys: [USER, ACCOUNT],
-        pre: ["100", "1"],
-        post: ["100", "1"],
+        keys: [USER, ACCOUNT, TOKEN_PROGRAM],
+        pre: ["100", "1", "1"],
+        post: ["100", "1", "1"],
         preToken: [{ accountIndex: 1, mint: MINT, owner: OTHER, amount: "5" }],
         postToken: [{ accountIndex: 1, mint: MINT, owner: OTHER, amount: "0" }],
       },

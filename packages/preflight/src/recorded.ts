@@ -83,19 +83,25 @@ function keysOf(base64: string, map: AccountMap): (string | null)[] {
   ).map((account) => account.address);
 }
 
+const isTokenProgram = (address: string | null): boolean =>
+  address === TOKEN_PROGRAM || address === TOKEN_2022_PROGRAM;
+
+/**
+ * The token balances as agave lists them (anza-xyz/agave a64fa73,
+ * svm/src/transaction_balances.rs:83 to 104): none unless a token program is
+ * among the transaction's accounts, and then one for each token account.
+ * agave also leaves out a token account whose mint it cannot read; a
+ * recording holds no mints, so it does not.
+ */
 function tokenBalances(
   keys: readonly (string | null)[],
   stateOf: (address: string) => RecordedAccount | null,
 ) {
+  if (!keys.some(isTokenProgram)) return [];
   return keys.flatMap((address, accountIndex) => {
     if (address === null) return [];
     const state = stateOf(address);
-    if (
-      state === null ||
-      (state.owner !== TOKEN_PROGRAM && state.owner !== TOKEN_2022_PROGRAM)
-    ) {
-      return [];
-    }
+    if (state === null || !isTokenProgram(state.owner)) return [];
     const data = decodeBase64(state.data[0]);
     const account = data === null ? null : parseTokenAccount(data);
     if (account === null) return [];

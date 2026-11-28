@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
+import * as web3 from "@solana/web3.js";
+
 import { decodePublicKey } from "./base58.ts";
 import { decodeBase64, encodeBase64 } from "./base64.ts";
 import { drainPattern } from "./drain.ts";
@@ -42,9 +44,45 @@ function bytesOf(start: string): Uint8Array {
   return bytes;
 }
 const DRAINER = bytesOf("drainer: SOL balance out");
-// One SOL transfer of 0.01 to the organizer, then an unknown program that has
-// the user's token account writable.
-const UNKNOWN = bytesOf("unknown program");
+
+/**
+ * The fixture "unknown program" (one SOL transfer of 0.01 to the organizer,
+ * then an unknown program that has the user's token account writable), with
+ * the Token program added to the unknown instruction's accounts. Only then
+ * can that program change the token account, by a call to the Token program
+ * (anza-xyz/agave a64fa73, program-runtime/src/invoke_context.rs:463 to
+ * 470), and only then does the simulation list token balances
+ * (svm/src/transaction_balances.rs:83 and :96). The fixture is unchanged.
+ */
+function unknownWithTokenProgram(): Uint8Array {
+  const sent = web3.VersionedTransaction.deserialize(
+    bytesOf("unknown program"),
+  );
+  const message = web3.TransactionMessage.decompile(sent.message);
+  const [transfer, call] = message.instructions;
+  assert.equal(call.programId.toBase58(), fixture.keys.unknownProgram);
+  const compiled = new web3.TransactionMessage({
+    payerKey: message.payerKey,
+    recentBlockhash: message.recentBlockhash,
+    instructions: [
+      transfer,
+      new web3.TransactionInstruction({
+        programId: call.programId,
+        data: call.data,
+        keys: [
+          ...call.keys,
+          {
+            pubkey: new web3.PublicKey(TOKEN_PROGRAM),
+            isSigner: false,
+            isWritable: false,
+          },
+        ],
+      }),
+    ],
+  }).compileToLegacyMessage();
+  return new web3.VersionedTransaction(compiled, sent.signatures).serialize();
+}
+const UNKNOWN = unknownWithTokenProgram();
 
 function tokenData(
   amount: number,
