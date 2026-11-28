@@ -310,6 +310,10 @@ export async function preflight(
           result.loadedAddresses.readonly,
         )
       ) {
+        // The table read is disputed, so no entry of any lookup is taken
+        // for the decode, the card or the bundle, as for a table limen
+        // could not read (the audit of 21e1f9f, item 4).
+        tables = new Map();
         throw new Error(
           "the simulation's loaded addresses do not match the lookup tables read",
         );

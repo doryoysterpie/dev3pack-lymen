@@ -441,6 +441,26 @@ describe("ruling 20a, item 6: the run's keys are the message's", () => {
     }
   });
 
+  it("the audit of 21e1f9f, item 4: a disputed table feeds neither the decode nor the bundle", async () => {
+    const result = ready(
+      await preflight(
+        changed((value) => {
+          value.loadedAddresses = { writable: [], readonly: [] };
+        }),
+        drainerV0.transaction,
+        USER,
+      ),
+    );
+    assert.equal(result.simulation.status, "not-run");
+    // Every lookup entry is unresolved, as for a table limen could not read.
+    assert.ok(result.summary.unresolvedAccounts > 0);
+    const out = result.summary.effects[1];
+    assert.ok(out.kind === "sol-out");
+    assert.equal("address" in out.to, false);
+    assert.equal(result.recipients.includes(ATTACKER), false);
+    assert.equal(result.accountKeys.includes(ATTACKER), false);
+  });
+
   it("leaves a legacy run unused when it names loaded addresses, or none at all", async () => {
     await notUsed(
       changed((value) => {
