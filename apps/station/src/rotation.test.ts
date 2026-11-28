@@ -1,5 +1,7 @@
 // E-03: the station page's rotation, driven with a fake clock and fake fetches.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { createPrivateKey } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
@@ -559,33 +561,41 @@ test("a QR whose payload's window has passed when it arrives is not drawn, whate
   assert.deepEqual(shown, [{ at: 2000, kind: "refreshing" }]);
 });
 
-test("with the fake clock 2 s behind an injected QR's issuedAt T, the deadline is T + 53 s on the fake clock (T + 55 s relative to T)", async () => {
+test("with the station's fake clock 2 s behind the fake issuer clock at T, the deadline is T + 53 s on the station's fake clock and T + 55 s on the fake issuer clock", async () => {
   const T = 1_795_000_000;
-  // Injected placeholder QR with issuedAt T and expiresAt T + 60; the fake clock reads T - 2 s.
-  const clock = fakeClock(T * 1000 - 2000);
+  // Station's fake clock starts at T - 2 s; the fake issuer clock runs 2 s ahead, starting at T.
+  const stationClock = fakeClock(T * 1000 - 2000);
+  const issuerClockNow = () => stationClock.now + 2000;
   const deadlines: number[] = [];
   let calls = 0;
   startRotation({
-    fetchQr: (signal) =>
-      calls++ === 0
-        ? Promise.resolve({ ...response(1), issuedAt: T, expiresAt: T + 60 })
-        : new Promise<StationQr>((_, reject) =>
-            signal.addEventListener("abort", () =>
-              reject(new Error("aborted")),
-            ),
-          ),
+    fetchQr: (signal) => {
+      if (calls++ === 0) {
+        const issuedAt = Math.floor(issuerClockNow() / 1000);
+        return Promise.resolve({
+          ...response(1),
+          issuedAt,
+          expiresAt: issuedAt + 60,
+        });
+      }
+      return new Promise<StationQr>((_, reject) =>
+        signal.addEventListener("abort", () => reject(new Error("aborted"))),
+      );
+    },
     render: (view) => {
       if (view.kind === "qr") deadlines.push(view.deadline);
     },
-    now: () => clock.now,
-    setTimeout: clock.setTimeout,
-    clearTimeout: clock.clearTimeout,
+    now: () => stationClock.now,
+    setTimeout: stationClock.setTimeout,
+    clearTimeout: stationClock.clearTimeout,
   });
   await flush();
-  // min(T + 60 s, (T - 2 s) + 60 s) - 5 s, on the fake clock.
+  // On the station's fake clock: min(T + 60 s, (T - 2 s) + 60 s) - 5 s = T + 53 s.
   assert.deepEqual(deadlines, [T * 1000 + 53_000]);
-  // Relative to T, that is T + 55 s, 5 s before T + 60 s.
-  assert.ok(deadlines[0]! + 2000 <= (T + 60) * 1000 - 5000);
+  // At that deadline on the station's fake clock (T + 53 s), the fake issuer clock reads T + 55 s,
+  // 5 s before expiresAt (T + 60 s) on the fake issuer clock.
+  const issuerAtDeadline = deadlines[0]! + 2000;
+  assert.equal(issuerAtDeadline, (T + 55) * 1000);
 });
 
 test("the next fetch is timed from the clock after the QR is drawn", async () => {
@@ -635,4 +645,14 @@ test("a QR that goes stale while it is drawn is not shown, and the next fetch wa
   await flush();
   // The fetch timeout's 10 s, then the retry delay.
   assert.deepEqual(delays, [10_000, RETRY_AFTER_MS]);
+});
+
+test("the clock-skew deadline test names which clock both T + 53 s and T + 55 s are on", () => {
+  const self = readFileSync(fileURLToPath(import.meta.url), "utf8");
+  const titles = [...self.matchAll(/\ntest\("([^"]+)"/g)].map((m) => m[1]!);
+  const skewTitle = titles.find((t) => t.includes("T + 53 s"));
+  assert.ok(skewTitle !== undefined, "skew test title is present");
+  assert.match(skewTitle, /T \+ 53 s on the station's fake clock/);
+  assert.match(skewTitle, /T \+ 55 s on the fake issuer clock/);
+  assert.ok(!self.includes(`T + 55 s ${"relative to T"}`));
 });
