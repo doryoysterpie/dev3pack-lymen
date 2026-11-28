@@ -3,6 +3,11 @@
 // the real tool as a child process, with a stub pbcopy alone on PATH that records its stdin
 // and its arguments, and with process.platform set for the child by an --import module, so
 // the macOS path runs on any CI runner.
+//
+// No test may reach the real pbcopy, which would write to this machine's clipboard. Two guards
+// fail closed before anything runs: the tool must name pbcopy by its bare name, so PATH decides
+// which one runs; and before each run, the PATH the tool will see must be set, hold no system
+// folder, and reach exactly the stub, or no pbcopy at all for the missing-pbcopy case.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
@@ -11,12 +16,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { test } from "node:test";
+import { delimiter, join, resolve } from "node:path";
+import { before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ENTRY = fileURLToPath(
@@ -25,6 +31,58 @@ const ENTRY = fileURLToPath(
 const SECRET = "test-display-token-0123456789abcdef";
 // HMAC-SHA256 of "limen:station-display:v1:st-front" under SECRET, from Python's hmac.
 const FRONT_TOKEN = "lWbhFKhap4ZM9Ptol3mb5KYvWJUs8yXG84tELGGMwwQ";
+/** Folders where a real pbcopy lives, or could, which no test PATH may hold. */
+const SYSTEM_FOLDERS = [
+  "/usr/bin",
+  "/bin",
+  "/usr/sbin",
+  "/sbin",
+  "/usr/local/bin",
+];
+
+before(() => {
+  // The tool runs pbcopy by its bare name, and names no pbcopy by an absolute path.
+  const source = readFileSync(ENTRY, "utf8");
+  assert.match(
+    source,
+    /spawnSync\(\s*"pbcopy"/,
+    "the tool runs pbcopy by name",
+  );
+  assert.doesNotMatch(
+    source,
+    /\/pbcopy\b/,
+    "the tool names no absolute pbcopy path",
+  );
+});
+
+/**
+ * Throws, before the tool runs, unless `path` is set, holds no system folder, and reaches exactly
+ * `expected` as its pbcopy (null: none at all).
+ */
+function assertOnlyStub(path: string, expected: string | null): void {
+  const folders = path.split(delimiter);
+  assert.ok(
+    path !== "" && folders.every((f) => f !== ""),
+    "PATH is set, with no empty entry, so no default search path applies",
+  );
+  for (const folder of folders)
+    assert.ok(
+      !SYSTEM_FOLDERS.includes(resolve(folder)),
+      `PATH holds the system folder ${folder}`,
+    );
+  const reachable = folders
+    .map((f) => join(f, "pbcopy"))
+    .filter((f) => existsSync(f))
+    .map((f) => realpathSync(f));
+  assert.deepEqual(
+    reachable,
+    expected === null ? [] : [realpathSync(expected)],
+    "the stub is the one pbcopy on PATH",
+  );
+  if (existsSync("/usr/bin/pbcopy"))
+    assert.ok(!reachable.includes(realpathSync("/usr/bin/pbcopy")));
+}
+
 const USAGE =
   "station-token: usage: npm run station-token -w @limen/api -- <station ID>\n";
 
@@ -59,6 +117,9 @@ function run(
       );
       chmodSync(stub, 0o755);
     }
+    const path = bin;
+    // Fail closed: with any other pbcopy reachable, the test stops here, before the tool runs.
+    assertOnlyStub(path, options.pbcopy === false ? null : stub);
     const platform = options.platform ?? "darwin";
     const secret = options.secret === undefined ? SECRET : options.secret;
     const result = spawnSync(
@@ -72,7 +133,7 @@ function run(
         // PATH holds the stub's folder alone, so a missing stub is a missing pbcopy and the
         // real one, in /usr/bin on macOS, does not run.
         env: {
-          PATH: bin,
+          PATH: path,
           ...(secret === null ? {} : { STATION_DISPLAY_TOKEN: secret }),
         },
         encoding: "utf8",
@@ -94,6 +155,35 @@ function run(
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+test("the guard refuses, without running anything, a PATH that could reach a pbcopy other than the stub", () => {
+  const dir = mkdtempSync(join(tmpdir(), "limen-station-token-"));
+  try {
+    const bin = join(dir, "bin");
+    const other = join(dir, "other");
+    mkdirSync(bin);
+    mkdirSync(other);
+    const stub = join(bin, "pbcopy");
+    writeFileSync(stub, "#!/bin/sh\nexit 0\n");
+    writeFileSync(join(other, "pbcopy"), "#!/bin/sh\nexit 0\n");
+    // The PATH each run uses passes.
+    assertOnlyStub(bin, stub);
+    assertOnlyStub(join(dir, "missing"), null);
+    // A system folder, an empty PATH or entry, a second pbcopy, and no stub where one is owed.
+    for (const [path, expected] of [
+      [`${bin}${delimiter}/usr/bin`, stub],
+      [`${bin}${delimiter}/bin`, stub],
+      ["", stub],
+      [`${bin}${delimiter}`, stub],
+      [`${bin}${delimiter}${other}`, stub],
+      [join(dir, "missing"), stub],
+      [other, null],
+    ] as const)
+      assert.throws(() => assertOnlyStub(path, expected), JSON.stringify(path));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("on macOS the tool pipes the station's token to pbcopy's stdin and prints only that it did", () => {
   const r = run(["st-front"]);
