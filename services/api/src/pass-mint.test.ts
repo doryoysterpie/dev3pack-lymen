@@ -416,7 +416,7 @@ test("a helper's request fails on a redirect to another host, where the same req
   }
 });
 
-test("mintPass, revokePass and passMintState refuse a cluster whose genesis hash is not devnet's, before anything else (D-03)", async () => {
+test("mintPass, revokePass and passMintState refuse a cluster whose genesis hash is not devnet's with their first request, before anything is sent (D-03)", async () => {
   for (const run of [
     () => mintPass(organizer, holder, DETAILS),
     () => revokePass(organizer, mint.publicKey, holder),

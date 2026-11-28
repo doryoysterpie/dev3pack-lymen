@@ -11,13 +11,14 @@
 //
 // The wallet signs the UTF-8 text checkinMessage() builds from the verified QR payload:
 //
-//   limen check-in v1
+//   limen check-in v2
 //   station: <station>
 //   session: <session>
 //   nonce: <nonce>
 //   wallet: <wallet address>
-//   registration: <registration ID, or empty>
 //
+// The registration ID is not in it: it travels only in the body, so no wallet or wallet adapter
+// is handed it. v1 carried it on a sixth line.
 // The backend checks in this order, and the first failure is the answer: the request's shape,
 // the signature's form included; the station QR (allowlisted signer, signature, at most 60 s old
 // at the millisecond clock); the station; the session still open; the wallet's key, in the
@@ -301,21 +302,19 @@ export async function walletSignatureValid(
   );
 }
 
-/** The exact text the wallet signs. */
+/** The exact text the wallet signs. It holds no registration ID, which travels only in the body. */
 export function checkinMessage(p: {
   station: string;
   session: string;
   nonce: string;
   wallet: string;
-  registrationId: string | null;
 }): string {
   return [
-    "limen check-in v1",
+    "limen check-in v2",
     `station: ${p.station}`,
     `session: ${p.session}`,
     `nonce: ${p.nonce}`,
     `wallet: ${p.wallet}`,
-    `registration: ${p.registrationId ?? ""}`,
   ].join("\n");
 }
 
@@ -425,11 +424,7 @@ export async function checkIn(
   const key = deps.registrations.walletKey(req.wallet);
   if (key === null || !(await walletKeyAcceptable(key)))
     return refuse(400, "invalid_request", { field: "wallet" });
-  const message = checkinMessage({
-    ...payload,
-    wallet: req.wallet,
-    registrationId: req.registrationId,
-  });
+  const message = checkinMessage({ ...payload, wallet: req.wallet });
   if (
     !(await walletSignatureValid(
       key,

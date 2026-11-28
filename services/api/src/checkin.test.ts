@@ -2,9 +2,9 @@
 // reason; an expired window is refused; a fresh wallet with no registration binding is refused.
 // Registration binding is E-07's real code (registrationsFrom, on registrations imported with
 // importRegistrations). Minting is E-06's mintPass on devnet, which spends devnet SOL, so a test
-// whose check-in would succeed uses mintDouble, a named test double, instead. Three tests run the
-// API's own minter, with devnet's JSON-RPC answered by a stand-in for globalThis.fetch
-// (rpc-stub.ts) that reaches nothing.
+// whose check-in would succeed uses mintDouble, a named test double, instead. The tests that run
+// the API's own minter answer devnet's JSON-RPC with a stand-in for globalThis.fetch
+// (rpc-stub.ts, rpc-svm.ts) that reaches nothing.
 import assert from "node:assert/strict";
 import {
   createHash,
@@ -411,11 +411,7 @@ function request(
     now: opts.issuedAt ?? T,
     signer: opts.signer ?? ORGANIZER,
   });
-  const message = checkinMessage({
-    ...payload,
-    wallet: w.address,
-    registrationId,
-  });
+  const message = checkinMessage({ ...payload, wallet: w.address });
   return {
     qr: text,
     wallet: w.address,
@@ -433,26 +429,32 @@ const checkInAt = (d: CheckinDeps, body: unknown, seconds: number) =>
 const checkinCount = (db: DatabaseSync) =>
   (db.prepare("SELECT count(*) AS n FROM checkins").get() as { n: number }).n;
 
-test("the wallet signs this exact check-in message", () => {
+test("the wallet signs this exact check-in message, which holds no registration ID", () => {
   assert.equal(
     checkinMessage({
       station: "st-front",
       session: "day-2",
       nonce: "AAECAwQFBgcICQoLDA0ODw",
       wallet: "wallet-alice",
-      registrationId: "LMN-0001",
     }),
-    "limen check-in v1\nstation: st-front\nsession: day-2\nnonce: AAECAwQFBgcICQoLDA0ODw\nwallet: wallet-alice\nregistration: LMN-0001",
+    "limen check-in v2\nstation: st-front\nsession: day-2\nnonce: AAECAwQFBgcICQoLDA0ODw\nwallet: wallet-alice",
   );
-  assert.ok(
-    checkinMessage({
-      station: "s",
-      session: "t",
-      nonce: "n",
-      wallet: "w",
-      registrationId: null,
-    }).endsWith("\nregistration: "),
+});
+
+test("the registration ID travels only in the body: the signed message never holds it, and the check-in binds it", async () => {
+  const { deps, alice, minting } = setup();
+  const body = request(alice, "LMN-0001");
+  const payload = JSON.parse(
+    Buffer.from(body.qr.split(".")[1]!, "base64url").toString("utf8"),
+  ) as { station: string; session: string; nonce: string };
+  const signed = checkinMessage({ ...payload, wallet: alice.address });
+  assert.doesNotMatch(signed, /LMN-0001|registration/i);
+  assert.equal((await checkInAt(deps, body, T + 5)).status, 201);
+  assert.equal(
+    deps.registrations.bindingOf(alice.address),
+    regHashOf("LMN-0001"),
   );
+  assert.equal(minting.calls.length, 1);
 });
 
 test("a first check-in binds the registration, mints once and records the pass", async () => {
@@ -603,15 +605,6 @@ test("a signature that is not the wallet's over this exact message is refused", 
     status: 401,
     body: { error: "bad_wallet_signature" },
   });
-  // Signed for one registration ID, sent with another.
-  const swapped = {
-    ...request(alice, "LMN-0001"),
-    registration_id: "LMN-0002",
-  };
-  assert.deepEqual(await checkInAt(deps, swapped, T + 5), {
-    status: 401,
-    body: { error: "bad_wallet_signature" },
-  });
   assert.equal(minting.calls.length, 0);
 });
 
@@ -628,7 +621,6 @@ test("a wallet key outside the prime-order subgroup is refused, though node:cryp
     checkinMessage({
       ...payload,
       wallet: odd.address,
-      registrationId: "LMN-0001",
     }),
     "utf8",
   );
@@ -1056,6 +1048,23 @@ test("a pending check-in recorded under another PASS_MINT_SECRET answers 502, mi
   ]);
 });
 
+test("a pass burned after its check-in was recorded done still answers 409 already_checked_in, read from the row", async () => {
+  const { db, deps, alice, bob, minting } = setup();
+  const mint = passAddress("day-2", "LMN-0001");
+  assert.equal(
+    (await checkInAt(deps, request(alice, "LMN-0001"), T + 5)).status,
+    201,
+  );
+  // The chain no longer shows the wallet holding it; the row says done, and is not read again.
+  minting.chain.set(mint, bob.address);
+  assert.deepEqual(await retryAt(deps, alice, T + 12), {
+    status: 409,
+    body: { error: "already_checked_in" },
+  });
+  assert.equal(minting.calls.length, 1);
+  assert.deepEqual(mintRows(db), [{ mint, mint_status: "done" }]);
+});
+
 test("four concurrent requests for one check-in, each pass landing at once and confirming a turn later, get one 201 and three 409s, with one mint", async () => {
   const { db, deps, alice, minting } = setup();
   // Each pass lands at once and is confirmed a turn later, so the other requests find it pending.
@@ -1076,7 +1085,7 @@ test("four concurrent requests for one check-in, each pass landing at once and c
   ]);
 });
 
-test("two concurrent requests that both find the address empty both send a mint: one 201, and the loser's own mint fails with 502 mint_failed", async () => {
+test("two concurrent requests for one check-in, each pass landing a turn after it is sent: the second reads the address empty and mints too, and gets 502 mint_failed when its mint collides; the first gets the 201", async () => {
   const { db, deps, alice, minting } = setup();
   // Each mint lands a turn after it is sent, so the second request reads the address as empty.
   minting.delayLandings(
@@ -1186,7 +1195,6 @@ test("after its session ends, the running API answers a pending check-in's reque
     const message = checkinMessage({
       ...payload,
       wallet: alice.address,
-      registrationId: null,
     });
     // One second after day-2 ends.
     clock.now = T + 3601;
@@ -1430,7 +1438,7 @@ test("a registration ID sent in a key or in a value does not appear in the respo
   }
 });
 
-test("POST /checkins refuses a body that repeats a key, whichever value comes last, and binds and mints nothing", async () => {
+test("POST /checkins refuses a body that repeats a key, with the imported ID first or last, and binds and mints nothing", async () => {
   const { db, deps, alice, minting } = setup();
   const server = createApiServer({
     db,
@@ -1449,10 +1457,14 @@ test("POST /checkins refuses a body that repeats a key, whichever value comes la
   try {
     const signed = request(alice, "LMN-0001");
     const rest = `"qr":${JSON.stringify(signed.qr)},"wallet":${JSON.stringify(signed.wallet)},"signature":${JSON.stringify(signed.signature)}`;
-    // The signed value comes last, so JSON.parse alone would take it and check in.
+    // LMN-0001 is imported and LMN-0002 is not. With it last, JSON.parse alone would take it and
+    // check in; with it first, JSON.parse would take LMN-0002 and refuse it as unknown. Either
+    // way the repeat is refused first.
     for (const body of [
       `{${rest},"registration_id":"LMN-0002","registration_id":"LMN-0001"}`,
+      `{${rest},"registration_id":"LMN-0001","registration_id":"LMN-0002"}`,
       `{${rest},"registration_id":"LMN-0002","registration\\u005fid":"LMN-0001"}`,
+      `{${rest},"registration\\u005fid":"LMN-0001","registration_id":"LMN-0002"}`,
     ]) {
       const res = await fetch(url, {
         method: "POST",
