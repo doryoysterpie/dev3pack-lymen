@@ -25,6 +25,8 @@ import { delimiter, join, resolve } from "node:path";
 import { before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { copyStationToken } from "./copy-station-token.ts";
+
 const ENTRY = fileURLToPath(
   new URL("./copy-station-token.ts", import.meta.url),
 );
@@ -43,11 +45,7 @@ const SYSTEM_FOLDERS = [
 before(() => {
   // The tool runs pbcopy by its bare name, and names no pbcopy by an absolute path.
   const source = readFileSync(ENTRY, "utf8");
-  assert.match(
-    source,
-    /spawnSync\(\s*"pbcopy"/,
-    "the tool runs pbcopy by name",
-  );
+  assert.match(source, /\bspawn\(\s*"pbcopy"/, "the tool runs pbcopy by name");
   assert.doesNotMatch(
     source,
     /\/pbcopy\b/,
@@ -103,6 +101,7 @@ function run(
     secret?: string | null;
     pbcopyExit?: number;
     pbcopy?: boolean;
+    env?: Record<string, string>;
   } = {},
 ): Run {
   const dir = mkdtempSync(join(tmpdir(), "limen-station-token-"));
@@ -133,6 +132,7 @@ function run(
         // PATH holds the stub's folder alone, so a missing stub is a missing pbcopy and the
         // real one, in /usr/bin on macOS, does not run.
         env: {
+          ...options.env,
           PATH: path,
           ...(secret === null ? {} : { STATION_DISPLAY_TOKEN: secret }),
         },
@@ -270,4 +270,29 @@ test("a missing or short secret is refused without echoing it, and nothing is co
     assert.equal(r.copied, null);
     assert.match(r.stderr, /^station-token: STATION_DISPLAY_TOKEN must be set/);
   }
+});
+
+test("with NODE_DEBUG=child_process and NODE_OPTIONS set, stderr holds neither the token nor the secret", () => {
+  for (const debug of ["child_process", "*"]) {
+    const r = run(["st-front"], {
+      env: { NODE_DEBUG: debug, NODE_OPTIONS: "--no-deprecation" },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.copied, FRONT_TOKEN);
+    for (const value of [FRONT_TOKEN, SECRET])
+      assert.ok(
+        !r.stderr.includes(value) && !r.stdout.includes(value),
+        `NODE_DEBUG=${debug}: ${r.stderr.slice(0, 400)}`,
+      );
+  }
+});
+
+test("with PATH unset or empty the tool refuses before it looks for pbcopy", async () => {
+  for (const env of [
+    { STATION_DISPLAY_TOKEN: SECRET },
+    { STATION_DISPLAY_TOKEN: SECRET, PATH: "" },
+  ])
+    await assert.rejects(copyStationToken(env, ["st-front"], "darwin"), {
+      message: "PATH is not set, so pbcopy cannot be found.",
+    });
 });

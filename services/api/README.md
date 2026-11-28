@@ -84,7 +84,7 @@ Each station has its own display token, the HMAC-SHA256 of `limen:station-displa
 npm run station-token -w @limen/api -- st-front
 ```
 
-It copies st-front's token to the clipboard by writing it to `pbcopy`'s standard input, so the token is on no command line, and prints only "Copied the display token for st-front." It writes no file. Paste the token into the station page's password field. Off macOS it refuses, since `pbcopy` is macOS's. An earlier version wrote the page's address, token included, to a link file in `~/limen-station-links`, read back from the address fragment; that tool, its folder and the fragment are removed.
+It copies st-front's token to the clipboard by writing it to `pbcopy`'s standard input, so the token is on no command line, and prints only "Copied the display token for st-front." It runs `pbcopy` with `PATH` alone in its environment, so with `NODE_DEBUG=child_process` set, the spawn options Node prints hold neither the token nor the secret. It writes no file. Paste the token into the station page's password field. Off macOS it refuses, since `pbcopy` is macOS's. An earlier version wrote the page's address, token included, to a link file in `~/limen-station-links`, read back from the address fragment; that tool, its folder and the fragment are removed.
 
 The QR text is `limen:station:v1.<payload>.<signer>.<signature>`. `src/station-qr.ts` documents each part and the order of the checks. `verifyStationQr` there refuses a QR, with a reason, unless all of these hold, and `src/station-qr.test.ts` has a refusal test for each:
 
