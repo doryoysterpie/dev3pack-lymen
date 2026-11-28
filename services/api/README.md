@@ -84,7 +84,7 @@ Each station has its own display token, the HMAC-SHA256 of `limen:station-displa
 npm run station-link -w @limen/api -- st-front ~/limen-station-links/st-front.url
 ```
 
-Open the address in that file in the station's browser. The tool refuses a path inside the repository, symlinks resolved, because the station page's dev server serves files from the whole repository by `/@fs/` path, and any page on localhost could then read the token. The dev server also refuses the `.station-links/` folder, where these files used to go.
+Open the address in that file in the station's browser. The tool refuses a path inside the repository, symlinks resolved, so the file never sits where a server or a commit could pick it up. The station page's dev server serves only `apps/station` and the repository's `node_modules`, and it also refuses the `.station-links/` folder, where these files used to go.
 
 The QR text is `limen:station:v1.<payload>.<signer>.<signature>`. `src/station-qr.ts` documents each part, and `verifyStationQr` there accepts a QR only when its signer is on the allowlist, its signature verifies, its payload has exactly the five owed fields, and the verifying time, in milliseconds, is no more than 60 s after `issued_at` and not after `expires_at`. A cut-short QR, one whose `expires_at` is less than `issued_at` + 60, is refused from its `expires_at` on, which is never after its session's end. So no QR verifies at or after the instant its session ends, when the API moves to the next session or, if none follows at once, answers 409. Its caller passes the time as `nowMs`; a missing, NaN or infinite `nowMs` is refused as `invalid_clock`, whatever the QR. At this head only the tests call `verifyStationQr`; the check-in endpoint, E-05 (#45), calls it.
 
