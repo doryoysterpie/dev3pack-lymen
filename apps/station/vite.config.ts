@@ -4,7 +4,7 @@
 import { defineConfig, type Plugin } from "vite";
 
 /** Inlines the page's one script into index.html, and fails on any other output. */
-function inlineScript(): Plugin {
+export function inlineScript(): Plugin {
   return {
     name: "limen-inline-script",
     apply: "build",
@@ -27,11 +27,15 @@ function inlineScript(): Plugin {
       const tag = `<script type="module" crossorigin src="/${chunk.fileName}"></script>`;
       if (!source.includes(tag))
         this.error(`index.html does not load ${chunk.fileName} as expected`);
-      // "</script" inside the code would end the element early.
-      const code = chunk.code.replaceAll("</script", "<\\/script");
+      // HTML ends a script element at "</script" in any case, and "<!--" or "<script" inside one
+      // changes how the rest parses, so a script holding any of them is refused, not escaped.
+      if (/<\/script|<script|<!--/i.test(chunk.code))
+        this.error(
+          "the station script holds </script, <script or <!--, which would change how index.html parses",
+        );
       html.source = source.replace(
         tag,
-        () => `<script type="module">${code}</script>`,
+        () => `<script type="module">${chunk.code}</script>`,
       );
       delete bundle[chunk.fileName];
     },

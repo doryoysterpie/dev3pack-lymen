@@ -39,10 +39,10 @@ test("the build writes one self-contained index.html: its script inline, no othe
   try {
     assert.deepEqual(readdirSync(outDir, { recursive: true }), ["index.html"]);
     const html = readFileSync(join(outDir, "index.html"), "utf8");
-    const scripts = [...html.matchAll(/<script\b([^>]*)>/g)].map((m) => m[1]);
+    const scripts = [...html.matchAll(/<script\b([^>]*)>/gi)].map((m) => m[1]);
     assert.deepEqual(scripts, [' type="module"'], "one inline module script");
-    assert.doesNotMatch(html, /<link\b/);
-    assert.doesNotMatch(html, /\s(src|href)="(?!data:)/);
+    assert.doesNotMatch(html, /<link\b/i);
+    assert.doesNotMatch(html, /\s(src|href)="(?!data:)/i);
     // The page's own markup and code are in it.
     assert.match(html, /<canvas id="qr" hidden><\/canvas>/);
     assert.match(html, /\/stations\//);
@@ -79,4 +79,44 @@ test("the build loads no environment: a secret and a STATION_API_URL_LABEL set f
       `${file} reads import.meta.env`,
     );
   }
+});
+
+test("the inliner refuses a script holding </script, <script or <!-- in any case, which would change how the page parses", async () => {
+  const { inlineScript } = await import("../vite.config.ts");
+  const run = (code: string) => {
+    const bundle: Record<string, unknown> = {
+      "index.html": {
+        type: "asset",
+        source:
+          '<html><script type="module" crossorigin src="/assets/a.js"></script></html>',
+      },
+      "assets/a.js": { type: "chunk", fileName: "assets/a.js", code },
+    };
+    const hook = inlineScript().generateBundle as unknown as (
+      this: { error(message: string): never },
+      options: unknown,
+      bundle: Record<string, unknown>,
+    ) => void;
+    hook.call(
+      {
+        error: (message: string) => {
+          throw new Error(message);
+        },
+      },
+      {},
+      bundle,
+    );
+    return (bundle["index.html"] as { source: string }).source;
+  };
+  for (const code of [
+    'const a = "</SCRIPT>";',
+    'const a = "</Script ";',
+    'const a = "<script>";',
+    'const a = "<!--";',
+  ])
+    assert.throws(() => run(code), /holds/, code);
+  assert.equal(
+    run("console.log(1);"),
+    '<html><script type="module">console.log(1);</script></html>',
+  );
 });
