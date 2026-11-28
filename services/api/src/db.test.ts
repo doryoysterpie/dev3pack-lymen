@@ -1,4 +1,4 @@
-// E-02 done test, part 1: the schema migrates from empty.
+// E-02 done test, part 1: the schema migrates from empty. E-10 adds migration 2.
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +8,8 @@ import { test } from "node:test";
 
 import { MIGRATIONS, migrate, openDatabase, schemaVersion } from "./db.ts";
 
-// The schema E-02 owes: six tables and their columns, in declaration order.
+// The schema owed after every migration: E-02's six tables and E-10's evidence_bundles, with
+// their columns in declaration order.
 const OWED_SCHEMA: Record<string, string[]> = {
   cases: ["id", "status", "created_at", "updated_at"],
   checkins: [
@@ -20,6 +21,23 @@ const OWED_SCHEMA: Record<string, string[]> = {
     "station_nonce",
     "mint",
     "created_at",
+  ],
+  evidence_bundles: [
+    "sighting_id",
+    "url",
+    "transaction_b64",
+    "simulation_slot",
+    "simulation_blockhash",
+    "summary_json",
+    "program_ids_json",
+    "recipients_json",
+    "reported_at",
+    "app_version",
+    "wallet",
+    "resimulated_at",
+    "resimulation_matches",
+    "drain_pattern",
+    "resimulation_failed_at",
   ],
   registrations: ["reg_hash", "wallet", "bound_at"],
   sessions: ["id", "name", "starts_at", "ends_at"],
@@ -52,14 +70,14 @@ function withTempDir(fn: (dir: string) => void): void {
   }
 }
 
-test("an empty database migrates to schema version 1 with exactly the six owed tables", () => {
+test("an empty database migrates to schema version 2 with exactly the seven owed tables", () => {
   const db = new DatabaseSync(":memory:");
   assert.equal(schemaVersion(db), 0);
   assert.deepEqual(tables(db), []);
 
-  assert.equal(migrate(db), 1);
-  assert.equal(schemaVersion(db), 1);
-  assert.equal(MIGRATIONS.length, 1);
+  assert.equal(migrate(db), 2);
+  assert.equal(schemaVersion(db), 2);
+  assert.equal(MIGRATIONS.length, 2);
   assert.deepEqual(tables(db), Object.keys(OWED_SCHEMA).sort());
   for (const [table, owed] of Object.entries(OWED_SCHEMA)) {
     assert.deepEqual(columns(db, table), owed, `columns of ${table}`);
@@ -70,14 +88,14 @@ test("an empty database file on disk migrates, and reopening it does not migrate
   withTempDir((dir) => {
     const path = join(dir, "limen.db");
     const first = openDatabase(path);
-    assert.equal(schemaVersion(first), 1);
+    assert.equal(schemaVersion(first), 2);
     first
       .prepare("INSERT INTO stations (id, name, created_at) VALUES (?, ?, ?)")
       .run("st-1", "Front desk", 1_700_000_000);
     first.close();
 
     const second = openDatabase(path);
-    assert.equal(schemaVersion(second), 1);
+    assert.equal(schemaVersion(second), 2);
     const row = second
       .prepare("SELECT name FROM stations WHERE id = ?")
       .get("st-1") as {
@@ -93,7 +111,7 @@ test("a database from a newer build is refused, not run against", () => {
   db.exec("PRAGMA user_version = 99");
   assert.throws(
     () => migrate(db),
-    /schema version 99 is newer than this build supports \(1\)/,
+    /schema version 99 is newer than this build supports \(2\)/,
   );
 });
 
@@ -133,4 +151,61 @@ test("the schema enforces foreign keys and a wallet bound to at most one registr
       ),
     /UNIQUE constraint failed: registrations.wallet/,
   );
+});
+
+test("a version 1 database migrates to version 2 and keeps its rows", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec("BEGIN");
+  db.exec(MIGRATIONS[0]);
+  db.exec("PRAGMA user_version = 1");
+  db.exec("COMMIT");
+  db.exec(
+    "INSERT INTO sightings (device_hash, qr_text, created_at) VALUES ('d-1', 'qr', 1)",
+  );
+  assert.equal(migrate(db), 2);
+  const row = db.prepare("SELECT qr_text FROM sightings").get() as {
+    qr_text: string;
+  };
+  assert.equal(row.qr_text, "qr");
+});
+
+test("an evidence bundle cannot record a simulation or a re-simulation without transaction bytes", () => {
+  const db = openDatabase(":memory:");
+  db.exec(
+    "INSERT INTO sightings (id, device_hash, qr_text, created_at) VALUES (1, 'd-1', 'qr', 1)",
+  );
+  const insert = db.prepare(
+    `INSERT INTO evidence_bundles (sighting_id, transaction_b64, simulation_slot, simulation_blockhash,
+       summary_json, program_ids_json, recipients_json, reported_at, app_version,
+       resimulated_at, resimulation_matches, drain_pattern)
+     VALUES (1, ?, ?, ?, '{}', '[]', '[]', 1, '0.1.0', ?, ?, ?)`,
+  );
+  assert.throws(
+    () => insert.run(null, 5, "bh", null, null, null),
+    /CHECK constraint failed/,
+  );
+  assert.throws(
+    () => insert.run(null, null, null, 2, 1, 0),
+    /CHECK constraint failed/,
+  );
+  assert.throws(
+    () => insert.run("AA==", 5, "bh", 2, 1, null),
+    /CHECK constraint failed/,
+  );
+  insert.run("AA==", 5, "bh", 2, 1, 0);
+});
+
+test("an evidence bundle cannot record a failed re-simulation without transaction bytes", () => {
+  const db = openDatabase(":memory:");
+  db.exec(
+    "INSERT INTO sightings (id, device_hash, qr_text, created_at) VALUES (1, 'd-1', 'qr', 1), (2, 'd-2', 'qr', 1)",
+  );
+  const insert = db.prepare(
+    `INSERT INTO evidence_bundles (sighting_id, transaction_b64, summary_json, program_ids_json,
+       recipients_json, reported_at, app_version, resimulation_failed_at)
+     VALUES (?, ?, '{}', '[]', '[]', 1, '0.1.0', 3)`,
+  );
+  assert.throws(() => insert.run(1, null), /CHECK constraint failed/);
+  insert.run(2, "AA==");
 });

@@ -55,6 +55,38 @@ export const MIGRATIONS: readonly string[] = [
     created_at INTEGER NOT NULL
   ) STRICT;
   `,
+  // E-10: the evidence bundle behind each sighting. The sighting row holds the QR payload
+  // (qr_text) and the reporting device's hash; this row holds the rest of the bundle. JSON
+  // columns hold canonical JSON (object keys sorted, address lists sorted and deduplicated).
+  // wallet stays NULL unless the reporter opted in. resimulation_matches records whether the
+  // stored transaction bytes re-simulated to the stored summary; drain_pattern records whether
+  // that re-simulated summary shows a drain pattern. Both stay NULL until a re-simulation runs.
+  // resimulation_failed_at records the last time a re-simulation was tried and failed.
+  `
+  CREATE TABLE evidence_bundles (
+    sighting_id INTEGER PRIMARY KEY REFERENCES sightings (id),
+    url TEXT,
+    transaction_b64 TEXT,
+    simulation_slot INTEGER,
+    simulation_blockhash TEXT,
+    summary_json TEXT NOT NULL,
+    program_ids_json TEXT NOT NULL,
+    recipients_json TEXT NOT NULL,
+    reported_at INTEGER NOT NULL,
+    app_version TEXT NOT NULL,
+    wallet TEXT,
+    resimulated_at INTEGER,
+    resimulation_matches INTEGER CHECK (resimulation_matches IN (0, 1)),
+    drain_pattern INTEGER CHECK (drain_pattern IN (0, 1)),
+    resimulation_failed_at INTEGER,
+    CHECK ((simulation_slot IS NULL) = (simulation_blockhash IS NULL)),
+    CHECK ((transaction_b64 IS NULL) <= (simulation_slot IS NULL)),
+    CHECK ((resimulated_at IS NULL) = (resimulation_matches IS NULL)),
+    CHECK ((resimulated_at IS NULL) = (drain_pattern IS NULL)),
+    CHECK (transaction_b64 IS NOT NULL OR resimulated_at IS NULL),
+    CHECK (transaction_b64 IS NOT NULL OR resimulation_failed_at IS NULL)
+  ) STRICT;
+  `,
 ];
 
 /** The number of migrations the database has applied, read from PRAGMA user_version. */
