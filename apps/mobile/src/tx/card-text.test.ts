@@ -410,7 +410,7 @@ describe("transaction card text", () => {
     const card = transactionCardText(LINK, null, result);
     assert.equal(
       card.status,
-      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation ran, and the balance changes it found are shown below. As simulated, it would hand control of your wallet or tokens to another address, or leave your wallet or a token account with less than a tenth of what it holds.",
+      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation ran, and the balance changes it found are shown below. As simulated, it would hand control of your wallet or tokens to another address, give your wallet account a different amount of data, or leave your wallet or a token account with less than a tenth of what it holds.",
     );
   });
 
@@ -689,6 +689,67 @@ describe("the owner's audit: what the card claims", () => {
         value: `5 base units from token account ${userTokenAccount}. Your wallet signs as the authority the instruction names.`,
       },
     ]);
+  });
+
+  it("A9: a change in the wallet's data length alone is named in the headline", async () => {
+    const wallet = (lamports: number, length: number) => ({
+      lamports,
+      owner: SYSTEM_PROGRAM,
+      data: [Buffer.alloc(length).toString("base64"), "base64"] as const,
+    });
+    const result = await preflight(
+      recordedRpc({
+        accounts: { [fixture.user]: wallet(5_000_000_000, 0) },
+        simulation: {
+          err: null,
+          accounts: { [fixture.user]: wallet(4_990_000_000, 64) },
+        },
+      }),
+      transactionOf("unknown program"),
+      fixture.user,
+    );
+    const card = transactionCardText(LINK, null, result);
+    assert.equal(
+      card.status,
+      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation ran, and the balance changes it found are shown below. As simulated, it would hand control of your wallet or tokens to another address, give your wallet account a different amount of data, or leave your wallet or a token account with less than a tenth of what it holds.",
+    );
+  });
+
+  it("10: a decoded hand-over with a failed run says the run failed", async () => {
+    const result = await drainerOffline();
+    const failed = {
+      status: "ran" as const,
+      err: { InstructionError: [1, "Custom"] },
+      changes: [],
+    };
+    const card = transactionCardText(LINK, null, {
+      ...result,
+      simulation: failed,
+      blocks: ["simulation-failed"],
+    });
+    assert.equal(
+      card.status,
+      "limen flags this transaction: its instructions ask to hand control of your tokens or accounts to another address. The simulation failed, so signed now it would most likely fail.",
+    );
+    const fallback = transactionCardText(LINK, null, {
+      ...result,
+      summary: {
+        ...result.summary,
+        undecoded: [
+          {
+            instruction: 3,
+            programId: unknownProgram,
+            reason: "unknown-program" as const,
+          },
+        ],
+      },
+      simulation: failed,
+      blocks: ["simulation-failed"],
+    });
+    assert.equal(
+      fallback.status,
+      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation failed, so no balance change is shown. Its instructions ask to hand control of your tokens or accounts to another address.",
+    );
   });
 
   it("13: the burn, revoke and create rows claim only what the instruction proves", async () => {
