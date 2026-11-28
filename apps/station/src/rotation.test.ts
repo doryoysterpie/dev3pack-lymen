@@ -19,8 +19,8 @@ import {
 } from "./rotation.ts";
 
 /** A fake clock: its timers run when the test advances time. */
-function fakeClock() {
-  let now = 0;
+function fakeClock(start = 0) {
+  let now = start;
   let nextId = 1;
   const timers = new Map<number, { at: number; fn: () => void }>();
   return {
@@ -128,9 +128,9 @@ test("the display shows a fresh QR from the API at 0 s, 30 s and 60 s", async ()
     session: "day-2",
     issuedAt: 1090,
     expiresAt: 1150,
-    // Fetched at 60 s: 60 s of signed window, less up to 999 ms for when in its second the API
-    // signed it.
-    deadline: 60_000 + 59_001,
+    // Fetched at 60 s: the earlier of its signed expiry, 1150 s, and 60 s of signed window after
+    // the request left.
+    deadline: 60_000 + 60_000,
   });
 });
 
@@ -380,13 +380,14 @@ function signedAnswer(
   }) as unknown as typeof fetch;
 }
 
-test("a shown QR is cleared at its deadline from the signed times, and the page says it is refreshing", async () => {
+test("a QR signed for 20 s carries the deadline 20 s after its request left, and the next fetch comes then", async () => {
   const clock = fakeClock();
-  const shown: StationView[] = [];
+  const fetchedAt: number[] = [];
+  const deadlines: number[] = [];
   let calls = 0;
   startRotation({
-    // A QR signed for 20 s; the fetch at its deadline then hangs.
     fetchQr: (signal) => {
+      fetchedAt.push(clock.now);
       calls++;
       if (calls === 1)
         return Promise.resolve({
@@ -398,33 +399,24 @@ test("a shown QR is cleared at its deadline from the signed times, and the page 
         signal.addEventListener("abort", () => reject(new Error("aborted"))),
       );
     },
-    render: (view) => shown.push(view),
+    render: (view) => {
+      if (view.kind === "qr") deadlines.push(view.deadline);
+    },
     now: () => clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
   });
   await flush();
-  // 20 s of signed window, less 999 ms: the deadline is 19 001 ms after the request left.
-  await clock.advance(19_000);
-  assert.deepEqual(
-    shown.map((v) => v.kind),
-    ["qr"],
-  );
+  assert.deepEqual(deadlines, [20_000]);
+  await clock.advance(19_999);
+  assert.deepEqual(fetchedAt, [0]);
   await clock.advance(1);
-  assert.deepEqual(
-    shown.map((v) => v.kind),
-    ["qr", "refreshing"],
-  );
-  await clock.advance(10_000);
-  assert.deepEqual(
-    shown.map((v) => v.kind),
-    ["qr", "refreshing", "error"],
-  );
+  assert.deepEqual(fetchedAt, [0, 20_000]);
 });
 
-test("with a 2 s response delay, a shown QR is cleared by its signed expiry, counted from when the request left", async () => {
+test("with a 2 s response delay, the deadline is counted from when the request left", async () => {
   const clock = fakeClock();
-  const shown: { at: number; kind: string }[] = [];
+  const deadlines: { at: number; deadline: number }[] = [];
   let calls = 0;
   startRotation({
     fetchQr: (signal) => {
@@ -441,19 +433,47 @@ test("with a 2 s response delay, a shown QR is cleared by its signed expiry, cou
         signal.addEventListener("abort", () => reject(new Error("aborted"))),
       );
     },
-    render: (view) => shown.push({ at: clock.now, kind: view.kind }),
+    render: (view) => {
+      if (view.kind === "qr")
+        deadlines.push({ at: clock.now, deadline: view.deadline });
+    },
     now: () => clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
   });
   await flush();
-  await clock.advance(9_000);
-  assert.deepEqual(shown, [{ at: 2000, kind: "qr" }]);
-  await clock.advance(1);
-  assert.deepEqual(shown, [
-    { at: 2000, kind: "qr" },
-    { at: 9_001, kind: "refreshing" },
-  ]);
+  await clock.advance(2_000);
+  assert.deepEqual(deadlines, [{ at: 2000, deadline: 10_000 }]);
+});
+
+test("a genuine full-length QR issued 2 minutes ago is not drawn: its signed expiry has passed on the page's clock", async () => {
+  // The page's clock reads T; the API signed this QR at T - 120 s for 60 s.
+  const T = 1_795_000_000;
+  const clock = fakeClock(T * 1000);
+  const shown: string[] = [];
+  let calls = 0;
+  startRotation({
+    fetchQr: (signal) => {
+      calls++;
+      if (calls === 1)
+        return Promise.resolve({
+          ...response(1),
+          issuedAt: T - 120,
+          expiresAt: T - 60,
+        });
+      return new Promise<StationQr>((_, reject) =>
+        signal.addEventListener("abort", () => reject(new Error("aborted"))),
+      );
+    },
+    render: (view) => shown.push(view.kind),
+    now: () => clock.now,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+  });
+  await flush();
+  assert.deepEqual(shown, ["refreshing"]);
+  await clock.advance(0);
+  assert.equal(calls, 2, "the next QR is fetched at once");
 });
 
 test("the deadline and the next fetch come from the signed times, not from the answer's other fields", async () => {
@@ -477,15 +497,13 @@ test("the deadline and the next fetch come from the signed times, not from the a
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
   });
-  await flush();
-  await clock.advance(1_000);
+  await clock.advance(0);
   assert.deepEqual(shown, [{ at: 0, kind: "qr" }]);
+  // The signed window is 2 s, so the next fetch comes at 2 s, not at the answer's 30 s.
+  await clock.advance(1_999);
+  assert.deepEqual(fetchedAt, [0]);
   await clock.advance(1);
-  assert.deepEqual(shown.slice(0, 2), [
-    { at: 0, kind: "qr" },
-    { at: 1_001, kind: "refreshing" },
-  ]);
-  assert.deepEqual(fetchedAt, [0, 1_001]);
+  assert.deepEqual(fetchedAt, [0, 2_000]);
 });
 
 test("a QR whose signed window has passed when it arrives is not drawn, whatever the answer's other fields say", async () => {

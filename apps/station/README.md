@@ -17,7 +17,7 @@ The page keeps the token in memory and sends it in the `Authorization` header of
 - **The clipboard,** until something else is copied over it.
 - **The browser's password manager,** if the browser offers to save the field and the offer is accepted. Decline it.
 
-If a fetch fails, or gets no answer within 10 s, the page clears the QR, shows the reason, and tries again after 5 s. Every time the page acts on comes from the QR's signed payload, `issued_at` and `expires_at`, and none from the answer's other fields. The API signed the QR within a second after `issued_at`, while the request was out. So on the page's clock the QR expires no earlier than its deadline, `sentAt + (expires_at - issued_at) * 1000 - 999` ms, where `sentAt` is when the request left. A QR past its deadline when it arrives is not drawn, and the next one is fetched at once. A shown QR is cleared at its deadline, and the page says it is refreshing. The deadline is checked again after the QR is drawn, just before it is shown.
+If a fetch fails, or gets no answer within 10 s, the page clears the QR, shows the reason, and tries again after 5 s. Every time the page acts on comes from the QR's signed `issued_at` and `expires_at`, read against the page's own clock, and none from the answer's other fields. That assumes the station's clock agrees with the API's within the verifier's 5 s skew; the page does not check it. A QR's deadline is `min(expires_at * 1000, sentAt + (expires_at - issued_at) * 1000)` ms, where `sentAt` is when the request left. A QR whose deadline has passed when it arrives is not drawn, and the next one is fetched at once. After drawing a QR, the page reads its clock again. It shows the QR only if the deadline is still ahead, and clears it at the deadline, when the page says it is refreshing.
 
 What the servers serve (`vite.config.ts`):
 
@@ -48,7 +48,9 @@ npm test -w @limen/station
 - an address with no valid station shows the station error and asks for no token;
 - another station's genuine QR is refused rather than drawn;
 - the caption comes from the signed fields, whatever the answer's other fields say, and states the interval rather than counting down;
-- a QR whose deadline passes while it is drawn is not shown.
+- a QR whose deadline passes while it is drawn is not shown;
+- a genuine full-length QR issued 2 minutes ago is not shown;
+- a QR whose draw ends 100 ms before its deadline is shown, and cleared at the deadline.
 
 Against the real API, with every answer delayed 2 s, it checks that a QR past its deadline on arrival is not drawn, and that the next session's QR is fetched on arrival and refreshed 30 s after its request left.
 
@@ -57,7 +59,8 @@ Against the real API, with every answer delayed 2 s, it checks that a QR past it
 - the page fetches and shows a QR at 0 s, 30 s and 60 s and not before;
 - a failed fetch clears the QR and retries after 5 s;
 - a fetch with no answer is abandoned at 10 s and retried;
-- a shown QR is cleared at its deadline from the signed times, with and without a 2 s delay;
+- a QR's deadline comes from its signed times and from when its request left, with and without a 2 s delay, and the next fetch comes at it when that is sooner than 30 s;
+- a genuine full-length QR issued 2 minutes ago is not drawn;
 - the deadline and the next fetch come from the signed times when the answer's other fields disagree, and a QR past its deadline on arrival is not drawn;
 - each API failure becomes the owed message;
 - a station's display token, as the station-token tool derives it, reaches the real API and gets that station's QR, while the secret itself is refused.
