@@ -2,3 +2,7 @@
 # rebuilt, not committed.
 android/
 ios/
+
+# The device check's test certificates and the server key (E-18), made at run time by
+# device-check/make-certificates.mjs. Never committed.
+device-check/.certs/
