@@ -12,6 +12,7 @@ import {
   verifyStationQr,
   type StationSigner,
 } from "./station-qr.ts";
+import { stationDisplayToken } from "./station-token.ts";
 
 // RFC 8032 section 7.1, TEST 1: a published Ed25519 test vector, not a real key.
 const SIGNER: StationSigner = {
@@ -30,12 +31,16 @@ const SIGNER: StationSigner = {
   }),
 };
 const TOKEN = "test-display-token-0123456789abcdef";
+/** The credential a station's display page is given: its own token, derived from the secret. */
+const displayCredential = (station: string): string =>
+  stationDisplayToken(TOKEN, station);
 const T = 1_795_000_000;
 let clock = T;
 
 const db = openDatabase(":memory:");
 db.exec(`
   INSERT INTO stations (id, name, created_at) VALUES ('st-front', 'Front desk', ${T});
+  INSERT INTO stations (id, name, created_at) VALUES ('st-side', 'Side door', ${T});
   INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('day-1', 'Day 1', ${T - 86400}, ${T});
   INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('day-2', 'Day 2', ${T}, ${T + 86400});
 `);
@@ -61,12 +66,41 @@ after(async () => {
 
 function getQr(
   station: string,
-  token: string | null = TOKEN,
+  token: string | null = displayCredential(station),
 ): Promise<Response> {
   return fetch(`${base}/stations/${station}/qr`, {
     headers: token === null ? {} : { authorization: `Bearer ${token}` },
   });
 }
+
+test("a display's credential gets its own station's QR and no other station's", async () => {
+  clock = T + 100;
+  const front = displayCredential("st-front");
+  assert.equal((await getQr("st-front", front)).status, 200);
+  const other = await getQr("st-side", front);
+  assert.equal(
+    other.status,
+    401,
+    "st-front's credential is refused for st-side",
+  );
+  assert.deepEqual(await other.json(), { error: "unauthorized" });
+  assert.equal(
+    (await getQr("st-side", displayCredential("st-side"))).status,
+    200,
+  );
+});
+
+test("each station's display token is the owed HMAC of its ID under the secret", () => {
+  // Owed values computed with Python's hmac and hashlib, not by this code.
+  assert.equal(
+    stationDisplayToken(TOKEN, "st-front"),
+    "lWbhFKhap4ZM9Ptol3mb5KYvWJUs8yXG84tELGGMwwQ",
+  );
+  assert.equal(
+    stationDisplayToken(TOKEN, "st-side"),
+    "L5i7tCSd7fvJ9s-_LyJQERgmCJINPvHHpemAY2XcGBY",
+  );
+});
 
 test("the API version is the one services/api/package.json states", () => {
   assert.equal(API_VERSION, "0.1.0");
@@ -141,6 +175,10 @@ test("the QR endpoint refuses a request without the display token, or with a wro
   for (const token of [
     null,
     "",
+    // The secret itself, and the derived token one character off.
+    TOKEN,
+    `${displayCredential("st-front")}x`,
+    displayCredential("st-front").slice(0, -1),
     "wrong-token-0123456789abcdef0123",
     `${TOKEN}x`,
     TOKEN.slice(0, -1),

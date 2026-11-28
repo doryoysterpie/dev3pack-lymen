@@ -17,6 +17,7 @@ import {
   STATION_QR_ROTATION_S,
   type StationSigner,
 } from "./station-qr.ts";
+import { stationDisplayToken } from "./station-token.ts";
 
 /** The API version, read from services/api/package.json. */
 export const API_VERSION: string = (
@@ -34,7 +35,10 @@ export interface ApiContext {
   readonly version: string;
   /** Signs station QRs. In the running API this is the organizer key. */
   readonly stationSigner: StationSigner;
-  /** The bearer token the station display sends to fetch QRs. */
+  /**
+   * STATION_DISPLAY_TOKEN, the secret each station's display token is derived from
+   * (station-token.ts). A display sends its own station's token, never this secret.
+   */
   readonly stationDisplayToken: string;
   /** The current Unix time in whole seconds. */
   readonly now: () => number;
@@ -78,7 +82,14 @@ function stationQr(
     sendJson(res, 405, { error: "method_not_allowed" }, { allow: "GET" });
     return;
   }
-  if (!hasBearerToken(req, ctx.stationDisplayToken)) {
+  // Each display holds its own station's token, so one display's token gets no other
+  // station's QR.
+  if (
+    !hasBearerToken(
+      req,
+      stationDisplayToken(ctx.stationDisplayToken, stationId),
+    )
+  ) {
     sendJson(
       res,
       401,

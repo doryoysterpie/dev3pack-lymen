@@ -13,6 +13,8 @@ coverage/
 keys/
 *.keypair.json
 id.json
+# Station display links: each holds that station's display token (E-03)
+.station-links/
 
 # Local databases
 *.db
