@@ -14,6 +14,7 @@
   "include": [
     "services/*/src/**/*.ts",
     "apps/station/src/**/*.ts",
-    "apps/station/vite.config.ts"
+    "apps/station/vite.config.ts",
+    "apps/station/build.ts"
   ]
 }

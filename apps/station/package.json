@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "node build.ts",
     "test": "node --test \"src/**/*.test.ts\""
   },
   "dependencies": {

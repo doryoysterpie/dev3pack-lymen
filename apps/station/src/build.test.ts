@@ -3,26 +3,19 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const APP = fileURLToPath(new URL("..", import.meta.url));
 
-/** Builds the page into a fresh folder in a child process with `env`; returns the folder. */
+/** Builds the page with `npm run build`'s script into a fresh folder, with `env` set for it. */
 function buildWith(env: Record<string, string>): string {
   const outDir = mkdtempSync(join(tmpdir(), "limen-station-build-"));
   const r = spawnSync(
     process.execPath,
-    [
-      "--input-type=module",
-      "-e",
-      `import { build } from "vite";
-await build({ configFile: process.argv[1], root: process.argv[2], logLevel: "silent", build: { outDir: process.argv[3] } });`,
-      join(APP, "vite.config.ts"),
-      APP,
-      outDir,
-    ],
+    [join(APP, "build.ts"), "--outDir", outDir],
     {
       cwd: APP,
       encoding: "utf8",
@@ -119,4 +112,55 @@ test("the inliner refuses a script holding </script, <script or <!-- in any case
     run("console.log(1);"),
     '<html><script type="module">console.log(1);</script></html>',
   );
+});
+
+test("the build runs Vite with PATH and NODE_ENV alone: a VITE_ variable and DEBUG=vite:env set for it reach neither its output nor the page", () => {
+  const label = "vite-secret-label-5e1b";
+  const env = { VITE_SECRET_LABEL: label, DEBUG: "vite:env" };
+  const viteBin = join(
+    dirname(createRequire(import.meta.url).resolve("vite/package.json")),
+    "bin",
+    "vite.js",
+  );
+  const control = mkdtempSync(join(tmpdir(), "limen-station-build-"));
+  try {
+    // Control: Vite run directly with that environment prints the label.
+    const direct = spawnSync(
+      process.execPath,
+      [viteBin, "build", "--outDir", control],
+      {
+        cwd: APP,
+        encoding: "utf8",
+        env: { PATH: process.env.PATH ?? "", ...env },
+        timeout: 120_000,
+      },
+    );
+    assert.ok(
+      (direct.stdout + direct.stderr).includes(label),
+      "control: Vite run directly prints the label",
+    );
+  } finally {
+    rmSync(control, { recursive: true, force: true });
+  }
+  const outDir = mkdtempSync(join(tmpdir(), "limen-station-build-"));
+  try {
+    const r = spawnSync(
+      process.execPath,
+      [join(APP, "build.ts"), "--outDir", outDir],
+      {
+        cwd: APP,
+        encoding: "utf8",
+        env: { PATH: process.env.PATH ?? "", ...env },
+        timeout: 120_000,
+      },
+    );
+    assert.equal(r.status, 0, r.stderr.slice(-600));
+    assert.ok(!(r.stdout + r.stderr).includes(label), "the label is printed");
+    assert.ok(
+      !readFileSync(join(outDir, "index.html"), "utf8").includes(label),
+      "the label is in the page",
+    );
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+  }
 });
