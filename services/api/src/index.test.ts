@@ -453,17 +453,10 @@ test("start-up refuses a key file whose real path is inside apps/station, which 
     withTempDir((dir) => {
       const link = join(dir, "organizer.json");
       symlinkSync(key, link);
-      for (const path of [
-        key,
-        join(
-          station,
-          "src",
-          "..",
-          `limen-key-test-${process.pid}`,
-          "organizer.json",
-        ),
-        link,
-      ]) {
+      // Built as a raw string: join() would resolve the ".." away.
+      const raw = `${station}/src/../limen-key-test-${process.pid}/organizer.json`;
+      assert.ok(raw.includes("/src/../"));
+      for (const path of [key, raw, link]) {
         assert.deepEqual(
           runEntry({
             ORGANIZER_KEYPAIR_PATH: path,
