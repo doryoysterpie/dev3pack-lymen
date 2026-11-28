@@ -1,0 +1,482 @@
+// Cases from the PM's internal read of E-09, each with the answer the drain
+// pattern owes. Transactions are built with @solana/web3.js and
+// @solana/spl-token; every simulation is a recorded RPC answer.
+
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { describe, it } from "node:test";
+
+import * as spl from "@solana/spl-token";
+import * as web3 from "@solana/web3.js";
+
+import { decodePublicKey } from "./base58.ts";
+import { encodeBase64 } from "./base64.ts";
+import {
+  preflight,
+  preflightTransaction,
+  signingAllowed,
+} from "./preflight.ts";
+import {
+  DEVNET_GENESIS_HASH,
+  SYSTEM_PROGRAM,
+  TOKEN_PROGRAM,
+} from "./programs.ts";
+import { asSigners } from "../test-support/build.ts";
+import type { Fetch } from "./rpc.ts";
+import {
+  endpointFor,
+  recordedEndpoint,
+  type RecordedAccount,
+  type Recording,
+} from "../test-support/recorded.ts";
+
+const fixture = JSON.parse(
+  readFileSync(
+    new URL("../../../fixtures/tx/e09-transactions.json", import.meta.url),
+    "utf8",
+  ),
+) as { readonly user: string; readonly keys: Readonly<Record<string, string>> };
+
+const USER = fixture.user;
+const K = fixture.keys;
+const key = (address: string) => new web3.PublicKey(address);
+const user = key(USER);
+const attacker = key(K.attacker);
+const tokenAccount = key(K.userTokenAccount);
+const mint = key(K.mint);
+const unknownProgram = key(K.unknownProgram);
+
+function build(instructions: web3.TransactionInstruction[]): Uint8Array {
+  const message = new web3.TransactionMessage({
+    payerKey: user,
+    recentBlockhash: K.mint,
+    instructions,
+  }).compileToLegacyMessage();
+  const signatures = Array.from(
+    { length: message.header.numRequiredSignatures },
+    () => new Uint8Array(64),
+  );
+  return new web3.VersionedTransaction(message, signatures).serialize();
+}
+
+interface TokenState {
+  readonly amount: bigint;
+  readonly delegate?: string;
+  readonly delegated?: bigint;
+  readonly closeAuthority?: string;
+}
+
+function u64(value: bigint): Uint8Array {
+  const out = new Uint8Array(8);
+  let rest = value;
+  for (let i = 0; i < 8; i += 1) {
+    out[i] = Number(rest % BigInt(256));
+    rest /= BigInt(256);
+  }
+  return out;
+}
+
+const bytes = (address: string) =>
+  decodePublicKey(address) ?? new Uint8Array(32);
+
+function token(state: TokenState): RecordedAccount {
+  const data = new Uint8Array(165);
+  data.set(bytes(K.mint), 0);
+  data.set(bytes(USER), 32);
+  data.set(u64(state.amount), 64);
+  if (state.delegate !== undefined) {
+    data[72] = 1;
+    data.set(bytes(state.delegate), 76);
+  }
+  data[108] = 1;
+  data.set(u64(state.delegated ?? BigInt(0)), 121);
+  if (state.closeAuthority !== undefined) {
+    data[129] = 1;
+    data.set(bytes(state.closeAuthority), 133);
+  }
+  return {
+    lamports: 2_039_280,
+    owner: TOKEN_PROGRAM,
+    data: [encodeBase64(data), "base64"],
+  };
+}
+
+const wallet = (lamports: number, owner = SYSTEM_PROGRAM, length = 0) => ({
+  lamports,
+  owner,
+  data: [encodeBase64(new Uint8Array(length)), "base64"] as const,
+});
+
+const unknown = (accounts: web3.AccountMeta[]) =>
+  new web3.TransactionInstruction({
+    programId: unknownProgram,
+    keys: [{ pubkey: user, isSigner: true, isWritable: true }, ...accounts],
+    data: Buffer.from([1]),
+  });
+
+const writable = (pubkey: web3.PublicKey): web3.AccountMeta => ({
+  pubkey,
+  isSigner: false,
+  isWritable: true,
+});
+
+// A program reaches the token program by a cross-program call only when the
+// token program is among the transaction's accounts (anza-xyz/agave a64fa73,
+// program-runtime/src/invoke_context.rs:463 to 470).
+const tokenProgram: web3.AccountMeta = {
+  pubkey: new web3.PublicKey(TOKEN_PROGRAM),
+  isSigner: false,
+  isWritable: false,
+};
+
+async function drain(
+  transaction: Uint8Array,
+  recording: Recording,
+): Promise<boolean> {
+  const result = await preflightTransaction(transaction, {
+    endpoint: recordedEndpoint(recording),
+    user: USER,
+  });
+  assert.equal(result.summary.kind, "ready");
+  return result.drainPattern;
+}
+
+const tokenRecording = (after: RecordedAccount | null): Recording => ({
+  accounts: {
+    [USER]: wallet(5_000_000_000),
+    [K.userTokenAccount]: token({ amount: BigInt(1000) }),
+  },
+  simulation: {
+    err: null,
+    accounts: {
+      [USER]: wallet(4_999_995_000),
+      [K.userTokenAccount]: after,
+    },
+  },
+});
+
+// Ruling 20a removed the simulated token-sweep clause, so a token payment
+// shows a drain pattern only when its decoded instruction hands over control.
+describe("M1: a token payment, decoded, shows no drain pattern", () => {
+  it("a payment that leaves a tenth of the tokens shows none", async () => {
+    const transaction = build([
+      spl.createTransferCheckedInstruction(
+        tokenAccount,
+        mint,
+        attacker,
+        user,
+        BigInt(900),
+        0,
+      ),
+    ]);
+    assert.equal(
+      await drain(transaction, tokenRecording(token({ amount: BigInt(100) }))),
+      false,
+    );
+  });
+});
+
+describe("M2: the wallet handed to a program by a cross-program call", () => {
+  it("the wallet's SOL down only by the fee shows none", async () => {
+    const transaction = build([unknown([])]);
+    const recording: Recording = {
+      accounts: { [USER]: wallet(5_000_000_000) },
+      simulation: { err: null, accounts: { [USER]: wallet(4_999_995_000) } },
+    };
+    assert.equal(await drain(transaction, recording), false);
+  });
+});
+
+describe("m2: control handed over by a cross-program call", () => {
+  it("an allowance lowered for the same delegate shows none", async () => {
+    const transaction = build([
+      unknown([writable(tokenAccount), tokenProgram]),
+    ]);
+    const recording: Recording = {
+      accounts: {
+        [USER]: wallet(5_000_000_000),
+        [K.userTokenAccount]: token({
+          amount: BigInt(1000),
+          delegate: K.attacker,
+          delegated: BigInt(500),
+        }),
+      },
+      simulation: {
+        err: null,
+        accounts: {
+          [USER]: wallet(4_999_995_000),
+          [K.userTokenAccount]: token({
+            amount: BigInt(1000),
+            delegate: K.attacker,
+            delegated: BigInt(100),
+          }),
+        },
+      },
+    };
+    assert.equal(await drain(transaction, recording), false);
+  });
+});
+
+// m1 is the owner's call (DECIDE 7): the definition does not look at where the
+// SOL or tokens go. These cases pin what it does today.
+describe("known false alarms, held for the owner", () => {
+  const organizer = key(K.organizer);
+
+  it("F2: a SOL payment to the organizer that leaves under a tenth", async () => {
+    const transaction = build([
+      web3.SystemProgram.transfer({
+        fromPubkey: user,
+        toPubkey: organizer,
+        lamports: 950_000_000,
+      }),
+    ]);
+    const recording: Recording = {
+      accounts: { [USER]: wallet(1_000_000_000) },
+      simulation: { err: null, accounts: { [USER]: wallet(49_995_000) } },
+    };
+    assert.equal(await drain(transaction, recording), true);
+  });
+});
+
+describe("m9, m10, m11: a simulation that did not run is not a clean run", () => {
+  const transaction = () => build([unknown([])]);
+  const base64 = () => encodeBase64(transaction());
+
+  it("m9: an answer with no err field and no accounts is marked not run, and blocks signing", async () => {
+    const answer: Fetch = async (url, init) => {
+      const request = JSON.parse(init.body) as {
+        id: number;
+        method: string;
+      };
+      const result =
+        request.method === "getGenesisHash"
+          ? DEVNET_GENESIS_HASH
+          : request.method === "getMultipleAccounts"
+            ? { context: { slot: 1 }, value: [null] }
+            : { context: { slot: 1 }, value: { logs: [] } };
+      return {
+        ok: true,
+        status: 200,
+        url,
+        text: JSON.stringify({ jsonrpc: "2.0", id: request.id, result }),
+      };
+    };
+    const result = await preflight(endpointFor(answer, "x"), base64(), USER);
+    assert.ok(result.kind === "ready");
+    assert.equal(result.simulation.status, "not-run");
+    assert.deepEqual(result.blocks, ["simulation-not-run"]);
+    assert.equal(signingAllowed(result, base64()), false);
+  });
+
+  it("m10: an endpoint that never answers times out as not run", async () => {
+    const hang: Fetch = () => new Promise(() => {});
+    const result = await preflight(endpointFor(hang, "x", 50), base64(), USER);
+    assert.ok(result.kind === "ready");
+    assert.deepEqual(result.simulation, {
+      status: "not-run",
+      // The first answer is the genesis hash's (the audit of 6c4e64e, Major 9).
+      reason:
+        "limen could not confirm devnet: the RPC endpoint did not answer within 0.05 seconds",
+    });
+    assert.deepEqual(result.blocks, ["simulation-not-run"]);
+  });
+
+  it("m11: devnet never confirmed (getGenesisHash HTTP 503) blocks signing", async () => {
+    const down: Fetch = async (url) => ({
+      ok: false,
+      status: 503,
+      url,
+      text: "{}",
+    });
+    const result = await preflight(endpointFor(down, "x"), base64(), USER);
+    assert.ok(result.kind === "ready");
+    assert.equal(result.simulation.status, "not-run");
+    assert.equal(signingAllowed(result, base64()), false);
+  });
+
+  it("m11: a failed simulation blocks signing", async () => {
+    const result = await preflight(
+      recordedEndpoint({
+        accounts: { [USER]: wallet(5_000_000_000) },
+        simulation: { err: { InstructionError: [0, "Custom"] }, accounts: {} },
+      }),
+      base64(),
+      USER,
+    );
+    assert.ok(result.kind === "ready");
+    assert.deepEqual(result.blocks, ["simulation-failed"]);
+    assert.equal(signingAllowed(result, base64()), false);
+  });
+
+  it("a clean simulation leaves signing to the card", async () => {
+    const result = await preflight(
+      recordedEndpoint({
+        accounts: { [USER]: wallet(5_000_000_000) },
+        simulation: { err: null, accounts: { [USER]: wallet(4_999_995_000) } },
+      }),
+      base64(),
+      USER,
+    );
+    assert.ok(result.kind === "ready");
+    assert.deepEqual(result.blocks, []);
+    assert.equal(signingAllowed(result, base64()), true);
+  });
+});
+
+describe("m5: an empty token account closed back to the wallet", () => {
+  const transaction = () =>
+    build([spl.createCloseAccountInstruction(tokenAccount, user, user)]);
+
+  it("shows no drain pattern from the decode alone", async () => {
+    const result = await preflightTransaction(transaction(), {
+      endpoint: endpointFor(async () => {
+        throw new Error("offline");
+      }, "x"),
+      user: USER,
+    });
+    assert.equal(result.summary.kind, "ready");
+    assert.equal(result.drainPattern, false);
+  });
+
+  it("shows no drain pattern as simulated", async () => {
+    const recording: Recording = {
+      accounts: {
+        [USER]: wallet(1_000_000_000),
+        [K.userTokenAccount]: token({ amount: BigInt(0) }),
+      },
+      simulation: {
+        err: null,
+        accounts: { [USER]: wallet(1_002_034_280), [K.userTokenAccount]: null },
+      },
+    };
+    assert.equal(await drain(transaction(), recording), false);
+  });
+
+  it("does show one when the SOL goes to another address", async () => {
+    const closeToAttacker = build([
+      spl.createCloseAccountInstruction(tokenAccount, attacker, user),
+    ]);
+    const result = await preflightTransaction(closeToAttacker, {
+      endpoint: endpointFor(async () => {
+        throw new Error("offline");
+      }, "x"),
+      user: USER,
+    });
+    assert.equal(result.drainPattern, true);
+  });
+});
+
+describe("n2: a hand-over to the wallet itself is no hand-over", () => {
+  const offline = () =>
+    endpointFor(async () => {
+      throw new Error("offline");
+    }, "x");
+  const decodedDrain = async (instruction: web3.TransactionInstruction) => {
+    const result = await preflightTransaction(build([instruction]), {
+      endpoint: offline(),
+      user: USER,
+    });
+    assert.equal(result.summary.kind, "ready");
+    return result.drainPattern;
+  };
+
+  it("the wallet approved as delegate over its own token account", async () => {
+    assert.equal(
+      await decodedDrain(
+        spl.createApproveInstruction(tokenAccount, user, user, BigInt(5)),
+      ),
+      false,
+    );
+  });
+
+  it("the wallet assigned to the System Program", async () => {
+    assert.equal(
+      await decodedDrain(
+        web3.SystemProgram.assign({
+          accountPubkey: user,
+          programId: web3.SystemProgram.programId,
+        }),
+      ),
+      false,
+    );
+  });
+
+  it("still a hand-over: another address approved, or another program assigned", async () => {
+    assert.equal(
+      await decodedDrain(
+        spl.createApproveInstruction(tokenAccount, attacker, user, BigInt(5)),
+      ),
+      true,
+    );
+    assert.equal(
+      await decodedDrain(
+        web3.SystemProgram.assign({
+          accountPubkey: user,
+          programId: unknownProgram,
+        }),
+      ),
+      true,
+    );
+  });
+});
+
+describe("n3: which token accounts a report marks as the wallet's", () => {
+  const offline = () =>
+    endpointFor(async () => {
+      throw new Error("offline");
+    }, "x");
+  const reportOf = async (
+    instructions: web3.TransactionInstruction[],
+    rpc: ReturnType<typeof offline>,
+  ) => {
+    const result = await preflightTransaction(build(instructions), {
+      endpoint: rpc,
+      user: USER,
+    });
+    assert.equal(result.summary.kind, "ready");
+    return JSON.stringify(result.summary);
+  };
+
+  it("with no simulation: an associated token account created for the wallet", async () => {
+    const ata = spl.getAssociatedTokenAddressSync(mint, user);
+    const json = await reportOf(
+      [spl.createAssociatedTokenAccountInstruction(user, ata, user, mint)],
+      offline(),
+    );
+    assert.equal(json.includes(ata.toBase58()), false);
+  });
+
+  it("with no simulation: a token account whose owner the wallet changes", async () => {
+    const json = await reportOf(
+      [
+        spl.createSetAuthorityInstruction(
+          tokenAccount,
+          user,
+          spl.AuthorityType.AccountOwner,
+          attacker,
+        ),
+      ],
+      offline(),
+    );
+    assert.equal(json.includes(K.userTokenAccount), false);
+  });
+
+  it("with no simulation: not an account a multisig owns, with the wallet one of its signers", async () => {
+    const json = await reportOf(
+      [
+        spl.createApproveInstruction(
+          tokenAccount,
+          attacker,
+          attacker,
+          BigInt(5),
+          asSigners([user]),
+        ),
+      ],
+      offline(),
+    );
+    // Audit finding 4: the multisig, not the wallet, authorizes it, so it is
+    // no effect of the wallet's and nothing marks it as the wallet's.
+    assert.equal(json.includes("user token account"), false);
+    assert.equal(json.includes('"effects":[]'), true);
+  });
+});

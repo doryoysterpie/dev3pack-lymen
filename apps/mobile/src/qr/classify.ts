@@ -11,7 +11,7 @@
 
 import { URL } from "whatwg-url-minimum";
 
-import { decodePublicKey } from "./base58.ts";
+import { decodePublicKey } from "@limen/preflight";
 
 /** Every station QR starts with this text. E-03 defines what follows it. */
 export const STATION_PREFIX = "limen:station:";

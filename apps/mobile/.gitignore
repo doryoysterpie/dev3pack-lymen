@@ -1,0 +1,4 @@
+# Native projects that `npx expo prebuild` generates from app.json. They are
+# rebuilt, not committed.
+android/
+ios/
