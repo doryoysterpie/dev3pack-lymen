@@ -65,6 +65,7 @@ import {
   createApiServer,
   MAX_CHECKIN_BODY_BYTES,
 } from "./server.ts";
+import { stationDisplayToken } from "./station-token.ts";
 import {
   issueStationQr,
   stationAllowlist,
@@ -300,13 +301,15 @@ function nodeVerifies(
  * the wallet holding it, and records every mint call. A second mint at an address already on its
  * chain fails, as a second createAccount does. failNextMint() makes the next mint fail before
  * anything lands; landThenFailNextMint() makes it land and then fail, as a lost confirmation does.
- * delayConfirmations(wait) makes each mint land at once and confirm only once `wait()` resolves.
+ * delayConfirmations(wait) makes each mint land at once and confirm only once `wait()` resolves;
+ * delayLandings(wait) makes each mint land only once `wait()` resolves.
  */
 function mintDouble() {
   const calls: { wallet: string; mint: string; details: unknown }[] = [];
   const chain = new Map<string, string>();
   let next: "ok" | "fail" | "land-then-fail" = "ok";
   let confirmation: (() => Promise<void>) | null = null;
+  let landing: (() => Promise<void>) | null = null;
   const minter: PassMinter = {
     async mint(wallet, seed, details) {
       const mint = mintAddressFromSeed(seed);
@@ -314,6 +317,7 @@ function mintDouble() {
       const mode = next;
       next = "ok";
       if (mode === "fail") throw new Error("devnet unavailable");
+      if (landing !== null) await landing();
       if (chain.has(mint)) throw new Error("account already in use");
       chain.set(mint, wallet);
       if (mode === "land-then-fail") throw new Error("confirmation timed out");
@@ -338,6 +342,9 @@ function mintDouble() {
     },
     delayConfirmations: (wait: () => Promise<void>) => {
       confirmation = wait;
+    },
+    delayLandings: (wait: () => Promise<void>) => {
+      landing = wait;
     },
     minter,
   };
@@ -964,7 +971,7 @@ test("a pending check-in recorded under another PASS_MINT_SECRET answers 502, mi
   ]);
 });
 
-test("concurrent requests for one check-in get one 201; the others get 409 already_checked_in, and one pass is minted", async () => {
+test("four concurrent requests for one check-in, each pass landing at once and confirming a turn later, get one 201 and three 409s, with one mint", async () => {
   const { db, deps, alice, minting } = setup();
   // Each pass lands at once and is confirmed a turn later, so the other requests find it pending.
   minting.delayConfirmations(
@@ -979,6 +986,30 @@ test("concurrent requests for one check-in get one 201; the others get 409 alrea
     if (a.status !== 201)
       assert.deepEqual(a.body, { error: "already_checked_in" });
   assert.equal(minting.calls.length, 1);
+  assert.deepEqual(mintRows(db), [
+    { mint: passAddress("day-2", "LMN-0001"), mint_status: "done" },
+  ]);
+});
+
+test("two concurrent requests that both find the address empty both send a mint: one 201, and the loser's own mint fails with 502 mint_failed", async () => {
+  const { db, deps, alice, minting } = setup();
+  // Each mint lands a turn after it is sent, so the second request reads the address as empty.
+  minting.delayLandings(
+    () => new Promise<void>((resolve) => setImmediate(resolve)),
+  );
+  const body = request(alice, "LMN-0001");
+  const answers = await Promise.all(
+    [0, 1].map(() => checkInAt(deps, body, T + 5)),
+  );
+  assert.deepEqual(answers.map((a) => a.status).sort(), [201, 502]);
+  assert.deepEqual(answers.find((a) => a.status === 502)?.body, {
+    error: "mint_failed",
+  });
+  assert.equal(minting.calls.length, 2, "both sent a mint");
+  assert.deepEqual(
+    [...minting.chain.keys()],
+    [passAddress("day-2", "LMN-0001")],
+  );
   assert.deepEqual(mintRows(db), [
     { mint: passAddress("day-2", "LMN-0001"), mint_status: "done" },
   ]);
@@ -1031,26 +1062,74 @@ test("a check-in from before migration 4 with no mint address is unrecorded: it 
   assert.equal(minting.calls.length, 0);
 });
 
-test("a pending check-in is taken up only while its session is open; after it closes the row stays pending", async () => {
+test("after its session ends, the running API answers a pending check-in's request 400 station_qr_expired, and the row stays pending", async () => {
   const { db, deps, alice, minting } = setup();
   minting.failNextMint();
   assert.equal(
     (await checkInAt(deps, request(alice, "LMN-0001"), T + 5)).status,
     502,
   );
-  // A QR issued 20 s before day-2 ends, sent 10 s after: the session is closed.
-  assert.deepEqual(
-    await checkInAt(
-      deps,
-      request(alice, null, { issuedAt: T + 3580 }),
-      T + 3610,
-    ),
-    { status: 409, body: { error: "session_closed" } },
-  );
-  assert.equal(minting.calls.length, 1);
-  assert.deepEqual(mintRows(db), [
-    { mint: passAddress("day-2", "LMN-0001"), mint_status: "pending" },
-  ]);
+  const secret = "test-display-token-0123456789abcdef";
+  const clock = { now: T + 3590 };
+  const server = createApiServer({
+    db,
+    version: API_VERSION,
+    stationSigner: ORGANIZER,
+    stationDisplayToken: secret,
+    nowMs: () => clock.now * 1000,
+    checkin: {
+      registrations: deps.registrations,
+      minter: deps.minter,
+      mintSecret: MINT_SECRET,
+    },
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    // The station display's own QR, 10 s before day-2 ends: the API cuts it short at the end.
+    const shown = (await (
+      await fetch(`${base}/stations/st-front/qr`, {
+        headers: {
+          authorization: `Bearer ${stationDisplayToken(secret, "st-front")}`,
+        },
+      })
+    ).json()) as { qr: string; expires_at: number };
+    assert.equal(shown.expires_at, T + 3600);
+    const payload = JSON.parse(
+      Buffer.from(shown.qr.split(".")[1]!, "base64url").toString("utf8"),
+    ) as { station: string; session: string; nonce: string };
+    const message = checkinMessage({
+      ...payload,
+      wallet: alice.address,
+      registrationId: null,
+    });
+    // One second after day-2 ends.
+    clock.now = T + 3601;
+    const res = await fetch(`${base}/checkins`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        qr: shown.qr,
+        wallet: alice.address,
+        registration_id: null,
+        signature: sign(
+          null,
+          Buffer.from(message, "utf8"),
+          alice.privateKey,
+        ).toString("base64"),
+      }),
+    });
+    assert.deepEqual(
+      [res.status, await res.json()],
+      [400, { error: "station_qr_expired" }],
+    );
+    assert.equal(minting.calls.length, 1);
+    assert.deepEqual(mintRows(db), [
+      { mint: passAddress("day-2", "LMN-0001"), mint_status: "pending" },
+    ]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test("the README's operator statements settle a pending check-in from its mint account, delete nothing, and change only the row they name", () => {
@@ -1195,10 +1274,11 @@ test("the README lists the check-in's checks in the order the code runs them", (
   );
 });
 
-test("the root README's design rationale 1 says what a check-in shows, in E-15's words at 1ff31de", () => {
-  // Copied byte for byte from E-15's commit 1ff31de, so the two branches agree.
+test("the root README's design rationale 1 says what a check-in shows, in E-15's words at 1ff31de, without pointing at a table this README lacks", () => {
+  // E-15's line from 1ff31de, less its closing "(limit 4 above)": that limits table is on E-15,
+  // and this README has no limit 4 for it to name.
   const owed =
-    "1. Issuance binds to a fresh station QR: a pass is minted only for a wallet that presents a QR the API signed for a station within the last 60 seconds, a short-lived signed nonce on the station screen, not a shareable link (E-05). It shows the wallet held that QR, not that the person stood there (limit 4 above).";
+    "1. Issuance binds to a fresh station QR: a pass is minted only for a wallet that presents a QR the API signed for a station within the last 60 seconds, a short-lived signed nonce on the station screen, not a shareable link (E-05). It shows the wallet held that QR, not that the person stood there.";
   const readme = readFileSync(
     new URL("../../../README.md", import.meta.url),
     "utf8",
@@ -1209,6 +1289,7 @@ test("the root README's design rationale 1 says what a check-in shows, in E-15's
     owed,
   );
   assert.doesNotMatch(readme, /binds to presence/i);
+  assert.doesNotMatch(readme, /\blimit 4\b/i);
 });
 
 test("a malformed request is refused by field", async () => {
