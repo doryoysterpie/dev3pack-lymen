@@ -5,8 +5,8 @@
 //
 // on the page's clock, where sentAt is when the request left. The 5 s is the verifier's skew,
 // within which the page assumes the station's clock agrees with the API's; it does not check
-// that. A QR past its deadline on arrival is not drawn. A failed fetch, or one with no answer in
-// 10 s, shows why and is retried after 5 s.
+// that. A QR past its deadline on arrival is not drawn, and the next fetch waits 5 s. A failed
+// fetch, or one with no answer in 10 s, shows why and is retried after 5 s.
 
 /** One QR as the page shows it: the QR text and what its signed payload says. */
 export interface StationQr {
@@ -90,7 +90,7 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
       const deadline = deadlineOf(sentAt, res);
       if (deadline <= receivedAt) {
         deps.render({ kind: "refreshing" });
-        next = 0;
+        next = RETRY_AFTER_MS;
       } else {
         await deps.render({ kind: "qr", ...res, deadline });
         if (stopped) return;

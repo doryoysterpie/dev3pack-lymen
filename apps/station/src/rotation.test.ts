@@ -13,6 +13,7 @@ import { stationDisplayToken } from "../../../services/api/src/station-token.ts"
 import {
   fetchStationQr,
   readStationId,
+  RETRY_AFTER_MS,
   startRotation,
   type StationQr,
   type StationView,
@@ -454,7 +455,7 @@ test("with a 2 s response delay, the deadline is counted from when the request l
   assert.deepEqual(deadlines, [{ at: 2000, deadline: 10_000 - 5_000 }]);
 });
 
-test("a genuine full-length QR issued 2 minutes ago is not drawn: its signed expiry has passed on the page's clock", async () => {
+test("a genuine full-length QR issued 2 minutes ago is not drawn, and the next fetch waits the retry delay", async () => {
   // The page's clock reads T; the API signed this QR at T - 120 s for 60 s.
   const T = 1_795_000_000;
   const clock = fakeClock(T * 1000);
@@ -482,8 +483,12 @@ test("a genuine full-length QR issued 2 minutes ago is not drawn: its signed exp
   });
   await flush();
   assert.deepEqual(shown, ["refreshing"]);
-  await clock.advance(0);
-  assert.equal(calls, 2, "the next QR is fetched at once");
+  // The next fetch waits the retry delay, so a station whose QRs arrive stale does not refetch in
+  // a loop.
+  await clock.advance(RETRY_AFTER_MS - 1);
+  assert.equal(calls, 1, "no fetch before the retry delay");
+  await clock.advance(1);
+  assert.equal(calls, 2, "the next fetch comes after the retry delay");
 });
 
 test("the deadline and the next fetch come from the signed times, not from the answer's other fields", async () => {
