@@ -22,7 +22,7 @@
 //   .html, .js, .css and .svg files.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { defineConfig, loadEnv, type Plugin } from "vite";
@@ -73,6 +73,7 @@ function refuseSecretPaths(): Plugin {
     name: "limen-refuse-secret-paths",
     configureServer(server) {
       server.middlewares.use(guard);
+      server.middlewares.use(onlySourceFiles);
     },
     configurePreviewServer(server) {
       server.middlewares.use(guard);
@@ -92,6 +93,45 @@ function refuseSecretPaths(): Plugin {
       });
     },
   };
+}
+
+/**
+ * In the station folder, the dev server answers for the page's source files alone: index.html,
+ * .ts and .css files under src, and Vite's dependency cache. A request that names any other file
+ * there, by its path or by /@fs/, gets 403. Vite's own paths (/@vite/, /@id/) pass through.
+ */
+function onlySourceFiles(
+  req: IncomingMessage,
+  res: ServerResponse,
+  next: () => void,
+): void {
+  let path: string;
+  try {
+    path = decodeURIComponent(
+      new URL(req.url ?? "/", "http://station.invalid").pathname,
+    );
+  } catch {
+    res.statusCode = 400;
+    res.end();
+    return;
+  }
+  if (path === "/api" || path.startsWith("/api/")) return next();
+  if (path.startsWith("/@") && !path.startsWith("/@fs/")) return next();
+  const file = path.startsWith("/@fs/")
+    ? path.slice("/@fs".length)
+    : join(appRoot, path);
+  const rel = relative(appRoot, file);
+  const inStation = rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  if (
+    !inStation ||
+    rel === "" ||
+    rel === "index.html" ||
+    /^src\/.+\.(ts|css)$/.test(rel) ||
+    /^node_modules\/\.vite\/deps\/[^/]+\.js$/.test(rel)
+  )
+    return next();
+  res.statusCode = 403;
+  res.end("Forbidden");
 }
 
 /** The kinds of file the built page is made of. */
@@ -162,6 +202,7 @@ export default defineConfig(({ mode }) => {
           "**/keys/**",
           "**/*keypair*.json",
           "**/id.json",
+          "**/*.json",
           "**/.env*",
         ],
       },
