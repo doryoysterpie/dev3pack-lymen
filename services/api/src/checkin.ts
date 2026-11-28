@@ -484,6 +484,7 @@ export async function checkIn(
       mint: string | null;
       mint_status: string | null;
     };
+    // done, or unrecorded from before migration 4 (db.ts): either way nothing more is minted.
     if (existing.mint_status !== "pending")
       return refuse(409, "already_checked_in");
     // A reservation recorded under another secret names a mint this request cannot derive, so it

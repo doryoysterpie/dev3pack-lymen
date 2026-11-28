@@ -164,6 +164,49 @@ test("the schema enforces foreign keys and a wallet bound to at most one registr
   );
 });
 
+test("migration 4 names every earlier check-in's mint state: done with a mint address, unrecorded without", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
+  for (let version = 0; version < 3; version++) {
+    db.exec(MIGRATIONS[version]!);
+    db.exec(`PRAGMA user_version = ${version + 1}`);
+  }
+  // Rows as 7a1176c wrote them: the mint recorded after a pass landed, or never.
+  db.exec(`
+    INSERT INTO stations (id, name, created_at) VALUES ('st-front', 'Front desk', 1);
+    INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('day-2', 'Day 2', 1, 2);
+    INSERT INTO registrations (reg_hash, wallet, bound_at) VALUES ('h1', 'w1', 1), ('h2', 'w2', 1);
+    INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, mint, created_at)
+      VALUES ('day-2', 'st-front', 'h1', 'w1', 'n1', 'Mint1111', 1);
+    INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, created_at)
+      VALUES ('day-2', 'st-front', 'h2', 'w2', 'n2', 1);
+  `);
+  assert.equal(migrate(db), 4);
+  assert.deepEqual(
+    db
+      .prepare("SELECT reg_hash, mint, mint_status FROM checkins ORDER BY id")
+      .all()
+      .map((r) => ({ ...r })),
+    [
+      { reg_hash: "h1", mint: "Mint1111", mint_status: "done" },
+      { reg_hash: "h2", mint: null, mint_status: "unrecorded" },
+    ],
+  );
+  // pending and done carry a mint address; no row is left without a state.
+  assert.throws(
+    () =>
+      db.exec(
+        "INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, mint_status, created_at) VALUES ('day-2', 'st-front', 'h3', 'w3', 'n3', 'pending', 1)",
+      ),
+    /CHECK constraint failed/,
+  );
+  assert.throws(
+    () =>
+      db.exec("UPDATE checkins SET mint_status = NULL WHERE reg_hash = 'h1'"),
+    /NOT NULL constraint failed/,
+  );
+});
+
 test("a version 1 database migrates to the latest version and keeps its rows", () => {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON");

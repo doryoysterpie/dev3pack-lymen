@@ -909,6 +909,86 @@ test("a request that finds the pass on chain while the first awaits confirmation
   assert.deepEqual(mintRows(db), [{ mint, mint_status: "done" }]);
 });
 
+test("a check-in from before migration 4 with no mint address is unrecorded: it answers 409 already_checked_in and mints nothing", async () => {
+  const { db, deps, alice, minting } = setup();
+  assert.equal(deps.registrations.bind("LMN-0001", alice.address, T).ok, true);
+  db.prepare(
+    "INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, mint_status, created_at) VALUES ('day-2', 'st-front', ?, ?, 'n', 'unrecorded', ?)",
+  ).run(regHashOf("LMN-0001"), alice.address, T);
+  assert.deepEqual(await retryAt(deps, alice, T + 12), {
+    status: 409,
+    body: { error: "already_checked_in" },
+  });
+  assert.equal(minting.calls.length, 0);
+});
+
+test("a pending check-in is taken up only while its session is open; after it closes the row stays pending", async () => {
+  const { db, deps, alice, minting } = setup();
+  minting.failNextMint();
+  assert.equal(
+    (await checkInAt(deps, request(alice, "LMN-0001"), T + 5)).status,
+    502,
+  );
+  // A QR issued 20 s before day-2 ends, sent 10 s after: the session is closed.
+  assert.deepEqual(
+    await checkInAt(
+      deps,
+      request(alice, null, { issuedAt: T + 3580 }),
+      T + 3610,
+    ),
+    { status: 409, body: { error: "session_closed" } },
+  );
+  assert.equal(minting.calls.length, 1);
+  assert.deepEqual(mintRows(db), [
+    { mint: passAddress("day-2", "LMN-0001"), mint_status: "pending" },
+  ]);
+});
+
+test("the README's operator statements for a pending or unrecorded check-in run as it says", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const section = readme.slice(readme.indexOf("### A check-in's mint state"));
+  const block = /```sql\n([\s\S]*?)```/.exec(section)?.[1];
+  assert.ok(block !== undefined, "the section has an sql block");
+  const statements = block
+    .split("\n")
+    .filter((line) => !line.startsWith("--") && line.trim() !== "");
+  assert.equal(statements.length, 3);
+  const [markDone, recordAndMarkDone, removeUnrecorded] = statements as [
+    string,
+    string,
+    string,
+  ];
+  const { db } = setup();
+  db.exec(`
+    INSERT INTO registrations (reg_hash, wallet, bound_at) VALUES ('h1', 'w1', ${T}), ('h2', 'w2', ${T}), ('h3', 'w3', ${T}), ('h4', 'w4', ${T});
+    INSERT INTO checkins (id, session_id, station_id, reg_hash, wallet, station_nonce, mint, mint_status, created_at) VALUES
+      (1, 'day-2', 'st-front', 'h1', 'w1', 'n1', 'Mint1111', 'pending', ${T}),
+      (2, 'day-2', 'st-front', 'h2', 'w2', 'n2', NULL, 'unrecorded', ${T}),
+      (3, 'day-2', 'st-front', 'h3', 'w3', 'n3', NULL, 'unrecorded', ${T}),
+      (4, 'day-2', 'st-front', 'h4', 'w4', 'n4', 'Mint4444', 'done', ${T});
+  `);
+  const changes = (sql: string, params: Record<string, string | number>) =>
+    Number(db.prepare(sql).run(params).changes);
+  // Each statement touches only a row in the state it names.
+  assert.equal(changes(markDone, { id: 4 }), 0);
+  assert.equal(changes(recordAndMarkDone, { id: 1, mint: "Other111" }), 0);
+  assert.equal(changes(removeUnrecorded, { id: 1 }), 0);
+  assert.equal(changes(markDone, { id: 1 }), 1);
+  assert.equal(changes(recordAndMarkDone, { id: 2, mint: "Mint2222" }), 1);
+  assert.equal(changes(removeUnrecorded, { id: 3 }), 1);
+  assert.deepEqual(
+    db
+      .prepare("SELECT id, mint, mint_status FROM checkins ORDER BY id")
+      .all()
+      .map((r) => ({ ...r })),
+    [
+      { id: 1, mint: "Mint1111", mint_status: "done" },
+      { id: 2, mint: "Mint2222", mint_status: "done" },
+      { id: 4, mint: "Mint4444", mint_status: "done" },
+    ],
+  );
+});
+
 test("the first failure is the earliest check, in the order the README lists", async () => {
   const { db, deps, alice, bob, fresh, minting } = setup();
   // Each request fails two adjacent checks; the earlier one answers.

@@ -119,10 +119,14 @@ export const MIGRATIONS: readonly string[] = [
   // E-05: a check-in's pass mint. The mint address is recorded when the check-in is reserved,
   // before anything is sent: 'pending' until the pass is known to be on chain, then 'done'. A
   // pending row is never deleted; a later request for the check-in reads the chain at that address
-  // before it mints again.
+  // before it mints again. A row from before this migration is 'done' when it has a mint address,
+  // which 7a1176c recorded only after a pass landed, and 'unrecorded' when it has none: its outcome
+  // was never recorded, and any pass it has is at an address nothing derives.
   `
-  ALTER TABLE checkins ADD COLUMN mint_status TEXT
-    CHECK (mint_status IS NULL OR (mint_status IN ('pending', 'done') AND mint IS NOT NULL));
+  ALTER TABLE checkins ADD COLUMN mint_status TEXT NOT NULL DEFAULT 'unrecorded'
+    CHECK (mint_status IN ('pending', 'done', 'unrecorded')
+      AND (mint_status = 'unrecorded' OR mint IS NOT NULL));
+  UPDATE checkins SET mint_status = 'done' WHERE mint IS NOT NULL;
   `,
 ];
 
