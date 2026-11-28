@@ -14,10 +14,12 @@
 //
 // The signature covers the encoded payload text, so changing any character of it, even one
 // that decodes to the same bytes, breaks the signature. The station page shows a fresh QR
-// every 30 s and each QR lives 60 s, so a participant who scans just before a rotation still
-// has 30 s to finish. A QR whose 60 s would reach its session's end is cut short: it expires at
-// that end, or one second before it when the 60 s would end exactly there, so that every QR
-// that reaches its session's end carries expires_at < issued_at + 60 and reads as cut short.
+// every 30 s and each QR lives 60 s, so a participant who scans just before a rotation has at
+// most 30 s left to finish: less by the page's round trip, by issued_at's rounding down to a
+// whole second, and near a session's end. A QR whose 60 s would reach its session's end is cut
+// short: it expires at that end, or one second before it when the 60 s would end exactly there,
+// so that every QR that reaches its session's end carries expires_at < issued_at + 60 and reads
+// as cut short.
 //
 // The verifier measures time in milliseconds: a QR is refused at any instant more than 60 s
 // after issued_at, or after expires_at, not only from the next whole second. A cut-short QR is
