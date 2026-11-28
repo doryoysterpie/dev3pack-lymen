@@ -16,9 +16,8 @@ import {
   SYSTEM_PROGRAM,
   TOKEN_PROGRAM,
 } from "./programs.ts";
-import { recordedRpc } from "./recorded.ts";
-import type { Fetch, Rpc } from "./rpc.ts";
-import { jsonRpc } from "./rpc.ts";
+import { endpointFor, recordedEndpoint } from "../test-support/recorded.ts";
+import { jsonRpc, type Fetch, type RpcEndpoint } from "./rpc.ts";
 
 const fixture = JSON.parse(
   readFileSync(
@@ -86,7 +85,7 @@ function endpoint(answers: {
   slot?: unknown;
 }): Fetch {
   let reads = 0;
-  return async (_url, init) => {
+  return async (url, init) => {
     const request = JSON.parse(init.body) as {
       id: number;
       method: string;
@@ -113,7 +112,8 @@ function endpoint(answers: {
     return {
       ok: true,
       status: 200,
-      json: async () => ({ jsonrpc: "2.0", id, result }),
+      url,
+      text: JSON.stringify({ jsonrpc: "2.0", id, result }),
     };
   };
 }
@@ -129,7 +129,7 @@ describe("audit 6: the balance change comes from the simulation's own run", () =
   it("uses the simulation's pre-balance, not an earlier read", async () => {
     // The read sees 1 SOL; a payment of 9 SOL lands before the simulation,
     // which starts from 10 SOL and ends at 0.5 SOL.
-    const rpc = jsonRpc(
+    const rpc = endpointFor(
       endpoint({
         accounts: (addresses) =>
           addresses.map((address) =>
@@ -150,7 +150,7 @@ describe("audit 6: the balance change comes from the simulation's own run", () =
       "x",
     );
     const result = await preflightTransaction(build([transfer()]), {
-      rpc,
+      endpoint: rpc,
       user: USER,
     });
     assert.ok(result.summary.kind === "ready");
@@ -166,7 +166,7 @@ describe("audit 6: the balance change comes from the simulation's own run", () =
   it("does not use the simulation when an account changed between the two reads", async () => {
     // Another transaction approves a delegate between the read before the
     // simulation and the read after it.
-    const rpc = jsonRpc(
+    const rpc = endpointFor(
       endpoint({
         accounts: (addresses, read) =>
           addresses.map((address) =>
@@ -203,7 +203,7 @@ describe("audit 6: the balance change comes from the simulation's own run", () =
       data: Buffer.from([1]),
     });
     const result = await preflightTransaction(build([memo]), {
-      rpc,
+      endpoint: rpc,
       user: USER,
     });
     assert.ok(result.summary.kind === "ready");
@@ -214,18 +214,25 @@ describe("audit 6: the balance change comes from the simulation's own run", () =
 });
 
 describe("audit 7: the simulation must answer what was asked", () => {
-  it("an Rpc that returns no account for the one asked is not used", async () => {
-    const recorded = recordedRpc({
-      accounts: { [USER]: system(5_000_000_000) as never },
-      simulation: { err: null, accounts: {} },
-    });
-    const rpc: Rpc = {
-      ...recorded,
-      simulate: async (base64, addresses) => ({
-        ...(await recorded.simulate(base64, addresses)),
-        accounts: [],
+  it("an answer with no account for the one asked is not used", async () => {
+    const rpc = endpointFor(
+      endpoint({
+        accounts: (addresses) =>
+          addresses.map((address) =>
+            address === USER ? system(5_000_000_000) : null,
+          ),
+        simulation: () => ({
+          err: null,
+          logs: [],
+          accounts: [],
+          preBalances: [5_000_000_000, 0, 1],
+          postBalances: [4_999_995_000, 0, 1],
+          preTokenBalances: [],
+          postTokenBalances: [],
+        }),
       }),
-    };
+      "x",
+    );
     const result = await preflight(
       rpc,
       encodeBase64(build([transfer()])),
@@ -237,7 +244,7 @@ describe("audit 7: the simulation must answer what was asked", () => {
   });
 
   it("an answer that carries another request's id is not used", async () => {
-    const rpc = jsonRpc(
+    const rpc = endpointFor(
       endpoint({
         accounts: (addresses) =>
           addresses.map((address) =>
@@ -268,7 +275,7 @@ describe("audit 7: the simulation must answer what was asked", () => {
 
 describe("audit 8: a malformed balance is refused, not thrown later", () => {
   it("lamports written as text are not used, and the report still builds", async () => {
-    const rpc = jsonRpc(
+    const rpc = endpointFor(
       endpoint({
         accounts: (addresses) =>
           addresses.map((address) =>
@@ -289,16 +296,16 @@ describe("audit 8: a malformed balance is refused, not thrown later", () => {
       "x",
     );
     const result = await preflightTransaction(build([transfer()]), {
-      rpc,
+      endpoint: rpc,
       user: USER,
     });
     assert.ok(result.summary.kind === "ready");
     assert.equal(result.summary.simulation.status, "not-run");
   });
 
-  // Each balance an Rpc returns must be a whole number from 0 to the largest
-  // u64, written in decimal; anything else holds signing, through a custom Rpc
-  // as through jsonRpc, and the report still builds.
+  // Each balance the endpoint returns must be a whole number from 0 to the
+  // largest u64, written in decimal; anything else holds signing, and the
+  // report still builds.
   const notWhole = [
     "unknown",
     "-1",
@@ -307,22 +314,31 @@ describe("audit 8: a malformed balance is refused, not thrown later", () => {
     "1e3",
     "18446744073709551616",
   ];
-  const solTransfer = recordedRpc({
-    accounts: { [USER]: system(5_000_000_000) as never },
-    simulation: { err: null, accounts: { [USER]: system(1) as never } },
-  });
 
   for (const bad of notWhole) {
-    it(`an Rpc whose pre-balance is ${JSON.stringify(bad)} is not used`, async () => {
-      const rpc: Rpc = {
-        ...solTransfer,
-        simulate: async (base64, addresses) => ({
-          ...(await solTransfer.simulate(base64, addresses)),
-          preBalances: [bad, "0", "1"],
+    it(`an answer whose pre-balance is ${JSON.stringify(bad)} is not used`, async () => {
+      const rpc = endpointFor(
+        endpoint({
+          accounts: (addresses) =>
+            addresses.map((address) =>
+              address === USER ? system(5_000_000_000) : null,
+            ),
+          simulation: (addresses) => ({
+            err: null,
+            logs: [],
+            accounts: addresses.map((address) =>
+              address === USER ? system(1) : null,
+            ),
+            preBalances: [bad, "0", "1"],
+            postBalances: ["1", "0", "1"],
+            preTokenBalances: [],
+            postTokenBalances: [],
+          }),
         }),
-      };
+        "x",
+      );
       const result = await preflightTransaction(build([transfer()]), {
-        rpc,
+        endpoint: rpc,
         user: USER,
       });
       assert.ok(result.summary.kind === "ready");
@@ -332,34 +348,43 @@ describe("audit 8: a malformed balance is refused, not thrown later", () => {
     });
   }
 
-  it("an Rpc whose token amounts are not whole numbers is not used", async () => {
-    const recorded = recordedRpc({
-      accounts: {
-        [USER]: system(5_000_000_000) as never,
-        [K.userTokenAccount]: tokenState(200, null) as never,
-      },
-      simulation: {
-        err: null,
-        accounts: {
-          [USER]: system(4_999_995_000) as never,
-          [K.userTokenAccount]: tokenState(0, null) as never,
-        },
-      },
+  it("an answer whose token amounts are not whole numbers is not used", async () => {
+    const entry = (amount: string) => ({
+      accountIndex: 1,
+      mint: K.mint,
+      owner: USER,
+      uiTokenAmount: { amount },
     });
     for (const which of ["preTokenBalances", "postTokenBalances"] as const) {
-      const rpc: Rpc = {
-        ...recorded,
-        simulate: async (base64, addresses) => {
-          const simulation = await recorded.simulate(base64, addresses);
-          return {
-            ...simulation,
-            [which]: (simulation[which] ?? []).map((balance) => ({
-              ...balance,
-              amount: "unknown",
-            })),
-          };
-        },
-      };
+      const rpc = endpointFor(
+        endpoint({
+          accounts: (addresses) =>
+            addresses.map((address) =>
+              address === USER
+                ? system(5_000_000_000)
+                : address === K.userTokenAccount
+                  ? tokenState(200, null)
+                  : null,
+            ),
+          simulation: (addresses) => ({
+            err: null,
+            logs: [],
+            accounts: addresses.map((address) =>
+              address === USER
+                ? system(4_999_995_000)
+                : address === K.userTokenAccount
+                  ? tokenState(0, null)
+                  : null,
+            ),
+            preBalances: [5_000_000_000, 2_039_280, 0, 1],
+            postBalances: [4_999_995_000, 2_039_280, 0, 1],
+            preTokenBalances: [entry("200")],
+            postTokenBalances: [entry("0")],
+            [which]: [entry("unknown")],
+          }),
+        }),
+        "x",
+      );
       const result = await preflightTransaction(
         build([
           new web3.TransactionInstruction({
@@ -372,7 +397,7 @@ describe("audit 8: a malformed balance is refused, not thrown later", () => {
             data: Buffer.from([3, 200, 0, 0, 0, 0, 0, 0, 0]),
           }),
         ]),
-        { rpc, user: USER },
+        { endpoint: rpc, user: USER },
       );
       assert.ok(result.summary.kind === "ready", which);
       assert.equal(result.summary.simulation.status, "not-run", which);
@@ -394,20 +419,22 @@ describe("audit 8: a malformed balance is refused, not thrown later", () => {
   ];
   const simulateWith = (value: Json) =>
     jsonRpc(
-      endpoint({
-        accounts: () => [],
-        simulation: (addresses) => ({
-          err: null,
-          logs: [],
-          accounts: addresses.map(() => system(1)),
-          preBalances: [5_000_000_000, 0, 1],
-          postBalances: [4_999_995_000, 0, 1],
-          preTokenBalances: [],
-          postTokenBalances: [],
-          ...value,
+      endpointFor(
+        endpoint({
+          accounts: () => [],
+          simulation: (addresses) => ({
+            err: null,
+            logs: [],
+            accounts: addresses.map(() => system(1)),
+            preBalances: [5_000_000_000, 0, 1],
+            postBalances: [4_999_995_000, 0, 1],
+            preTokenBalances: [],
+            postTokenBalances: [],
+            ...value,
+          }),
         }),
-      }),
-      "x",
+        "x",
+      ),
     ).simulate(encodeBase64(build([transfer()])), [USER]);
   const tokenEntry = (amount: unknown) => ({
     accountIndex: 1,
@@ -489,7 +516,7 @@ describe("audit 12: more writable accounts than limen watches", () => {
       lookups: [],
     });
     const result = await preflightTransaction(bytes, {
-      rpc: recordedRpc({
+      endpoint: recordedEndpoint({
         accounts: {
           [USER]: system(5_000_000_000) as never,
           [K.userTokenAccount]: tokenState(200, null) as never,
@@ -539,7 +566,7 @@ describe("audit 12: more writable accounts than limen watches", () => {
     const result = await preflightTransaction(
       new web3.VersionedTransaction(message, [new Uint8Array(64)]).serialize(),
       {
-        rpc: recordedRpc({
+        endpoint: recordedEndpoint({
           accounts: {
             [USER]: system(5_000_000_000) as never,
             [K.userTokenAccount]: tokenState(200, null) as never,
@@ -568,7 +595,7 @@ describe("audit 12: more writable accounts than limen watches", () => {
 describe("audit 6: the rest of the same-run evidence", () => {
   it("a simulation that gives no balances of its own run is not used", async () => {
     const result = await preflight(
-      recordedRpc({
+      recordedEndpoint({
         accounts: { [USER]: system(5_000_000_000) as never },
         simulation: {
           err: null,
@@ -590,7 +617,7 @@ describe("audit 6: the rest of the same-run evidence", () => {
     // The read shows 250 base units; the run starts from 200 and leaves 30,
     // more than a tenth, so there is no sweep. The unknown program moves the
     // tokens by a call to the token program, which is among the accounts.
-    const rpc = jsonRpc(
+    const rpc = endpointFor(
       endpoint({
         accounts: (addresses) =>
           addresses.map((address) =>
@@ -642,7 +669,7 @@ describe("audit 6: the rest of the same-run evidence", () => {
       data: Buffer.from([1]),
     });
     const result = await preflightTransaction(build([call]), {
-      rpc,
+      endpoint: rpc,
       user: USER,
     });
     assert.ok(result.summary.kind === "ready");
@@ -661,7 +688,7 @@ describe("fix check N2: token balances come only with a token program", () => {
   // simulation lists token balances only when a token program is among the
   // transaction's accounts, so without one both lists are empty.
   it("a System transfer into the wallet's own token account is simulated, with no token change", async () => {
-    const rpc = jsonRpc(
+    const rpc = endpointFor(
       endpoint({
         accounts: (addresses) =>
           addresses.map((address) =>
@@ -693,7 +720,7 @@ describe("fix check N2: token balances come only with a token program", () => {
           lamports: 1000,
         }),
       ]),
-      { rpc, user: USER },
+      { endpoint: rpc, user: USER },
     );
     assert.ok(result.summary.kind === "ready");
     assert.deepEqual(result.summary.simulation, {
@@ -726,7 +753,7 @@ describe("fix check N2: token balances come only with a token program", () => {
   it("re-audit A1: with no token program, a run that shows the token account changed is not used", async () => {
     // Nothing in the transaction can change the token account, so a new
     // delegate in the run's account state did not come from it.
-    const rpc = jsonRpc(
+    const rpc = endpointFor(
       endpoint({
         accounts: (addresses) =>
           addresses.map((address) =>
@@ -760,7 +787,7 @@ describe("fix check N2: token balances come only with a token program", () => {
           lamports: 1000,
         }),
       ]),
-      { rpc, user: USER },
+      { endpoint: rpc, user: USER },
     );
     assert.ok(result.summary.kind === "ready");
     assert.deepEqual(result.summary.simulation, {
@@ -801,7 +828,7 @@ describe("fix check N2: token balances come only with a token program", () => {
       instructions: [call],
     }).compileToV0Message([table]);
     assert.equal(message.addressTableLookups.length, 1);
-    const rpc = jsonRpc(
+    const rpc = endpointFor(
       endpoint({
         accounts: (addresses) =>
           addresses.map((address) =>
@@ -827,7 +854,7 @@ describe("fix check N2: token balances come only with a token program", () => {
     );
     const result = await preflightTransaction(
       new web3.VersionedTransaction(message, [new Uint8Array(64)]).serialize(),
-      { rpc, user: USER },
+      { endpoint: rpc, user: USER },
     );
     assert.ok(result.summary.kind === "ready");
     assert.deepEqual(result.summary.simulation, {
@@ -858,7 +885,7 @@ describe("fix check: a failed run claims no changes", () => {
 
   it("a token transfer whose run fails reports the error and no change", async () => {
     const result = await preflightTransaction(tokenTransfer(), {
-      rpc: recordedRpc({
+      endpoint: recordedEndpoint({
         accounts: {
           [USER]: system(5_000_000_000) as never,
           [K.userTokenAccount]: tokenState(200, null) as never,
@@ -885,7 +912,7 @@ describe("fix check: a failed run claims no changes", () => {
   });
 
   it("the same, through jsonRpc with agave's null accounts", async () => {
-    const rpc = jsonRpc(
+    const rpc = endpointFor(
       endpoint({
         accounts: (addresses) =>
           addresses.map((address) =>
@@ -922,7 +949,7 @@ describe("fix check: a failed run claims no changes", () => {
       "x",
     );
     const result = await preflightTransaction(tokenTransfer(), {
-      rpc,
+      endpoint: rpc,
       user: USER,
     });
     assert.ok(result.summary.kind === "ready");
@@ -983,7 +1010,7 @@ describe("re-audit A1 and A2: the token balances agree with the run's own accoun
     postTokenBalances: unknown[],
   ) =>
     preflightTransaction(transferFive(), {
-      rpc: jsonRpc(
+      endpoint: endpointFor(
         endpoint({
           accounts: (addresses) =>
             addresses.map((address) =>
@@ -1121,7 +1148,7 @@ describe("re-audit A1 and A2: the token balances agree with the run's own accoun
     ));
 });
 
-describe("re-audit A3: recordedRpc's post state agrees with its balances", () => {
+describe("re-audit A3: recordedEndpoint's post state agrees with its balances", () => {
   // A token account left out of simulation.accounts is recorded as
   // unchanged: its post state and its post balances are both the read's.
   const recording = {
@@ -1148,7 +1175,7 @@ describe("re-audit A3: recordedRpc's post state agrees with its balances", () =>
     ]);
 
   it("returns the read's state for an account left out, as its balances do", async () => {
-    const rpc = recordedRpc(recording);
+    const rpc = jsonRpc(recordedEndpoint(recording));
     const transaction = encodeBase64(revokeOwn());
     const simulation = await rpc.simulate(transaction, [
       USER,
@@ -1166,7 +1193,7 @@ describe("re-audit A3: recordedRpc's post state agrees with its balances", () =>
 
   it("so a report lists no token change for it, and no closed account", async () => {
     const result = await preflightTransaction(revokeOwn(), {
-      rpc: recordedRpc(recording),
+      endpoint: recordedEndpoint(recording),
       user: USER,
     });
     assert.ok(result.summary.kind === "ready");
@@ -1202,7 +1229,7 @@ describe("re-audit A5: a slot, owner or mint that is not valid is not evidence",
     walletOwnerAfter?: string;
     walletOwnerBefore?: string;
   }) =>
-    jsonRpc(
+    endpointFor(
       endpoint({
         ...("slot" in options ? { slot: options.slot } : {}),
         accounts: (addresses) =>
@@ -1233,9 +1260,9 @@ describe("re-audit A5: a slot, owner or mint that is not valid is not evidence",
       }),
       "x",
     );
-  const notUsed = async (rpc: Rpc) => {
+  const notUsed = async (rpc: RpcEndpoint) => {
     const result = await preflightTransaction(build([transfer()]), {
-      rpc,
+      endpoint: rpc,
       user: USER,
     });
     assert.ok(result.summary.kind === "ready");
@@ -1256,74 +1283,35 @@ describe("re-audit A5: a slot, owner or mint that is not valid is not evidence",
   it("a wallet owner in the read that is not a public key is refused", () =>
     notUsed(solRun({ walletOwnerBefore: "11111111" })));
 
-  it("a custom Rpc's slot or owner that is not valid is refused too", async () => {
-    const recorded = recordedRpc({
-      accounts: { [USER]: system(5_000_000_000) as never },
-      simulation: {
-        err: null,
-        accounts: { [USER]: system(4_999_995_000) as never },
-      },
-    });
-    for (const change of [
-      { slot: -3 },
-      { slot: 2.5 },
-      {
-        accounts: [
-          {
-            lamports: "4999995000",
-            owner: "not a public key",
-            data: new Uint8Array(),
-          },
-          null,
-        ],
-      },
-    ]) {
-      await notUsed({
-        ...recorded,
-        simulate: async (base64, addresses) => ({
-          ...(await recorded.simulate(base64, addresses)),
-          ...change,
-        }),
-      });
-    }
-    await notUsed({
-      ...recorded,
-      getAccounts: async (addresses) =>
-        addresses.map((address) =>
-          address === USER
-            ? { lamports: "5000000000", owner: "x", data: new Uint8Array() }
-            : null,
-        ),
-    });
-  });
-
   it("jsonRpc itself refuses an owner or a token balance mint that is not a public key", async () => {
-    const rpc = solRun({ walletOwnerBefore: "not a public key" });
+    const rpc = jsonRpc(solRun({ walletOwnerBefore: "not a public key" }));
     await assert.rejects(rpc.getAccounts([USER]), {
       reason: "shape",
       message: "account: owner",
     });
     const tokenRpc = jsonRpc(
-      endpoint({
-        accounts: () => [],
-        simulation: () => ({
-          err: null,
-          logs: [],
-          accounts: [null],
-          preBalances: [1],
-          postBalances: [1],
-          preTokenBalances: [
-            {
-              accountIndex: 0,
-              mint: "not a public key",
-              owner: USER,
-              uiTokenAmount: { amount: "1" },
-            },
-          ],
-          postTokenBalances: [],
+      endpointFor(
+        endpoint({
+          accounts: () => [],
+          simulation: () => ({
+            err: null,
+            logs: [],
+            accounts: [null],
+            preBalances: [1],
+            postBalances: [1],
+            preTokenBalances: [
+              {
+                accountIndex: 0,
+                mint: "not a public key",
+                owner: USER,
+                uiTokenAmount: { amount: "1" },
+              },
+            ],
+            postTokenBalances: [],
+          }),
         }),
-      }),
-      "x",
+        "x",
+      ),
     );
     await assert.rejects(tokenRpc.simulate("", [USER]), {
       reason: "shape",
@@ -1332,19 +1320,6 @@ describe("re-audit A5: a slot, owner or mint that is not valid is not evidence",
   });
 
   it("a token balance whose mint or owner is not a public key is refused", async () => {
-    const recorded = recordedRpc({
-      accounts: {
-        [USER]: system(5_000_000_000) as never,
-        [K.userTokenAccount]: tokenState(200, null) as never,
-      },
-      simulation: {
-        err: null,
-        accounts: {
-          [USER]: system(4_999_995_000) as never,
-          [K.userTokenAccount]: tokenState(195, null) as never,
-        },
-      },
-    });
     const transaction = build([
       new web3.TransactionInstruction({
         programId: new web3.PublicKey(TOKEN_PROGRAM),
@@ -1356,22 +1331,50 @@ describe("re-audit A5: a slot, owner or mint that is not valid is not evidence",
         data: Buffer.from([3, 5, 0, 0, 0, 0, 0, 0, 0]),
       }),
     ]);
+    const good = (amount: string) => ({
+      accountIndex: 1,
+      mint: K.mint,
+      owner: USER,
+      uiTokenAmount: { amount },
+    });
     for (const field of ["mint", "owner"] as const) {
       for (const which of ["preTokenBalances", "postTokenBalances"] as const) {
-        const result = await preflightTransaction(transaction, {
-          rpc: {
-            ...recorded,
-            simulate: async (base64, addresses) => {
-              const simulation = await recorded.simulate(base64, addresses);
-              return {
-                ...simulation,
-                [which]: (simulation[which] ?? []).map((balance) => ({
-                  ...balance,
+        const rpc = endpointFor(
+          endpoint({
+            accounts: (addresses) =>
+              addresses.map((address) =>
+                address === USER
+                  ? system(5_000_000_000)
+                  : address === K.userTokenAccount
+                    ? tokenState(200, null)
+                    : null,
+              ),
+            simulation: (addresses) => ({
+              err: null,
+              logs: [],
+              accounts: addresses.map((address) =>
+                address === USER
+                  ? system(4_999_995_000)
+                  : address === K.userTokenAccount
+                    ? tokenState(195, null)
+                    : null,
+              ),
+              preBalances: [5_000_000_000, 2_039_280, 0, 1],
+              postBalances: [4_999_995_000, 2_039_280, 0, 1],
+              preTokenBalances: [good("200")],
+              postTokenBalances: [good("195")],
+              [which]: [
+                {
+                  ...good(which === "preTokenBalances" ? "200" : "195"),
                   [field]: "not a public key",
-                })),
-              };
-            },
-          },
+                },
+              ],
+            }),
+          }),
+          "x",
+        );
+        const result = await preflightTransaction(transaction, {
+          endpoint: rpc,
           user: USER,
         });
         assert.ok(result.summary.kind === "ready");
@@ -1385,82 +1388,9 @@ describe("re-audit A5: a slot, owner or mint that is not valid is not evidence",
   });
 });
 
-describe("re-audit A6: the runtime error is JSON data", () => {
-  const recorded = recordedRpc({
-    accounts: { [USER]: system(5_000_000_000) as never },
-    simulation: {
-      err: { InstructionError: [0, "Custom"] },
-      accounts: { [USER]: system(5_000_000_000) as never },
-    },
-  });
-  const withErr = (err: unknown): Rpc => ({
-    ...recorded,
-    simulate: async (base64, addresses) => ({
-      ...(await recorded.simulate(base64, addresses)),
-      err,
-    }),
-  });
-  const run = (err: unknown) =>
-    preflightTransaction(build([transfer()]), {
-      rpc: withErr(err),
-      user: USER,
-    });
-
-  it("a bigint error becomes its decimal string, and the report is JSON", async () => {
-    for (const [err, owed] of [
-      [BigInt(5), "5"],
-      [
-        { InstructionError: [0, { Custom: BigInt(7) }] },
-        { InstructionError: [0, { Custom: "7" }] },
-      ],
-    ] as const) {
-      const result = await run(err);
-      assert.ok(result.summary.kind === "ready");
-      assert.deepEqual(result.summary.simulation, {
-        status: "ran",
-        fromReadBefore: [
-          "ownerBefore",
-          "dataLengthBefore",
-          "delegateBefore",
-          "delegatedAmountBefore",
-          "closeAuthorityBefore",
-        ],
-        err: owed,
-        changes: [],
-      });
-      assert.deepEqual(result.summary.blocks, ["simulation-failed"]);
-      assert.deepEqual(
-        JSON.parse(JSON.stringify(result.summary)),
-        result.summary,
-      );
-    }
-  });
-
-  it("an error that is not JSON data leaves the run unused", async () => {
-    const cyclic: Record<string, unknown> = {};
-    cyclic.self = cyclic;
-    for (const err of [
-      undefined,
-      () => 1,
-      Symbol("x"),
-      Number.NaN,
-      cyclic,
-      new Map(),
-    ]) {
-      const result = await run(err);
-      assert.ok(result.summary.kind === "ready");
-      assert.deepEqual(result.summary.simulation, {
-        status: "not-run",
-        reason: "the simulation's error is not JSON data",
-      });
-      assert.deepEqual(result.summary.blocks, ["simulation-not-run"]);
-    }
-  });
-});
-
 describe("re-audit A4: the report names no address of the wallet's", () => {
   const offline = () =>
-    jsonRpc(async () => {
+    endpointFor(async () => {
       throw new Error("offline");
     }, "x");
   const other = key(K.userToken2022Account);
@@ -1481,7 +1411,7 @@ describe("re-audit A4: the report names no address of the wallet's", () => {
 
   it("(i) with no read, a wallet-signed transfer's destination is marked too", async () => {
     const result = await preflightTransaction(between(), {
-      rpc: offline(),
+      endpoint: offline(),
       user: USER,
     });
     assert.ok(result.summary.kind === "ready");
@@ -1511,7 +1441,7 @@ describe("re-audit A4: the report names no address of the wallet's", () => {
         data: Buffer.from([4, 5, 0, 0, 0, 0, 0, 0, 0]),
       }),
     ]);
-    const recorded = recordedRpc({
+    const recorded = recordedEndpoint({
       accounts: {
         [USER]: system(5_000_000_000) as never,
         [K.userTokenAccount]: tokenState(9, null) as never,
@@ -1525,18 +1455,34 @@ describe("re-audit A4: the report names no address of the wallet's", () => {
       },
     });
     const ran = await preflightTransaction(approve, {
-      rpc: recorded,
+      endpoint: recorded,
       user: USER,
     });
     assert.ok(ran.summary.kind === "ready");
     assert.equal(ran.summary.simulation.status, "ran");
+    // The endpoint answers the simulation with a JSON-RPC error whose text
+    // holds both addresses inside longer runs.
+    const refusing: Fetch = async (url, init) => {
+      const request = JSON.parse(init.body) as { id: number; method: string };
+      if (request.method !== "simulateTransaction") {
+        return recorded.fetch(url, init);
+      }
+      return {
+        ok: true,
+        status: 200,
+        url,
+        text: JSON.stringify({
+          jsonrpc: "2.0",
+          id: request.id,
+          error: {
+            code: -32002,
+            message: `refused: k${K.userTokenAccount}k and 9${USER}`,
+          },
+        }),
+      };
+    };
     const failed = await preflightTransaction(approve, {
-      rpc: {
-        ...recorded,
-        simulate: async () => {
-          throw new Error(`refused: k${K.userTokenAccount}k and 9${USER}`);
-        },
-      },
+      endpoint: endpointFor(refusing, "x"),
       user: USER,
     });
     assert.ok(failed.summary.kind === "ready");
@@ -1552,7 +1498,7 @@ describe("re-audit A4: the report names no address of the wallet's", () => {
 describe("re-audit A2: the report says which fields come from a read", () => {
   it("a used simulation names the fields taken from the read before it", async () => {
     const result = await preflightTransaction(build([transfer()]), {
-      rpc: recordedRpc({
+      endpoint: recordedEndpoint({
         accounts: { [USER]: system(5_000_000_000) as never },
         simulation: {
           err: null,
@@ -1575,7 +1521,7 @@ describe("re-audit A2: the report says which fields come from a read", () => {
 });
 
 describe("hunt: the public interface refuses what it cannot use, and never throws", () => {
-  const recorded = recordedRpc({
+  const recorded = recordedEndpoint({
     accounts: { [USER]: system(5_000_000_000) as never },
     simulation: {
       err: null,
@@ -1583,6 +1529,34 @@ describe("hunt: the public interface refuses what it cannot use, and never throw
     },
   });
   const sent = () => encodeBase64(build([transfer()]));
+  const solRun = (
+    accounts: (addresses: string[]) => unknown[],
+    replacementBlockhash?: unknown,
+  ) =>
+    endpointFor(
+      endpoint({
+        accounts,
+        simulation: (addresses) => ({
+          err: null,
+          logs: [],
+          accounts: addresses.map((address) =>
+            address === USER ? system(4_999_995_000) : null,
+          ),
+          preBalances: [5_000_000_000, 0, 1],
+          postBalances: [4_999_995_000, 0, 1],
+          preTokenBalances: [],
+          postTokenBalances: [],
+          ...(replacementBlockhash === undefined
+            ? {}
+            : { replacementBlockhash: { blockhash: replacementBlockhash } }),
+        }),
+      }),
+      "x",
+    );
+  const wallet = (addresses: string[]) =>
+    addresses.map((address) =>
+      address === USER ? system(5_000_000_000) : null,
+    );
 
   it("a read with more or fewer accounts than asked is not used", async () => {
     for (const reshape of [
@@ -1591,67 +1565,51 @@ describe("hunt: the public interface refuses what it cannot use, and never throw
       () => [],
     ]) {
       const result = await preflight(
-        {
-          ...recorded,
-          getAccounts: async (addresses) =>
-            reshape(await recorded.getAccounts(addresses)) as never,
-        },
+        solRun((addresses) => reshape(wallet(addresses))),
         sent(),
         USER,
       );
       assert.ok(result.kind === "ready");
       assert.deepEqual(result.simulation, {
         status: "not-run",
-        reason: "the RPC did not return the accounts asked",
+        reason: "getMultipleAccounts: wrong length",
       });
     }
   });
 
-  it("account data that is not bytes is not used", async () => {
+  it("account data that is not base64 is not used", async () => {
     const result = await preflight(
-      {
-        ...recorded,
-        getAccounts: async (addresses) =>
-          addresses.map((address) =>
-            address === USER
-              ? {
-                  lamports: "5000000000",
-                  owner: SYSTEM_PROGRAM,
-                  data: "x".repeat(200) as never,
-                }
-              : null,
-          ),
-      },
+      solRun((addresses) =>
+        addresses.map((address) =>
+          address === USER
+            ? { ...system(5_000_000_000), data: ["not base64!", "base64"] }
+            : null,
+        ),
+      ),
       sent(),
       USER,
     );
     assert.ok(result.kind === "ready");
     assert.deepEqual(result.simulation, {
       status: "not-run",
-      reason: "an account's data is not bytes",
+      reason: "account: data is not base64",
     });
   });
 
-  it("a custom Rpc's replacement blockhash that is not a hash is not kept", async () => {
+  it("a replacement blockhash that is not a hash is not kept", async () => {
     for (const replacementBlockhash of [5, "not a hash", {}]) {
       const result = await preflight(
-        {
-          ...recorded,
-          simulate: async (base64, addresses) => ({
-            ...(await recorded.simulate(base64, addresses)),
-            replacementBlockhash: replacementBlockhash as never,
-          }),
-        },
+        solRun(wallet, replacementBlockhash),
         sent(),
         USER,
       );
       assert.ok(result.kind === "ready");
       assert.equal(result.simulation.status, "ran");
-      assert.deepEqual(result.simulatedAt, { slot: 0, blockhash: null });
+      assert.deepEqual(result.simulatedAt, { slot: 2, blockhash: null });
     }
   });
 
-  it("an Rpc whose error cannot be read as text still gives a ready result", async () => {
+  it("a fetch that throws something unreadable still gives a ready result", async () => {
     const unreadable = new Error("x");
     Object.defineProperty(unreadable, "message", {
       get() {
@@ -1667,12 +1625,9 @@ describe("hunt: the public interface refuses what it cannot use, and never throw
       },
     ]) {
       const result = await preflight(
-        {
-          ...recorded,
-          simulate: async () => {
-            throw thrown;
-          },
-        },
+        endpointFor(async () => {
+          throw thrown;
+        }, "x"),
         sent(),
         USER,
       );
@@ -1694,7 +1649,7 @@ describe("hunt: the public interface refuses what it cannot use, and never throw
     for (const value of ["abc", null, 5, [1, 2, 3]]) {
       assert.deepEqual(
         await preflightTransaction(value as never, {
-          rpc: recorded,
+          endpoint: recorded,
           user: USER,
         }),
         {
@@ -1724,7 +1679,7 @@ describe("hunt: only the read before the run shows a token account is the wallet
       ],
       data: Buffer.from([1]),
     });
-    const rpc = jsonRpc(
+    const rpc = endpointFor(
       endpoint({
         accounts: (addresses) =>
           addresses.map((address) =>
@@ -1761,7 +1716,7 @@ describe("hunt: only the read before the run shows a token account is the wallet
 
 describe("audit 9: the report JSON and the blockhash", () => {
   const offline = () =>
-    jsonRpc(async () => {
+    endpointFor(async () => {
       throw new Error("offline");
     }, "x");
 
@@ -1778,7 +1733,7 @@ describe("audit 9: the report JSON and the blockhash", () => {
           data: Buffer.from([3, 5, 0, 0, 0, 0, 0, 0, 0]),
         }),
       ]),
-      { rpc: offline(), user: USER },
+      { endpoint: offline(), user: USER },
     );
     assert.ok(result.summary.kind === "ready");
     assert.equal(result.summary.simulation.status, "not-run");
@@ -1794,7 +1749,7 @@ describe("audit 9: the report JSON and the blockhash", () => {
 
   it("an error keyed by the wallet's address loses the address", async () => {
     const result = await preflightTransaction(build([transfer()]), {
-      rpc: recordedRpc({
+      endpoint: recordedEndpoint({
         accounts: { [USER]: system(5_000_000_000) as never },
         simulation: {
           err: { [USER]: "insufficient funds" },
@@ -1808,7 +1763,7 @@ describe("audit 9: the report JSON and the blockhash", () => {
 
   it("keeps no replacement blockhash that is an account of the transaction, or not a hash", async () => {
     const rpcWith = (replacementBlockhash: string) =>
-      recordedRpc({
+      recordedEndpoint({
         accounts: { [USER]: system(5_000_000_000) as never },
         simulation: {
           err: null,
@@ -1843,7 +1798,7 @@ describe("audit 9: the report JSON and the blockhash", () => {
 
   it("re-audit A4 (iii): the server output keeps no blockhash from the RPC", async () => {
     const result = await preflightTransaction(build([transfer()]), {
-      rpc: recordedRpc({
+      endpoint: recordedEndpoint({
         accounts: { [USER]: system(5_000_000_000) as never },
         simulation: {
           err: null,

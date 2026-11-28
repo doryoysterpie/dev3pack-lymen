@@ -11,8 +11,12 @@ import {
   TOKEN_2022_PROGRAM,
   TOKEN_PROGRAM,
 } from "./programs.ts";
-import { recordedRpc, type RecordedAccount } from "./recorded.ts";
-import { jsonRpc, type Fetch } from "./rpc.ts";
+import {
+  endpointFor,
+  recordedEndpoint,
+  type RecordedAccount,
+} from "../test-support/recorded.ts";
+import type { Fetch } from "./rpc.ts";
 import { parseTransaction } from "./wire.ts";
 
 const fixture = JSON.parse(
@@ -70,7 +74,7 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
       // The wallet's balance and both of its token accounts change, so their
       // addresses would appear in the report if anything wrote them.
       const result = await preflightTransaction(decodeBase64(c.transaction)!, {
-        rpc: recordedRpc({
+        endpoint: recordedEndpoint({
           accounts: {
             [wallet]: sol(5_000_000_000),
             [K.userTokenAccount]: token(TOKEN_PROGRAM, wallet, 9),
@@ -107,7 +111,7 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
     );
     assert.ok(c !== undefined);
     const result = await preflightTransaction(decodeBase64(c.transaction)!, {
-      rpc: recordedRpc({
+      endpoint: recordedEndpoint({
         accounts: {
           [fixture.user]: sol(5_000_000_000),
           [K.userTokenAccount]: token(TOKEN_PROGRAM, fixture.user, 9),
@@ -135,7 +139,7 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
       throw new Error("offline");
     };
     const result = await preflightTransaction(decodeBase64(c.transaction)!, {
-      rpc: jsonRpc(offline, "x"),
+      endpoint: endpointFor(offline, "x"),
       user: fixture.user,
     });
     assert.ok(result.summary.kind === "ready");
@@ -155,12 +159,13 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
     assert.ok(c !== undefined);
     const answering =
       (answer: (method: string) => unknown): Fetch =>
-      async (_url, init) => {
+      async (url, init) => {
         const request = JSON.parse(init.body) as { id: number; method: string };
         return {
           ok: true,
           status: 200,
-          json: async () => ({
+          url,
+          text: JSON.stringify({
             jsonrpc: "2.0",
             id: request.id,
             ...(answer(request.method) as object),
@@ -170,7 +175,7 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
     // The PM's second read: an endpoint that passes the devnet check and
     // names the wallet in an error.
     const limited = await preflightTransaction(decodeBase64(c.transaction)!, {
-      rpc: jsonRpc(
+      endpoint: endpointFor(
         answering((method) =>
           method === "getGenesisHash"
             ? { result: DEVNET_GENESIS_HASH }
@@ -192,7 +197,7 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
     });
 
     const failed = await preflightTransaction(decodeBase64(c.transaction)!, {
-      rpc: recordedRpc({
+      endpoint: recordedEndpoint({
         accounts: { [fixture.user]: sol(5_000_000_000) },
         simulation: {
           err: { Custom: `insufficient funds in ${fixture.user}` },

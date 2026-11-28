@@ -19,8 +19,7 @@ import {
   TOKEN_2022_PROGRAM,
   TOKEN_PROGRAM,
 } from "./programs.ts";
-import { recordedRpc } from "./recorded.ts";
-import { jsonRpc } from "./rpc.ts";
+import { endpointFor, recordedEndpoint } from "../test-support/recorded.ts";
 import { summarizeTransaction, userTokenAccounts } from "./summary.ts";
 import { parseTransaction, type ParsedTransaction } from "./wire.ts";
 
@@ -62,7 +61,7 @@ const summary = (instructions: web3.TransactionInstruction[]) =>
   summarizeTransaction(parsed(instructions), new Map());
 
 const offline = () =>
-  jsonRpc(async () => {
+  endpointFor(async () => {
     throw new Error("offline");
   }, "x");
 
@@ -207,7 +206,7 @@ describe("audit 4: only the authority account itself authorizes", () => {
       new Uint8Array(64),
     ]).serialize();
     const result = await preflightTransaction(bytes, {
-      rpc: offline(),
+      endpoint: offline(),
       user: fixture.user,
     });
     assert.equal(result.drainPattern, false);
@@ -357,7 +356,7 @@ describe("audit 14: the right diagnosis for malformed input", () => {
     );
 
   it("a lookup index past the end of a table that was read is malformed", async () => {
-    const rpc = recordedRpc({
+    const rpc = recordedEndpoint({
       accounts: { [K.lookupTable]: table([K.attacker]) },
       simulation: { err: null, accounts: {} },
     });
@@ -368,7 +367,7 @@ describe("audit 14: the right diagnosis for malformed input", () => {
   });
 
   it("an address loaded twice, once through a lookup, is malformed", async () => {
-    const rpc = recordedRpc({
+    const rpc = recordedEndpoint({
       accounts: { [K.lookupTable]: table([K.attacker, fixture.user]) },
       simulation: { err: null, accounts: {} },
     });
