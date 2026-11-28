@@ -299,6 +299,27 @@ export async function preflight(
           "the simulation did not return the balances of its own run",
         );
       }
+      // The run's keys must be the message's: the addresses it loaded from
+      // lookup tables are the ones limen read from them, in order (the
+      // owner's ruling 20a), so its balances match the keys limen knows.
+      const loaded = accounts.filter((account) => account.lookup !== null);
+      const same = (a: readonly (string | null)[], b: readonly string[]) =>
+        a.length === b.length && a.every((address, i) => address === b[i]);
+      if (
+        result.loadedAddresses === null ||
+        !same(
+          loaded.filter((a) => a.writable).map((a) => a.address),
+          result.loadedAddresses.writable,
+        ) ||
+        !same(
+          loaded.filter((a) => !a.writable).map((a) => a.address),
+          result.loadedAddresses.readonly,
+        )
+      ) {
+        throw new Error(
+          "the simulation's loaded addresses do not match the lookup tables read",
+        );
+      }
       simulation = {
         status: "ran",
         err: null,

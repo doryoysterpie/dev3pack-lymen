@@ -64,8 +64,8 @@ interface Request {
 
 type AccountMap = Readonly<Record<string, RecordedAccount | null>>;
 
-/** The transaction's account list, its lookup tables read from the map. */
-function keysOf(base64: string, map: AccountMap): (string | null)[] {
+/** The transaction's accounts, its lookup tables read from the map. */
+function accountsOf(base64: string, map: AccountMap) {
   const bytes = decodeBase64(base64);
   const parsed = bytes === null ? null : parseTransaction(bytes);
   if (parsed === null || !parsed.ok) return [];
@@ -79,10 +79,27 @@ function keysOf(base64: string, map: AccountMap): (string | null)[] {
         : null;
     if (addresses !== null) tables.set(lookup.table, addresses);
   }
-  return messageAccounts(
-    parsed.transaction.message,
-    tables as LookupTables,
-  ).map((account) => account.address);
+  return messageAccounts(parsed.transaction.message, tables as LookupTables);
+}
+
+/** The transaction's account list, its lookup tables read from the map. */
+function keysOf(base64: string, map: AccountMap): (string | null)[] {
+  return accountsOf(base64, map).map((account) => account.address);
+}
+
+/**
+ * The addresses loaded from lookup tables, as agave lists them for a
+ * simulation (anza-xyz/agave a64fa73, rpc/src/rpc.rs:3612): writable, then
+ * read-only, each in the message's order; both empty for a legacy one.
+ */
+function loadedOf(base64: string, map: AccountMap) {
+  const loaded = accountsOf(base64, map).filter(
+    (account) => account.lookup !== null,
+  );
+  return {
+    writable: loaded.filter((a) => a.writable).map((a) => a.address),
+    readonly: loaded.filter((a) => !a.writable).map((a) => a.address),
+  };
 }
 
 const byAddress = (
@@ -138,6 +155,10 @@ export function recordedEndpoint(recording: Recording): RpcEndpoint {
             // As the balances above: an address left out is unchanged.
             // limen asks for no account, so none is returned.
             accounts: null,
+            loadedAddresses: loadedOf(
+              request.params[0] as string,
+              recording.accounts,
+            ),
             ...balances,
           },
         };
