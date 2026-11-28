@@ -181,22 +181,31 @@ async function callKeepingNumbers(
 ): Promise<{ readonly result: unknown; readonly raw: RawNumber }> {
   const id = nextId;
   nextId += 1;
-  const late = () =>
-    new RpcError(
-      "timeout",
-      `the RPC endpoint did not answer within ${endpoint.timeoutMs / 1000} seconds`,
-    );
-  const answer = readAnswer(
-    await withTimeout(
+  const late = new RpcError(
+    "timeout",
+    `the RPC endpoint did not answer within ${endpoint.timeoutMs / 1000} seconds`,
+  );
+  // What a fetch rejects with, or throws, is never read (the owner's ruling
+  // 20a, item 8): no String(), no message, no property. It is compared only
+  // by identity with this client's own time limit, and anything else gives
+  // a fixed reason.
+  let received: unknown;
+  try {
+    received = await withTimeout(
       endpoint.fetch(endpoint.url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
       }),
       endpoint.timeoutMs,
-      late,
-    ),
-  );
+      () => late,
+    );
+  } catch (error) {
+    throw error === late
+      ? late
+      : new RpcError("http", `${method}: the endpoint could not be reached`);
+  }
+  const answer = readAnswer(received);
   // Provenance (the owner's ruling 20a): only a 200 answer from the
   // endpoint itself is evidence. A fetch follows redirects, and its answer's
   // url is the final one, so an answer from any other address is refused,
