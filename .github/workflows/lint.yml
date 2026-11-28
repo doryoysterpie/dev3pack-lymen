@@ -19,6 +19,8 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - name: Private-key content scan of every tracked file
+        run: node services/api/src/key-scan.ts
       - name: ESLint
         run: npm run lint
       - name: Prettier check
