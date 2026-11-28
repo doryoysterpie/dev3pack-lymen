@@ -3,12 +3,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -117,6 +120,119 @@ test("the link tool refuses to write inside the repository, where the station pa
     for (const out of outs) rmSync(out, { force: true });
     if (!hadLinkDir)
       rmSync(join(repo, ".station-links"), { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test(
+  "the link tool refuses the repository's path written in another letter case, on macOS",
+  {
+    skip: process.platform !== "darwin",
+  },
+  () => {
+    // APFS is case-insensitive by default, so another case names the same folder.
+    const repo = realpathSync(
+      fileURLToPath(new URL("../../../", import.meta.url)),
+    );
+    const name = `case-test-${process.pid}.url`;
+    const swapped = [...repo]
+      .map((c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()))
+      .join("");
+    assert.notEqual(swapped, repo);
+    const inside = join(repo, name);
+    try {
+      const refused = run(["st-front", join(swapped, name)]);
+      assert.deepEqual(
+        {
+          status: refused.status,
+          stdout: refused.stdout,
+          stderr: refused.stderr,
+        },
+        {
+          status: 1,
+          stdout: "",
+          stderr:
+            "station-link: the link file must be outside the repository, where the station page's dev server cannot serve it.\n",
+        },
+      );
+      assert.equal(
+        existsSync(inside),
+        false,
+        "nothing was written in the repository",
+      );
+    } finally {
+      rmSync(inside, { force: true });
+    }
+  },
+);
+
+test("the link tool refuses a path through a symlink that does not resolve, such as one pointing into the repository", () => {
+  const repo = realpathSync(
+    fileURLToPath(new URL("../../../", import.meta.url)),
+  );
+  const target = join(repo, `dangling-test-${process.pid}.url`);
+  const dir = mkdtempSync(join(tmpdir(), "limen-link-"));
+  const link = join(dir, "link.url");
+  symlinkSync(target, link);
+  // A symlinked folder that does not resolve, with the file named under it.
+  symlinkSync(join(repo, `dangling-dir-${process.pid}`), join(dir, "into"));
+  try {
+    for (const out of [link, join(dir, "into", "st-front.url")]) {
+      const refused = run(["st-front", out]);
+      assert.deepEqual(
+        {
+          status: refused.status,
+          stdout: refused.stdout,
+          stderr: refused.stderr,
+        },
+        {
+          status: 1,
+          stdout: "",
+          stderr:
+            "station-link: the link file's path holds a symlink that does not resolve; name a path without one.\n",
+        },
+        out,
+      );
+    }
+    assert.equal(
+      existsSync(target),
+      false,
+      "nothing was written through the link",
+    );
+    assert.equal(existsSync(join(repo, `dangling-dir-${process.pid}`)), false);
+  } finally {
+    rmSync(target, { force: true });
+    rmSync(join(repo, `dangling-dir-${process.pid}`), {
+      recursive: true,
+      force: true,
+    });
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the link tool never writes into an existing file, so no token sits in a file another user could read", () => {
+  const dir = mkdtempSync(join(tmpdir(), "limen-link-"));
+  const out = join(dir, "st-front.url");
+  writeFileSync(out, "old\n");
+  chmodSync(out, 0o644);
+  try {
+    const refused = run(["st-front", out]);
+    assert.deepEqual(
+      {
+        status: refused.status,
+        stdout: refused.stdout,
+        stderr: refused.stderr,
+      },
+      {
+        status: 1,
+        stdout: "",
+        stderr:
+          "station-link: the link file already exists; remove it or name another file.\n",
+      },
+    );
+    assert.equal(readFileSync(out, "utf8"), "old\n");
+    assert.equal(statSync(out).mode & 0o777, 0o644);
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
