@@ -13,7 +13,7 @@ coverage/
 keys/
 *.keypair.json
 id.json
-# Station display links hold a station's display token (E-03). The link tool writes them only to
+# Station display links hold a station's display token (E-03). The link tool writes them to
 # ~/limen-station-links, outside the repository; these patterns are a second guard, for a link
 # file by its .url name and for the .station-links/ folder an earlier version used.
 *.url

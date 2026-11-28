@@ -11,6 +11,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -59,7 +60,7 @@ function withHome(body: (home: string) => void): void {
 
 const folder = (home: string) => join(home, "limen-station-links");
 
-test("the link tool writes the station's own link into ~/limen-station-links, made at mode 700, the file readable by its owner only, and prints no token", () => {
+test("the link tool writes the station's own link into ~/limen-station-links, made at mode 700, the file at mode 600, and prints no token", () => {
   withHome((home) => {
     const result = run(home, ["st-front"]);
     const out = join(folder(home), "st-front.url");
@@ -201,7 +202,7 @@ test("the link folder is refused when another user owns it", () => {
   });
 });
 
-test("the link tool never writes into an existing link file", () => {
+test("the link tool refuses an existing link file, or a symlink with its name, and changes neither", () => {
   withHome((home) => {
     mkdirSync(folder(home), { mode: 0o700 });
     const out = join(folder(home), "st-front.url");
@@ -215,5 +216,17 @@ test("the link tool never writes into an existing link file", () => {
     });
     assert.equal(readFileSync(out, "utf8"), "old\n");
     assert.equal(statSync(out).mode & 0o777, 0o644);
+    // A symlink with the link's name, pointing at a file that does not exist yet.
+    const target = join(home, "target");
+    const side = join(folder(home), "st-side.url");
+    symlinkSync(target, side);
+    assert.deepEqual(run(home, ["st-side"]), {
+      status: 1,
+      stdout: "",
+      stderr:
+        "station-link: the link file already exists; remove it and run the tool again.\n",
+    });
+    assert.equal(readlinkSync(side), target);
+    assert.equal(existsSync(target), false);
   });
 });

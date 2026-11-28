@@ -1,7 +1,7 @@
 // Vite config for the station display (E-03). The page calls /api/..., and the dev and preview
 // servers forward those requests to the limen API, so the page and the API share one origin.
 // STATION_API_URL, from the shell or the repository's root .env, overrides the API address
-// (default http://127.0.0.1:8787). It is read here only and never reaches the page.
+// (default http://127.0.0.1:8787). It is read here, for the proxy.
 //
 // What the servers may serve:
 // - server.fs.allow is this app's folder alone. Vite serves its own client and its dependency

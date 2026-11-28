@@ -76,9 +76,9 @@ They mint a pass and check its extensions and metadata, send a transfer from the
 
 ## Station QR (E-03)
 
-`GET /stations/<station ID>/qr` with `Authorization: Bearer <that station's display token>` returns a QR signed with the organizer key, for that station in the session whose window holds the current time, with `refresh_after_s` set to 30, or to the seconds left before the QR expires if fewer. `expires_in_ms` is the milliseconds from the API's clock reading for the QR to its `expires_at`. The station page reads neither of these two fields; it times everything from the QR's signed `issued_at` and `expires_at`. A QR lives 60 s. When those 60 s would reach its session's end, the QR is cut short: it expires at that end, or one second before it when the 60 s would end exactly there, so every such QR's `expires_at` is less than `issued_at` + 60. Between back-to-back sessions the page refreshes when the old QR expires and gets the next session's QR; when a gap follows the session, the API answers 409 until the next session starts. It answers 401 without the token, 404 for an unknown station and 409 outside every session. The station page in `apps/station` calls it.
+`GET /stations/<station ID>/qr` with `Authorization: Bearer <that station's display token>` returns a QR signed with the organizer key, for that station in the session whose window holds the current time. Beside the QR it returns the QR's signed `station`, `session`, `issued_at` and `expires_at`, and no other field. The API reads its clock once per request, after its database reads and just before it signs, and the session choice and `issued_at` both come from that reading. The answer no longer carries `refresh_after_s` or `expires_in_ms`: the station page times each QR from its signed fields, so those two fields are removed. A QR's window is 60 s. When those 60 s would reach its session's end, the QR is cut short: it expires at that end, or one second before it when the 60 s would end exactly there, so every such QR's `expires_at` is less than `issued_at` + 60. Between back-to-back sessions, from the old session's end the API serves the next session's QR. It answers 401 without the token or with a wrong one, 404 for an unknown station, and 409 when no session's window holds the current time. The station page in `apps/station` calls it.
 
-Each station has its own display token, the HMAC-SHA256 of `limen:station-display:v1:<station ID>` keyed with `STATION_DISPLAY_TOKEN` (`src/station-token.ts`), so the token one station's page holds gets QRs for that station only, and the secret itself gets none. To give a station's page its address and token without printing them:
+Each station has its own display token, the HMAC-SHA256 of `limen:station-display:v1:<station ID>` keyed with `STATION_DISPLAY_TOKEN` (`src/station-token.ts`), so the token one station's page holds gets that station's QRs and is refused any other station's, and the secret itself is refused. To give a station's page its address and token without printing them:
 
 ```bash
 npm run station-link -w @limen/api -- st-front
@@ -88,18 +88,19 @@ The tool writes the address to `~/limen-station-links/st-front.url` and prints t
 
 The tool takes no output path. An earlier version wrote to a path of the caller's choice; that is removed.
 
-- **The folder.** It writes only into `~/limen-station-links`, which it makes at mode 700 if it is missing. It refuses that folder when it is a symlink, not a directory, owned by another user, or writable by group or others.
-- **The file.** Its name is the station ID, 1 to 64 characters of `[A-Za-z0-9_-]`, then `.url`. It is created new at mode 600, and an existing file is refused, not written into.
+- **The folder.** It writes into `~/limen-station-links`, which it makes at mode 700 if it is missing. It refuses that folder when it is a symlink, not a directory, owned by another user, or writable by group or others.
+- **The file.** Its name is the station ID, 1 to 64 characters of `[A-Za-z0-9_-]`, then `.url`. It is created new at mode 600, and an existing file, or a symlink with its name, is refused and left as it was.
 - **A second guard.** `.gitignore` also ignores `*.url` files.
 
-The QR text is `limen:station:v1.<payload>.<signer>.<signature>`. `src/station-qr.ts` documents each part, and `verifyStationQr` there accepts a QR only when all of these hold:
+The QR text is `limen:station:v1.<payload>.<signer>.<signature>`. `src/station-qr.ts` documents each part and the order of the checks. `verifyStationQr` there refuses a QR, with a reason, unless all of these hold, and `src/station-qr.test.ts` has a refusal test for each:
 
 - its signer is on the allowlist, and its signature verifies;
 - its payload has exactly the five owed fields;
 - its station is the caller's `expectedStation`, which is required, and, when the caller gives an `expectedSession`, its session is that one;
+- its `issued_at` is no more than 5 s ahead of the verifying time;
 - the verifying time, in milliseconds, is no more than 60 s after `issued_at` and not after `expires_at`.
 
-Another station gives `wrong_station`, and another session `wrong_session`. A cut-short QR, one whose `expires_at` is less than `issued_at` + 60, is refused from its `expires_at` on, which is never after its session's end. So no QR verifies at or after the instant its session ends, when the API moves to the next session or, if none follows at once, answers 409. That holds because, once a session has started or starts within 60 s, the seed refuses any change to it but a later end. Its caller passes the time as `nowMs`; a missing, NaN or infinite `nowMs` is refused as `invalid_clock`, whatever the QR. At this head only the tests call `verifyStationQr`; the check-in endpoint, E-05 (#45), calls it.
+Another station gives `wrong_station`, and another session `wrong_session`. A cut-short QR, one whose `expires_at` is less than `issued_at` + 60, is refused from its `expires_at` on, which is at or before its session's end. `src/server.test.ts` fetches a QR in each of a session's last 61 seconds and checks that each is refused at the instant the session ends, when the API moves to the next session. Once a session has started, or starts within 60 s, the seed refuses to move its end earlier (`src/seed.test.ts`). The caller passes the time as `nowMs`; a missing, NaN or infinite `nowMs` is refused as `invalid_clock`. At this head the tests call `verifyStationQr`; E-05's check-in endpoint (#45) calls it there.
 
 ## Test
 

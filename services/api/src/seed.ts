@@ -5,8 +5,8 @@
 // starts, do not overlap, since a session's end is exclusive.
 // Once a session has started, or starts within 60 s, a seed may change it only by moving its end
 // later: QRs issued for it carry expiry times cut to its end, and the API picks a session by its
-// window. The check reads every session as stored before the seed writes anything, never the
-// values the seed would leave.
+// window. The check compares each entry with the session as stored before the seed writes
+// anything, not with the values the seed would leave (seed.test.ts, the rescheduling probe).
 //
 //   npm run seed -w @limen/api -- ../../fixtures/demo-event.json
 //

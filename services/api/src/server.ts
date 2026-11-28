@@ -12,11 +12,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { routeReports, type ReportOptions } from "./reports.ts";
 import { schemaVersion } from "./db.ts";
-import {
-  issueStationQr,
-  STATION_QR_ROTATION_S,
-  type StationSigner,
-} from "./station-qr.ts";
+import { issueStationQr, type StationSigner } from "./station-qr.ts";
 import { stationDisplayToken } from "./station-token.ts";
 
 /** The API version, read from services/api/package.json. */
@@ -37,7 +33,7 @@ export interface ApiContext {
   readonly stationSigner: StationSigner;
   /**
    * STATION_DISPLAY_TOKEN, the secret each station's display token is derived from
-   * (station-token.ts). A display sends its own station's token, never this secret.
+   * (station-token.ts). A display sends its own station's token; the API refuses the secret.
    */
   readonly stationDisplayToken: string;
   /** The current Unix time in whole seconds. */
@@ -110,14 +106,16 @@ function stationQr(
     sendJson(res, 404, { error: "unknown_station" });
     return;
   }
-  // One reading of the clock serves the session choice, the QR and its remaining time.
+  const sessions = ctx.db
+    .prepare(
+      "SELECT id, starts_at, ends_at FROM sessions ORDER BY starts_at DESC, id",
+    )
+    .all() as { id: string; starts_at: number; ends_at: number }[];
+  // The clock is read once, after the last database read and just before issueStationQr signs.
+  // The session choice and issued_at both come from this reading.
   const nowMs = ctx.nowMs?.() ?? ctx.now() * 1000;
   const now = Math.floor(nowMs / 1000);
-  const session = ctx.db
-    .prepare(
-      "SELECT id, ends_at FROM sessions WHERE starts_at <= ? AND ? < ends_at ORDER BY starts_at DESC, id LIMIT 1",
-    )
-    .get(now, now) as { id: string; ends_at: number } | undefined;
+  const session = sessions.find((s) => s.starts_at <= now && now < s.ends_at);
   if (session === undefined) {
     sendJson(res, 409, { error: "no_active_session" });
     return;
@@ -127,7 +125,6 @@ function stationQr(
     session: session.id,
     now,
     signer: ctx.stationSigner,
-    // No QR outlives its session.
     notAfter: session.ends_at,
   });
   sendJson(res, 200, {
@@ -136,12 +133,6 @@ function stationQr(
     session: payload.session,
     issued_at: payload.issued_at,
     expires_at: payload.expires_at,
-    // Near a session's end the QR expires early, so the page refreshes when it does and picks
-    // up the next session's QR then, rather than waiting the full 30 s with nothing shown.
-    refresh_after_s: Math.min(STATION_QR_ROTATION_S, payload.expires_at - now),
-    // How long the QR has left as it leaves the API, to the millisecond. The page counts its
-    // own round trip off this, so it never draws a QR that expired on the way.
-    expires_in_ms: payload.expires_at * 1000 - nowMs,
   });
 }
 

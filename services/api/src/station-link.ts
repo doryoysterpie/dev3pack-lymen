@@ -1,14 +1,14 @@
 // Station display link (E-03): writes the station page's address, with that station's own
-// display token in the fragment, to ~/limen-station-links/<station ID>.url, and prints only where
-// it wrote it, never the token (rule 8). Open the address in the station's browser.
+// display token in the fragment, to ~/limen-station-links/<station ID>.url, and prints the path
+// it wrote, not the token (rule 8). Open the address in the station's browser.
 //
 //   npm run station-link -w @limen/api -- <station ID>
 //
-// The tool takes no output path. It writes only into ~/limen-station-links, which it makes at
+// The tool takes no output path. It writes into ~/limen-station-links, which it makes at
 // mode 700 if missing, and refuses when that folder is a symlink, not a directory, owned by
 // another user, or writable by group or others. The file name is the station ID, which must be
-// 1 to 64 characters of [A-Za-z0-9_-], and ".url". The file is created new, at mode 600, never
-// written into an existing file or through a symlink.
+// 1 to 64 characters of [A-Za-z0-9_-], and ".url". The file is created new, at mode 600; the
+// tool refuses when a file or a symlink already has that name.
 //
 // Node has no openat, so the file is opened by path, not relative to the open folder. The tool
 // opens the folder without following a symlink and checks what it opened; after creating the
@@ -55,7 +55,10 @@ export function stationLink(
   return url.href;
 }
 
-/** Refuses a link folder that is not a plain directory, owned by `uid`, writable by it only. */
+/**
+ * Refuses a link folder that is a symlink, not a directory, not owned by `uid`, or writable by
+ * group or others.
+ */
 function checkFolder(folder: string, stats: Stats, uid: number): void {
   const why = stats.isSymbolicLink()
     ? "a symlink"
@@ -143,7 +146,6 @@ if (isMainModule(import.meta.url)) {
   try {
     console.log(writeStationLink(process.env, process.argv.slice(2)));
   } catch (err) {
-    // The messages name the variable, the folder or the usage, never the secret or a token.
     console.error(
       `station-link: ${err instanceof Error ? err.message : String(err)}`,
     );

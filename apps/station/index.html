@@ -2,9 +2,9 @@
 <html lang="en-CA">
   <head>
     <script>
-      // E-03: the first thing on the page, before anything else loads or renders. It keeps the
-      // address, display token included, in window.limenStationAddress for the page module, and
-      // removes the token from the address bar and the current history entry.
+      // E-03: the first element in <head> (in development, Vite puts its client module first).
+      // It keeps the address, display token included, in window.limenStationAddress for the page
+      // module, and removes the token from the address bar and the current history entry.
       (function () {
         var href = window.location.href;
         Object.defineProperty(window, "limenStationAddress", {

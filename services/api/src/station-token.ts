@@ -6,7 +6,7 @@ import { createHmac } from "node:crypto";
 /** The shortest STATION_DISPLAY_TOKEN accepted. */
 export const MIN_STATION_SECRET_LENGTH = 32;
 
-/** Reads STATION_DISPLAY_TOKEN. The error says whether it is unset or short, never what it holds. */
+/** Reads STATION_DISPLAY_TOKEN. The error says whether it is unset or short, not its value. */
 export function parseStationDisplaySecret(value: string | undefined): string {
   if (value === undefined || value.length < MIN_STATION_SECRET_LENGTH) {
     throw new Error(
