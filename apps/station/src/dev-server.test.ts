@@ -1,7 +1,6 @@
-// E-03: the station page's dev and preview servers, started with this app's own
-// vite.config.ts, must not serve key, database or repository files. Each test puts uniquely named
-// stand-ins where such files would sit and owes 403 or 404 for them, by /@fs/ path, with ?raw or
-// ?import&raw, or from another page on localhost.
+// E-03: the station page's dev and preview servers and its build, run with this app's
+// vite.config.ts. Each test puts uniquely named stand-ins where a key or stray file could sit and
+// owes that it is not served or not built.
 import assert from "node:assert/strict";
 import {
   existsSync,
@@ -142,7 +141,7 @@ test("the dev and preview servers serve no key or database through a workspace l
       `/${tag}-keypair.json?raw`,
     ])
       await owesRefusal(devPort, path);
-    // No CORS header, so another page on localhost cannot read what the dev server answers.
+    // No CORS header.
     const page = await get(devPort, "/src/main.ts");
     assert.equal(page.status, 200);
     assert.equal(page.headers.get("access-control-allow-origin"), null);

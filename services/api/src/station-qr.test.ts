@@ -164,7 +164,7 @@ test("with no usable clock the verifier fails closed: missing, NaN or infinite n
       String(nowMs),
     );
   }
-  // The option E-05 used before the switch to milliseconds is refused, not read as "no limit".
+  // An option named `now`, in seconds, is refused, not read as "no limit".
   assert.equal(verdict({ allowlist: ALLOWLIST, now: T }), "invalid_clock");
 });
 
@@ -504,7 +504,7 @@ test("expectedStation and expectedSession are optional: absent, nothing is check
     });
     return r.ok ? "ok" : r.reason;
   };
-  // Absent: the verifier behaves as it did before either option existed.
+  // Absent: neither is checked.
   assert.equal(verdict({}), "ok");
   assert.equal(verdict({ expectedStation: undefined }), "ok");
   assert.equal(verdict({}, T + 61), "expired");

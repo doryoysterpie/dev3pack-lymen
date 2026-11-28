@@ -1,11 +1,6 @@
-// Station display token (E-03): copies one station's display token to the macOS clipboard, for
-// pasting into that station's page, and prints only that it did.
+// Copies one station's display token to the macOS clipboard through pbcopy's standard input (E-03):
 //
 //   npm run station-token -w @limen/api -- <station ID>
-//
-// The token is the HMAC that station-token.ts derives from STATION_DISPLAY_TOKEN. The tool
-// writes it to pbcopy's standard input, so it is not on any command line, and it writes no
-// file. It refuses off macOS, where there is no pbcopy.
 import { spawn } from "node:child_process";
 
 import { isMainModule } from "./main-module.ts";
@@ -33,8 +28,7 @@ export async function copyStationToken(
     );
   if (env.PATH === undefined || env.PATH === "")
     throw new Error("PATH is not set, so pbcopy cannot be found.");
-  // pbcopy gets PATH alone, so no NODE_* variable and no secret is in the options that
-  // NODE_DEBUG=child_process prints, and the token goes to its stdin stream, not the options.
+  // PATH alone, and the token on stdin: NODE_DEBUG=child_process prints the spawn options.
   const token = stationDisplayToken(secret, station);
   const status = await new Promise<number | null>((resolve) => {
     const child = spawn("pbcopy", [], {

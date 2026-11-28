@@ -1,8 +1,5 @@
-// Whether a file lies inside a folder, judged on the file system rather than on path text (E-03).
-// The organizer key must not sit inside apps/station, which the station page's dev server
-// serves. The file's path is resolved through every symlink, then each folder above it is
-// compared with the station folder by device and inode, so a symlink or ".." does not hide it
-// (index.test.ts).
+// Whether a file lies inside a folder (E-03), by device and inode up its real path, so a symlink
+// or ".." does not hide it (index.test.ts).
 import { realpathSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 

@@ -31,17 +31,11 @@ export interface ApiContext {
   readonly version: string;
   /** Signs station QRs. In the running API this is the organizer key. */
   readonly stationSigner: StationSigner;
-  /**
-   * STATION_DISPLAY_TOKEN, the secret each station's display token is derived from
-   * (station-token.ts). A display sends its own station's token; the API refuses the secret.
-   */
+  /** STATION_DISPLAY_TOKEN, the secret each station's display token derives from. */
   readonly stationDisplayToken: string;
   /** The current Unix time in whole seconds. */
   readonly now: () => number;
-  /**
-   * The current Unix time in milliseconds, for checks that must not round to the second, such
-   * as a station QR's 60 s window (E-05). Unset: now() * 1000.
-   */
+  /** The current Unix time in milliseconds. Unset: now() * 1000. */
   readonly nowMs?: () => number;
 }
 
@@ -83,8 +77,6 @@ function stationQr(
     sendJson(res, 405, { error: "method_not_allowed" }, { allow: "GET" });
     return;
   }
-  // Each display holds its own station's token, so one display's token gets no other
-  // station's QR.
   if (
     !hasBearerToken(
       req,
@@ -106,8 +98,8 @@ function stationQr(
     sendJson(res, 404, { error: "unknown_station" });
     return;
   }
-  // The sessions, the clock and the signature come from one BEGIN IMMEDIATE transaction, the
-  // write lock the seed also takes, so no seed can change the session between them.
+  // The sessions, the clock and the signature share one BEGIN IMMEDIATE transaction, the write
+  // lock the seed also takes.
   try {
     ctx.db.exec("BEGIN IMMEDIATE");
   } catch {

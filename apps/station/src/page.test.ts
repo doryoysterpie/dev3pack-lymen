@@ -142,9 +142,9 @@ function control(id: string) {
 }
 
 /**
- * Where a page could keep a token across a reload: both storages, cookies, the address and the
- * history. Each write is recorded, and the storages and cookies keep what is written, so a page
- * that stored the token would find it again after a reload.
+ * Stand-ins for both storages and cookies, which keep what is written so a reload can find it.
+ * The writes made through them, and through the address and history stand-ins in loadPage, are
+ * recorded; a write by any other route is not.
  */
 function keeper() {
   const writes: string[] = [];
@@ -194,10 +194,8 @@ const STATION_URL = "http://127.0.0.1:5173/?station=st-front";
 const TOKEN = "station-token-0123456789";
 
 /**
- * Loads main.ts at `href`, as a page load does. `fetchFn` answers the page's requests; it may
- * wait on `clock`. With `token`, the token is typed into the field and the button pressed. Returns
- * the page's elements, the shared log, the Authorization header of each request, the writes the
- * page made where a token could be kept, and the window's address.
+ * Loads main.ts afresh at `href`. `fetchFn` answers its requests. With `token`, the token is typed
+ * into the field and the button pressed.
  */
 async function loadPage(
   href: string,
@@ -385,7 +383,7 @@ test("an address with no valid station shows the station error and asks for no t
 });
 
 test("a response carrying another station's genuine QR is refused, not drawn under this station's name", async () => {
-  // As in the audit: st-side's genuine QR, labelled st-front by the response.
+  // st-side's genuine QR, labelled st-front by the response.
   const { elements, log } = await loadPage(
     STATION_URL,
     answering({
@@ -459,7 +457,7 @@ test("the caption comes from the signed QR's fields, whatever the answer's other
 
 test("a QR whose deadline passes while it is being drawn is not revealed", async () => {
   const clock = fakeClock();
-  const qr = signedQr("st-front"); // 60 s: its deadline is 59 001 ms after the request left
+  const qr = signedQr("st-front");
   const slow = (): Promise<Response> =>
     new Promise((resolve) => {
       clock.setTimeout(
@@ -476,7 +474,7 @@ test("a QR whose deadline passes while it is being drawn is not revealed", async
   const { elements, log } = await loadPage(STATION_URL, slow, clock, {
     token: TOKEN,
   });
-  // Drawing takes until past the deadline.
+  // The draw takes until past the deadline.
   const ctx = elements.qr.getContext();
   elements.qr.getContext = () => {
     clock.jump(60_000);

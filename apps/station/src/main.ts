@@ -1,10 +1,6 @@
-// Station display page (E-03). Shows the signed station QR and replaces it when the API says.
-// Open it as /?station=<station ID>. The page asks for that station's display token, which
-// `npm run station-token -w @limen/api -- <station ID>` copies to the clipboard, in a password
-// field. It keeps the token in this module's memory and sends it only in the Authorization
-// header of its requests; it does not write it to the address, the history, a cookie or
-// storage, so a reload asks for it again. Requests go to /api, which the Vite dev and preview
-// servers forward to the limen API.
+// Station display page (E-03), opened as /?station=<station ID>. It asks for the station's
+// display token in a password field, keeps it in memory, and sends it in the Authorization
+// header of its requests to /api.
 import QRCode from "qrcode";
 
 import {
@@ -46,8 +42,8 @@ function showRefreshing(): void {
 /** The page's clock: milliseconds since the Unix epoch, read against the QR's signed times. */
 const now = (): number => window.Date.now();
 
-// The timer that clears the shown QR at its deadline, and a count of the renders, so a slow draw
-// that a newer render has overtaken shows nothing.
+// The timer that clears the shown QR, and a count of renders, so a draw that a newer render has
+// overtaken shows nothing.
 let clearing: number | null = null;
 let renders = 0;
 
@@ -61,7 +57,6 @@ function render(view: StationView): void | Promise<void> {
     return;
   }
   if (view.kind === "refreshing") {
-    // The last QR has passed its deadline and no new one has arrived yet.
     showRefreshing();
     return;
   }
@@ -72,8 +67,8 @@ function render(view: StationView): void | Promise<void> {
   }).then(
     () => {
       if (mine !== renders) return;
-      // Drawing takes time, so the clock is read again now: the QR is shown only if its
-      // deadline is still ahead, and the clearing timer is armed for what is left.
+      // The clock is read again after the draw; the QR is shown only with time left, and the
+      // clearing timer is armed for that time.
       const left = view.deadline - now();
       if (left <= 0) {
         showRefreshing();
@@ -129,8 +124,7 @@ function askForToken(station: string): void {
   tokenPrompt.hidden = false;
 }
 
-// An address from an earlier version's link file carries a token in its fragment. The page
-// replaces its address with its path and query, without reading the fragment.
+// Drops any fragment, such as an old link file's token, without reading it.
 window.history.replaceState(
   null,
   "",
