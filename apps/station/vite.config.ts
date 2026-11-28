@@ -1,28 +1,15 @@
-// Vite config for the station display (E-03). The page calls /api/..., and the dev and preview
-// servers forward those requests to the limen API, so the page and the API share one origin.
-// STATION_API_URL, from the shell or the repository's root .env, overrides the API address
-// (default http://127.0.0.1:8787). It is read here, for the proxy.
-//
-// What the servers may serve:
-// - server.fs.allow is this app's src folder and index.html, and nothing else in apps/station.
-//   Vite serves its own client and its dependency cache, where the page's one dependency,
-//   qrcode, is bundled, by its own exemption; no node_modules path is allowed
-//   (src/dev-server.test.ts).
-// - server.fs.deny adds, to Vite 8.3.8's six default entries, which a deny list replaces, the
-//   workspace links in node_modules/@limen (one of them leads to services/api), databases, key
-//   folders and keypair files, and .env files, wherever they are.
-// - publicDir is false, so no file is copied into the build or served from a public folder.
-// - CORS is off on both servers, so another page on localhost cannot read their answers.
-// - refuseSecretPaths, a middleware ahead of Vite's own on both servers, answers 403 to any
-//   request whose decoded path names one of those kinds of file. It leaves /api requests, which
-//   the proxy forwards, alone, so a station named "keys" still reaches the API.
-// - The preview server answers / and paths ending .html, .js, .css or .svg, and 403 to any
-//   other path outside /api, so it serves the built page and nothing else.
-// - checkBuildOutput fails the build when the output folder holds anything but the page's
-//   .html, .js, .css and .svg files.
+// Vite config for the station display (E-03). The dev and preview servers forward /api to the
+// limen API at STATION_API_URL, or http://127.0.0.1:8787. What they serve (src/dev-server.test.ts):
+// - dev: in apps/station, index.html, the .ts and .css files under src, and Vite's dependency
+//   cache; any other file there gets 403 (onlySourceFiles);
+// - preview: / and the files Vite's manifest names (manifestFiles);
+// - both: 403 by name, outside /api, for keys, keypair files, databases, .env files and the
+//   node_modules/@limen links (refuseSecretPaths), and no CORS header;
+// - build: no public folder, and a failure when the output holds a file the manifest does not
+//   name (checkBuildOutput).
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readdirSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { defineConfig, loadEnv, type Plugin } from "vite";
@@ -77,13 +64,18 @@ function refuseSecretPaths(): Plugin {
     },
     configurePreviewServer(server) {
       server.middlewares.use(guard);
+      // The files Vite's manifest names when the preview starts; the manifest itself is not served.
+      const served =
+        manifestFiles(
+          resolve(server.config.root, server.config.build.outDir),
+        ) ?? new Set<string>();
       server.middlewares.use((req, res, next) => {
         const path = new URL(req.url ?? "/", "http://station.invalid").pathname;
         if (
           path === "/" ||
           path === "/api" ||
           path.startsWith("/api/") ||
-          PAGE_FILE.test(path)
+          served.has(path.slice(1))
         ) {
           next();
           return;
@@ -134,18 +126,42 @@ function onlySourceFiles(
   res.end("Forbidden");
 }
 
-/** The kinds of file the built page is made of. */
-const PAGE_FILE = /\.(html|js|css|svg)$/;
+const MANIFEST = ".vite/manifest.json";
 
-/** Every file under `dir`, as paths relative to it. */
+/**
+ * The files Vite's manifest (build.manifest) names in `outDir`: each .html entry, and each
+ * entry's file, CSS and assets, as paths relative to `outDir`. Null when there is no manifest.
+ */
+function manifestFiles(outDir: string): Set<string> | null {
+  let manifest: Record<
+    string,
+    { file: string; css?: string[]; assets?: string[] }
+  >;
+  try {
+    manifest = JSON.parse(readFileSync(join(outDir, MANIFEST), "utf8"));
+  } catch {
+    return null;
+  }
+  const files = new Set<string>();
+  for (const [key, entry] of Object.entries(manifest)) {
+    if (key.endsWith(".html")) files.add(key);
+    files.add(entry.file);
+    for (const file of [...(entry.css ?? []), ...(entry.assets ?? [])])
+      files.add(file);
+  }
+  return files;
+}
+
+/** Every file under `dir`, as paths relative to it with "/" between parts. */
 function filesUnder(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
     entry.isDirectory()
-      ? filesUnder(join(dir, entry.name)).map((f) => join(entry.name, f))
+      ? filesUnder(join(dir, entry.name)).map((f) => `${entry.name}/${f}`)
       : [entry.name],
   );
 }
 
+/** Fails the build when its output folder holds a file Vite's manifest does not name. */
 function checkBuildOutput(): Plugin {
   return {
     name: "limen-check-build-output",
@@ -153,10 +169,15 @@ function checkBuildOutput(): Plugin {
     writeBundle(options) {
       const dir = options.dir;
       if (dir === undefined) return;
-      const others = filesUnder(dir).filter((file) => !PAGE_FILE.test(file));
+      const named = manifestFiles(dir);
+      if (named === null)
+        throw new Error("the station build wrote no Vite manifest");
+      const others = filesUnder(dir).filter(
+        (file) => file !== MANIFEST && !named.has(file),
+      );
       if (others.length > 0)
         throw new Error(
-          `the station build output holds files that are not the page's html, js, css or svg: ${others.join(", ")}`,
+          `the station build output holds files not named in Vite's manifest: ${others.join(", ")}`,
         );
     },
   };
@@ -181,6 +202,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [refuseSecretPaths(), checkBuildOutput()],
     publicDir: false,
+    build: { manifest: true },
     server: {
       host: "127.0.0.1",
       port: 5173,
