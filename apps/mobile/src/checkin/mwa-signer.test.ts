@@ -58,6 +58,9 @@ function fakeWallet(
     },
     async signMessages(params) {
       calls.push({ method: "signMessages", params });
+      // MWA declares each address base64 (Base64EncodedAddress, in the protocol's lib/types).
+      if (params.addresses.some((a) => a !== key.toString("base64")))
+        throw new Error("an address that is not the key in base64");
       const message = Buffer.from(params.payloads[0] ?? "", "base64");
       let signature = sign(null, message, privateKey);
       if (opts.tamper === "signature")
@@ -134,11 +137,12 @@ test("sign authorizes again with the account's token in a second session and sig
   assert.equal(w.sessions(), 2);
 });
 
-test("a wallet-standard account given in base58 works the same", async () => {
+test("a wallet-standard account given in base58 works the same, and is asked to sign by its base64 address", async () => {
   const w = fakeWallet({ base58: true });
   const signer = signerFor(w);
   const account = await signer.connect();
   assert.equal(account.wallet, encodeBase58(w.key));
+  assert.equal(account.address, w.key.toString("base64"));
   assert.equal(
     ed25519Verify(w.key, MESSAGE, await signer.sign(account, MESSAGE)),
     true,

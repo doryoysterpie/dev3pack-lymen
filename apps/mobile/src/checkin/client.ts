@@ -27,6 +27,7 @@ export type CheckinResult =
 /** What the participant reads for each refusal the backend can give. */
 export const CHECKIN_MESSAGES: Readonly<Record<string, string>> = {
   already_checked_in: "You have already checked in to this session.",
+  pass_revoked: "The pass for this check-in was revoked.",
   station_qr_expired: "This station QR has expired. Scan the screen again.",
   station_qr_invalid: "This station QR did not pass the check.",
   unknown_station: "The server does not know this station.",

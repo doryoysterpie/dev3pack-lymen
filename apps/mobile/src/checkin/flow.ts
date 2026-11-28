@@ -21,7 +21,7 @@ export interface WalletAccount {
   readonly wallet: string;
   /** Its 32-byte Ed25519 public key. */
   readonly key: Uint8Array;
-  /** The address as the wallet named it (base64 from MWA), for asking it to sign. */
+  /** The account's key in base64, the address form MWA declares, for asking it to sign. */
   readonly address: string;
   /** The wallet's authorization token, so the signing session can authorize as this account again. */
   readonly authToken: string;

@@ -107,7 +107,9 @@ export function mwaSigner(
         return {
           wallet: named.base58,
           key: named.key,
-          address: account.address,
+          // MWA declares an address base64 (Base64EncodedAddress), whichever spelling the wallet
+          // gave, so the account is named to it by its key in base64.
+          address: encodeBase64(named.key),
           authToken: auth.auth_token,
         };
       }),
@@ -125,7 +127,7 @@ export function mwaSigner(
           );
         }
         const { signed_payloads } = await wallet.signMessages({
-          addresses: [account.address],
+          addresses: [encodeBase64(account.key)],
           payloads: [encodeBase64(message)],
         });
         if (

@@ -102,6 +102,22 @@ test("after mint_failed the participant reads that the pass may already be in th
   );
 });
 
+test("a check-in whose pass was revoked reads as revoked, not as a server failure", async () => {
+  // E-05's backend answers 409 pass_revoked once a pass issued for the check-in has been burned.
+  assert.deepEqual(
+    await postCheckin(
+      answering(409, { error: "pass_revoked" }).fn,
+      "http://api",
+      REQ,
+    ),
+    {
+      ok: false,
+      error: "pass_revoked",
+      message: "The pass for this check-in was revoked.",
+    },
+  );
+});
+
 test("each refusal the backend gives becomes its sentence", async () => {
   for (const [error, status] of [
     ["already_checked_in", 409],
