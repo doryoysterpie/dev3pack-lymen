@@ -1,32 +1,31 @@
 // Station display link (E-03): writes the station page's address, with that station's own
-// display token in the fragment, to a file the operator names, and prints only where it wrote
-// it, never the token (rule 8). Open the address in the station's browser.
+// display token in the fragment, to ~/limen-station-links/<station ID>.url, and prints only where
+// it wrote it, never the token (rule 8). Open the address in the station's browser.
 //
-// The file must be outside the repository, so it never sits where a server or a commit could pick
-// it up. The check resolves symlinks with the operating system's own realpath, compares without
-// letter case on macOS, whose default file system ignores it, and refuses a path that runs
-// through a symlink that does not resolve. The file is created new, never written into an
-// existing one or through a symlink, readable by its owner only.
+//   npm run station-link -w @limen/api -- <station ID>
 //
-//   npm run station-link -w @limen/api -- <station ID> <output file>
+// The tool takes no output path. It writes only into ~/limen-station-links, which it makes at
+// mode 700 if missing, and refuses when that folder is a symlink, not a directory, owned by
+// another user, or writable by group or others. The file name is the station ID, which must be
+// 1 to 64 characters of [A-Za-z0-9_-], and ".url". The file is created new, at mode 600, never
+// written into an existing file or through a symlink.
+//
+// Node has no openat, so the file is opened by path, not relative to the open folder. The tool
+// opens the folder without following a symlink and checks what it opened; after creating the
+// file, and before writing the token, it checks that the folder's path still names that folder
+// and the file's path still names the file it created. If either has changed, it writes nothing.
 import {
   closeSync,
   constants,
+  fstatSync,
   lstatSync,
   mkdirSync,
   openSync,
-  realpathSync,
   writeSync,
+  type Stats,
 } from "node:fs";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-} from "node:path";
-import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import { isMainModule } from "./main-module.ts";
 import {
@@ -36,57 +35,13 @@ import {
 
 /** The station page as `npm run dev -w @limen/station` serves it. */
 export const STATION_PAGE_URL = "http://127.0.0.1:5173/";
+/** The one folder, in the home folder, the tool writes link files into. */
+export const LINK_FOLDER = "limen-station-links";
 
 const STATION_ID = /^[A-Za-z0-9_-]{1,64}$/;
-const REPOSITORY = realpathSync.native(
-  fileURLToPath(new URL("../../../", import.meta.url)),
-);
-const INSIDE_REPOSITORY =
-  "the link file must be outside the repository, where the station page's dev server cannot serve it.";
-const DANGLING_LINK =
-  "the link file's path holds a symlink that does not resolve; name a path without one.";
-const EXISTS = "the link file already exists; remove it or name another file.";
-// macOS's default file system (APFS) does not tell letter cases apart.
-const IGNORES_CASE = process.platform === "darwin";
-
-/** Whether anything, a symlink included, sits at `path`. existsSync follows symlinks. */
-function lexists(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * `path` with symlinks resolved, for a path whose last parts may not exist yet. Throws when the
- * deepest part that exists is a symlink that does not resolve.
- */
-function realPathOf(path: string): string {
-  let existing = path;
-  const rest: string[] = [];
-  while (!lexists(existing)) {
-    rest.unshift(basename(existing));
-    existing = dirname(existing);
-  }
-  let real: string;
-  try {
-    real = realpathSync.native(existing);
-  } catch {
-    throw new Error(DANGLING_LINK);
-  }
-  return join(real, ...rest);
-}
-
-/** Whether `path` lies inside the repository, symlinks resolved. */
-export function insideRepository(path: string): boolean {
-  const fold = (p: string) => (IGNORES_CASE ? p.toLowerCase() : p);
-  const from = relative(fold(REPOSITORY), fold(realPathOf(resolve(path))));
-  return from === "" || (!from.startsWith("..") && !isAbsolute(from));
-}
-const USAGE =
-  "usage: npm run station-link -w @limen/api -- <station ID> <output file>";
+const USAGE = "usage: npm run station-link -w @limen/api -- <station ID>";
+const EXISTS =
+  "the link file already exists; remove it and run the tool again.";
 
 /** The station page's address for `station`, with its display token in the fragment. */
 export function stationLink(
@@ -100,47 +55,95 @@ export function stationLink(
   return url.href;
 }
 
-/** Writes the link to `args[1]`, readable by its owner only, and returns what to print. */
+/** Refuses a link folder that is not a plain directory, owned by `uid`, writable by it only. */
+function checkFolder(folder: string, stats: Stats, uid: number): void {
+  const why = stats.isSymbolicLink()
+    ? "a symlink"
+    : !stats.isDirectory()
+      ? "not a directory"
+      : stats.uid !== uid
+        ? "owned by another user"
+        : (stats.mode & 0o022) !== 0
+          ? "writable by group or others"
+          : null;
+  if (why !== null)
+    throw new Error(
+      `${folder} must be a directory owned by you and writable by you only; it is ${why}.`,
+    );
+}
+
+/**
+ * Writes the link for `args[0]` into ~/limen-station-links and returns what to print. `home` and
+ * `uid` default to the user's own; tests pass others.
+ */
 export function writeStationLink(
   env: NodeJS.ProcessEnv,
   args: readonly string[],
+  options: { readonly home?: string; readonly uid?: number } = {},
 ): string {
-  const [station, out] = args;
-  if (station === undefined || !STATION_ID.test(station) || !out)
+  const station = args[0];
+  if (args.length !== 1 || station === undefined || !STATION_ID.test(station))
     throw new Error(USAGE);
   const secret = parseStationDisplaySecret(env.STATION_DISPLAY_TOKEN);
-  const path = resolve(out);
-  if (insideRepository(path)) throw new Error(INSIDE_REPOSITORY);
-  mkdirSync(dirname(path), { recursive: true });
-  // A new file only: never an existing one, which may be readable by others, nor a symlink.
-  let fd: number;
+  const uid = options.uid ?? process.getuid?.() ?? 0;
+  const folder = join(options.home ?? homedir(), LINK_FOLDER);
   try {
-    fd = openSync(
-      path,
-      constants.O_CREAT |
-        constants.O_EXCL |
-        constants.O_WRONLY |
-        constants.O_NOFOLLOW,
-      0o600,
-    );
+    mkdirSync(folder, { mode: 0o700 });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST")
-      throw new Error(EXISTS, { cause: err });
-    throw err;
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
   }
+  checkFolder(folder, lstatSync(folder), uid);
+  const folderFd = openSync(
+    folder,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
   try {
-    writeSync(fd, `${stationLink(secret, station)}\n`);
+    const opened = fstatSync(folderFd);
+    checkFolder(folder, opened, uid);
+    const path = join(folder, `${station}.url`);
+    let fd: number;
+    try {
+      fd = openSync(
+        path,
+        constants.O_CREAT |
+          constants.O_EXCL |
+          constants.O_WRONLY |
+          constants.O_NOFOLLOW,
+        0o600,
+      );
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST")
+        throw new Error(EXISTS, { cause: err });
+      throw err;
+    }
+    try {
+      const now = lstatSync(folder);
+      const created = fstatSync(fd);
+      const named = lstatSync(path);
+      if (
+        now.dev !== opened.dev ||
+        now.ino !== opened.ino ||
+        named.dev !== created.dev ||
+        named.ino !== created.ino
+      )
+        throw new Error(
+          `${folder} changed while the link was being written; nothing was written.`,
+        );
+      writeSync(fd, `${stationLink(secret, station)}\n`);
+    } finally {
+      closeSync(fd);
+    }
+    return `Wrote the display link for station ${station} to ${path}.`;
   } finally {
-    closeSync(fd);
+    closeSync(folderFd);
   }
-  return `Wrote the display link for station ${station} to ${path}.`;
 }
 
 if (isMainModule(import.meta.url)) {
   try {
     console.log(writeStationLink(process.env, process.argv.slice(2)));
   } catch (err) {
-    // The messages name the variable or the usage, never the secret or a token.
+    // The messages name the variable, the folder or the usage, never the secret or a token.
     console.error(
       `station-link: ${err instanceof Error ? err.message : String(err)}`,
     );
