@@ -129,42 +129,20 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
   };
 }
 
-/**
- * The value of `name` in an address fragment such as "#token=abc&x=1". Percent escapes are
- * decoded, but "+" stays "+", since the fragment is not form data. The display token itself is
- * a base64url HMAC (services/api/src/station-token.ts), with no "+", "/" or "=", so neither
- * rule changes it.
- */
-export function fragmentParam(hash: string, name: string): string | null {
-  for (const part of hash.replace(/^#/, "").split("&")) {
-    const eq = part.indexOf("=");
-    if ((eq === -1 ? part : part.slice(0, eq)) !== name) continue;
-    const raw = eq === -1 ? "" : part.slice(eq + 1);
-    try {
-      return decodeURIComponent(raw);
-    } catch {
-      return raw;
-    }
-  }
-  return null;
-}
-
-/** Reads the station ID from ?station= and the display token from #token= in the page URL. */
-export function readStationConfig(
-  href: string,
-): { station: string; token: string } | { error: string } {
-  const url = new URL(href);
-  const station = url.searchParams.get("station") ?? "";
-  const token = fragmentParam(url.hash, "token") ?? "";
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(station)) {
-    return { error: "Add ?station=<station ID> to the page address." };
-  }
-  if (token === "")
-    return { error: "Add #token=<display token> to the page address." };
-  return { station, token };
-}
-
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * Reads the station ID from ?station= in the page URL. The display token is not in the URL: the
+ * page asks for it (main.ts).
+ */
+export function readStationId(
+  href: string,
+): { station: string } | { error: string } {
+  const station = new URL(href).searchParams.get("station") ?? "";
+  if (!ID.test(station))
+    return { error: "Add ?station=<station ID> to the page address." };
+  return { station };
+}
 
 /**
  * The signed payload inside a station QR's text, or null when the text is not a station QR.

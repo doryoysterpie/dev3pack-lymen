@@ -1,21 +1,6 @@
 <!doctype html>
 <html lang="en-CA">
   <head>
-    <script>
-      // E-03: the first element in <head> (in development, Vite puts its client module first).
-      // It keeps the address, display token included, in window.limenStationAddress for the page
-      // module, and removes the token from the address bar and the current history entry.
-      (function () {
-        var href = window.location.href;
-        Object.defineProperty(window, "limenStationAddress", {
-          value: href,
-          configurable: true,
-        });
-        var bare = new URL(href);
-        bare.hash = "";
-        window.history.replaceState(null, "", bare.href);
-      })();
-    </script>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>limen station</title>
@@ -58,6 +43,15 @@
       #problem {
         color: var(--alert);
       }
+      #token-prompt label {
+        display: block;
+        margin-bottom: 8px;
+      }
+      #token-prompt input,
+      #token-prompt button {
+        font: inherit;
+        padding: 8px 12px;
+      }
     </style>
   </head>
   <body>
@@ -66,6 +60,19 @@
       <canvas id="qr" hidden></canvas>
       <p id="caption"></p>
       <p id="problem" role="alert" hidden></p>
+      <!-- Not a form: nothing here is submitted to a URL. main.ts reads the field and keeps
+           the token in memory. -->
+      <div id="token-prompt" hidden>
+        <label for="token">Paste this station's display token.</label>
+        <input
+          id="token"
+          type="password"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+        />
+        <button id="token-start" type="button">Show the QR</button>
+      </div>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
