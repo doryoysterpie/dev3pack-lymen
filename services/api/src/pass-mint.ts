@@ -56,8 +56,26 @@ export interface PassDetails {
   readonly checkedInAt: number;
 }
 
-/** The additional metadata fields a pass carries, in the order they are written. */
+/**
+ * The most bytes of UTF-8 a station or session ID may take. The mint transaction is 820 bytes
+ * with both IDs empty and grows by one byte for each byte of either, so at this limit it is 948
+ * bytes, 284 under Solana's 1232-byte limit; at 206 bytes each it would be too large to send.
+ */
+export const MAX_PASS_ID_BYTES = 64;
+
+/**
+ * The additional metadata fields a pass carries, in the order they are written. A station or
+ * session ID over MAX_PASS_ID_BYTES is refused here, so no transaction is built for it.
+ */
 export function passFields(details: PassDetails): [string, string][] {
+  for (const field of ["station", "session"] as const) {
+    const bytes = Buffer.byteLength(details[field], "utf8");
+    if (bytes > MAX_PASS_ID_BYTES) {
+      throw new Error(
+        `${field} is ${bytes} bytes of UTF-8; a pass allows at most ${MAX_PASS_ID_BYTES}`,
+      );
+    }
+  }
   return [
     ["station", details.station],
     ["session", details.session],
@@ -228,7 +246,8 @@ export async function connectDevnet(
 
 /**
  * Mints one pass to `holder` on devnet. Returns the new mint, the holder's token account and the
- * signature. A connection to any other cluster is refused before anything is sent.
+ * signature. Over-long details are refused before the cluster is asked anything, and a connection
+ * to any other cluster is refused before anything is sent.
  */
 export async function mintPass(
   connection: Connection,
@@ -236,11 +255,10 @@ export async function mintPass(
   holder: PublicKey,
   details: PassDetails,
 ): Promise<{ mint: PublicKey; tokenAccount: PublicKey; signature: string }> {
+  const space = passAccountLen(details);
   await requireDevnet(connection);
   const mint = Keypair.generate();
-  const lamports = await connection.getMinimumBalanceForRentExemption(
-    passAccountLen(details),
-  );
+  const lamports = await connection.getMinimumBalanceForRentExemption(space);
   const tx = buildPassMintTransaction({
     organizer: organizer.publicKey,
     mint: mint.publicKey,

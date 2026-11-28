@@ -192,6 +192,33 @@ test("a pass with 64-character station and session IDs still fits in one transac
   );
 });
 
+test("station and session IDs over 64 bytes of UTF-8 are refused, before anything is sent", async () => {
+  // At the limit, in ASCII and in two-byte characters, the pass builds and fits.
+  for (const id of ["s".repeat(64), "é".repeat(32)]) {
+    const tx = build({ station: id, session: id, checkedInAt: 1_795_811_665 });
+    tx.recentBlockhash = Keypair.generate().publicKey.toBase58();
+    tx.sign(organizer, mint);
+    assert.ok(tx.serialize().length <= 1232);
+  }
+  // One byte over, in either field, is refused with the field named.
+  assert.throws(() => passFields({ ...DETAILS, station: "s".repeat(65) }), {
+    message: "station is 65 bytes of UTF-8; a pass allows at most 64",
+  });
+  assert.throws(() => build({ ...DETAILS, session: "é".repeat(32) + "t" }), {
+    message: "session is 65 bytes of UTF-8; a pass allows at most 64",
+  });
+  // mintPass refuses before it asks the cluster anything.
+  const devnet = recordingConnection(DEVNET_GENESIS_HASH);
+  await assert.rejects(
+    mintPass(devnet.connection, organizer, holder, {
+      ...DETAILS,
+      session: "t".repeat(65),
+    }),
+    { message: "session is 65 bytes of UTF-8; a pass allows at most 64" },
+  );
+  assert.deepEqual(devnet.calls, []);
+});
+
 test("the revoke transaction burns the holder's one token with the organizer as signer", () => {
   const tx = buildRevokeTransaction({
     organizer: organizer.publicKey,
