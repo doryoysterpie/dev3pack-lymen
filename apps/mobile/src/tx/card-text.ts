@@ -60,6 +60,9 @@ function samePlace(a: Place, b: Place): boolean {
   return false;
 }
 
+const programName = (program: "token" | "token-2022"): string =>
+  program === "token" ? "the Token program" : "Token-2022";
+
 function tokenAmount(amount: string, decimals: number | null): string {
   if (amount === U64_MAX) return "the largest possible amount";
   return decimals === null
@@ -118,7 +121,7 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
       if (samePlace(effect.source, effect.destination)) {
         return {
           label: "Moves no tokens",
-          value: `A transfer of ${tokenAmount(effect.amount, effect.decimals)} from token account ${where(effect.source)} to itself, which ${effect.program === "token" ? "the Token program" : "Token-2022"} accepts without moving any.`,
+          value: `A transfer of ${tokenAmount(effect.amount, effect.decimals)} from token account ${where(effect.source)} to itself, which ${programName(effect.program)} accepts without moving any.`,
         };
       }
       return {
@@ -150,16 +153,41 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
         value: `From token account ${where(effect.account)}. Your wallet signs as the authority the instruction names.`,
       };
     case "authority-changed": {
+      // A token account always has an owner: both programs refuse to remove
+      // it (solana-program/token 38de8d1, program/src/processor.rs:449 to
+      // 453; token-2022 efe55b4, :786 to :794).
+      if (
+        effect.authorityType === "AccountOwner" &&
+        effect.newAuthority === null
+      ) {
+        return {
+          label: "Refused by the token program",
+          value: `It asks to remove the owner of token account ${where(effect.account)}, which ${programName(effect.program)} refuses, so the transaction would fail.`,
+        };
+      }
       const what = AUTHORITY[effect.authorityType] ?? effect.authorityType;
+      // The wallet signs as the current authority, so setting it to the
+      // wallet moves nothing.
       return {
         label: "Changes an authority",
         value:
           effect.newAuthority === null
             ? `${what} of ${where(effect.account)} is removed.`
-            : `${what} of ${where(effect.account)} moves to ${shown(effect.newAuthority)}.`,
+            : effect.newAuthority === USER_MARKER
+              ? `${what} of ${where(effect.account)} is set to your wallet.`
+              : `${what} of ${where(effect.account)} moves to ${shown(effect.newAuthority)}.`,
       };
     }
     case "account-closed":
+      // Both programs refuse to close an account into itself
+      // (solana-program/token 38de8d1, program/src/processor.rs:677 to 679;
+      // token-2022 efe55b4, :1351).
+      if (samePlace(effect.account, effect.destination)) {
+        return {
+          label: "Refused by the token program",
+          value: `It asks to close token account ${where(effect.account)} and send its SOL to that same account, which ${programName(effect.program)} refuses, so the transaction would fail.`,
+        };
+      }
       return {
         label: "Closes a token account",
         value: `Closes ${where(effect.account)} and sends its SOL to ${where(effect.destination)}.`,
@@ -212,7 +240,10 @@ function otherText(kind: TransactionSummary["others"][number]["kind"]): string {
     case "advance-nonce":
       return "Advances a durable nonce.";
     default:
-      return "An instruction your wallet does not authorize.";
+      // The summary keeps an instruction here when it names the wallet
+      // neither as its payer nor as its authority; a multisig the wallet
+      // signs for is still such an authority (summary.ts, authorizedByUser).
+      return "An instruction that does not name your wallet as its payer or authority. Your wallet's signature may still count toward it, for example as one signer of a multisig.";
   }
 }
 

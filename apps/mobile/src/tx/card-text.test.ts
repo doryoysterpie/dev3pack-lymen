@@ -877,6 +877,84 @@ describe("the owner's audit: what the card claims", () => {
     ]);
   });
 
+  it("hunt: a row the token program always refuses says it would fail", async () => {
+    const rows = await rowsFor([
+      {
+        kind: "authority-changed" as const,
+        instruction: 0,
+        program: "token" as const,
+        account: { address: userTokenAccount },
+        authorityType: "AccountOwner",
+        newAuthority: null,
+      },
+      {
+        kind: "account-closed" as const,
+        instruction: 1,
+        program: "token-2022" as const,
+        account: { address: userTokenAccount },
+        destination: { address: userTokenAccount },
+      },
+    ]);
+    assert.deepEqual(rows.slice(1, 3), [
+      {
+        label: "Refused by the token program",
+        value: `It asks to remove the owner of token account ${userTokenAccount}, which the Token program refuses, so the transaction would fail.`,
+      },
+      {
+        label: "Refused by the token program",
+        value: `It asks to close token account ${userTokenAccount} and send its SOL to that same account, which Token-2022 refuses, so the transaction would fail.`,
+      },
+    ]);
+  });
+
+  it("hunt: an authority set to the wallet is not said to move", async () => {
+    const rows = await rowsFor([
+      {
+        kind: "authority-changed" as const,
+        instruction: 0,
+        program: "token" as const,
+        account: { address: userTokenAccount },
+        authorityType: "AccountOwner",
+        newAuthority: "user",
+      },
+      {
+        kind: "authority-changed" as const,
+        instruction: 1,
+        program: "token" as const,
+        account: { address: fixture.keys.mint },
+        authorityType: "MintTokens",
+        newAuthority: attacker,
+      },
+    ]);
+    assert.deepEqual(rows.slice(1, 3), [
+      {
+        label: "Changes an authority",
+        value: `Ownership of ${userTokenAccount} is set to your wallet.`,
+      },
+      {
+        label: "Changes an authority",
+        value: `The mint authority of ${fixture.keys.mint} moves to ${attacker}.`,
+      },
+    ]);
+  });
+
+  it("hunt: an instruction with no effect is not said to go unauthorized by the wallet", async () => {
+    const result = await drainerOffline();
+    const card = transactionCardText(LINK, null, {
+      ...result,
+      summary: {
+        ...result.summary,
+        effects: [],
+        others: [{ instruction: 0, kind: "token-transfer" as const }],
+      },
+    });
+    assert.deepEqual(card.rows[1], {
+      label: "Also in the transaction",
+      value:
+        "An instruction that does not name your wallet as its payer or authority. Your wallet's signature may still count toward it, for example as one signer of a multisig.",
+    });
+  });
+
   it("13: the burn, revoke and create rows claim only what the instruction proves", async () => {
     const rows = await rowsFor([
       {
