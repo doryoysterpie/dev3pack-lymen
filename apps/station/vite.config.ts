@@ -1,7 +1,7 @@
 // Vite config for the station display (E-03). The dev and preview servers forward /api to the
 // limen API at STATION_API_URL, or http://127.0.0.1:8787. What they serve (src/dev-server.test.ts):
-// - dev: in apps/station, index.html, the .ts and .css files under src, and Vite's dependency
-//   cache; any other file there gets 403 (onlySourceFiles);
+// - dev: the page's import graph, from index.html's module scripts; anything else outside /api
+//   gets 403 (importGraphOnly);
 // - preview: / and the files Vite's manifest names (manifestFiles);
 // - both: 403 by name, outside /api, for keys, keypair files, databases, .env files and the
 //   node_modules/@limen links (refuseSecretPaths), and no CORS header;
@@ -9,10 +9,10 @@
 //   name (checkBuildOutput).
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readdirSync, readFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { defineConfig, loadEnv, type Plugin } from "vite";
+import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from "vite";
 
 /** The deny list's kinds of file, as patterns on a request's decoded path. */
 const SECRET_PATHS = [
@@ -60,7 +60,7 @@ function refuseSecretPaths(): Plugin {
     name: "limen-refuse-secret-paths",
     configureServer(server) {
       server.middlewares.use(guard);
-      server.middlewares.use(onlySourceFiles);
+      server.middlewares.use(importGraphOnly(server));
     },
     configurePreviewServer(server) {
       server.middlewares.use(guard);
@@ -88,42 +88,39 @@ function refuseSecretPaths(): Plugin {
 }
 
 /**
- * In the station folder, the dev server answers for the page's source files alone: index.html,
- * .ts and .css files under src, and Vite's dependency cache. A request that names any other file
- * there, by its path or by /@fs/, gets 403. Vite's own paths (/@vite/, /@id/) pass through.
+ * The dev server answers for the page's import graph alone: /, index.html, the module scripts
+ * index.html names, Vite's client, and each URL the module graph holds as imported by a module
+ * already served. Any other request outside /api gets 403, by path, query or /@fs/.
  */
-function onlySourceFiles(
-  req: IncomingMessage,
-  res: ServerResponse,
-  next: () => void,
-): void {
-  let path: string;
-  try {
-    path = decodeURIComponent(
-      new URL(req.url ?? "/", "http://station.invalid").pathname,
+function importGraphOnly(server: ViteDevServer) {
+  const html = readFileSync(join(appRoot, "index.html"), "utf8");
+  const entries = new Set(
+    [...html.matchAll(/<script type="module" src="([^"]+)"/g)].map((m) => m[1]),
+  );
+  const graph = server.environments.client.moduleGraph;
+  return (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+    const url = req.url ?? "/";
+    const path = url.split("?")[0]!;
+    if (path === "/api" || path.startsWith("/api/")) return next();
+    if (
+      url === "/" ||
+      url === "/index.html" ||
+      url === "/@vite/client" ||
+      entries.has(url)
+    )
+      return next();
+    graph.getModuleByUrl(url).then(
+      (mod) => {
+        if (mod !== undefined && mod.importers.size > 0) return next();
+        res.statusCode = 403;
+        res.end("Forbidden");
+      },
+      () => {
+        res.statusCode = 403;
+        res.end("Forbidden");
+      },
     );
-  } catch {
-    res.statusCode = 400;
-    res.end();
-    return;
-  }
-  if (path === "/api" || path.startsWith("/api/")) return next();
-  if (path.startsWith("/@") && !path.startsWith("/@fs/")) return next();
-  const file = path.startsWith("/@fs/")
-    ? path.slice("/@fs".length)
-    : join(appRoot, path);
-  const rel = relative(appRoot, file);
-  const inStation = rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-  if (
-    !inStation ||
-    rel === "" ||
-    rel === "index.html" ||
-    /^src\/.+\.(ts|css)$/.test(rel) ||
-    /^node_modules\/\.vite\/deps\/[^/]+\.js$/.test(rel)
-  )
-    return next();
-  res.statusCode = 403;
-  res.end("Forbidden");
+  };
 }
 
 const MANIFEST = ".vite/manifest.json";
