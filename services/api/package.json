@@ -10,6 +10,7 @@
     "check:devnet": "node --env-file-if-exists=../../.env --test --test-concurrency=1 \"src/devnet/*.check.ts\""
   },
   "dependencies": {
+    "@limen/preflight": "0.0.0",
     "@solana/spl-token": "0.4.15",
     "@solana/web3.js": "1.98.4"
   },

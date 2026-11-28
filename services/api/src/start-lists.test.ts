@@ -9,6 +9,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -91,6 +92,10 @@ test("without the domain list file the API starts, /health answers, and the tria
   for (const part of ["src", "dashboard", "package.json"]) {
     cpSync(join(SERVICE, part), join(service, part), { recursive: true });
   }
+  symlinkSync(
+    join(SERVICE, "..", "..", "node_modules"),
+    join(dir, "node_modules"),
+  );
   const keyPath = join(dir, "organizer.json");
   writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
   const { child, url, stderr } = await startApi(

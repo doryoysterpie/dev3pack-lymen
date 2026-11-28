@@ -10,6 +10,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import type { Server } from "node:http";
@@ -361,10 +362,15 @@ test("with the flag on and no domain lists, the API still starts, serves /health
   // real path, since the temporary directory can sit behind a symlink (as /var does on macOS).
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "limen-e13-no-lists-")));
   const api = join(dir, "services", "api");
-  cpSync(fileURLToPath(new URL("..", import.meta.url)), api, {
+  const service = fileURLToPath(new URL("..", import.meta.url));
+  cpSync(service, api, {
     recursive: true,
     filter: (src) => !src.includes(`${sep}node_modules`),
   });
+  symlinkSync(
+    join(service, "..", "..", "node_modules"),
+    join(dir, "node_modules"),
+  );
   assert.equal(existsSync(join(dir, "fixtures")), false);
   const keyPath = join(dir, "organizer.json");
   writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
