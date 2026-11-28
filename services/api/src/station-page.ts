@@ -30,10 +30,8 @@ const DOCTYPE_BYTES = Buffer.from(STATION_PAGE_DOCTYPE, "utf8");
 const MARKER_BYTES = Buffer.from(STATION_PAGE_MARKER, "utf8");
 
 /**
- * Checks a station page by content so arbitrary files (including hard links to `.env` or a
- * keypair) cannot be served at `/station`. Throws unless `bytes` is at most
- * `MAX_STATION_PAGE_BYTES`, starts with `STATION_PAGE_DOCTYPE`, contains `STATION_PAGE_MARKER`,
- * and has zero key-scan hits.
+ * Checks a station page by content. Throws unless `bytes` is at most `MAX_STATION_PAGE_BYTES`,
+ * starts with `STATION_PAGE_DOCTYPE`, contains `STATION_PAGE_MARKER`, and has zero key-scan hits.
  */
 export function assertStationPage(
   bytes: Buffer,
@@ -50,10 +48,15 @@ export function assertStationPage(
     throw new Error(`${label} holds private-key material (${hits.join(", ")})`);
 }
 
-/** Reads at most `maxBytes` from `fd`, refusing files over the limit before or during the read. */
+/**
+ * Reads at most `maxBytes` from `fd`, refusing non-regular files, files whose link count is not 1,
+ * and files over the size limit before or during the read.
+ */
 function readBounded(fd: number, maxBytes: number, label: string): Buffer {
   const opened = fstatSync(fd);
   if (!opened.isFile()) throw new Error(`${label} is not a regular file`);
+  if (opened.nlink !== 1)
+    throw new Error(`${label} has link count ${opened.nlink}, expected 1`);
   if (opened.size > maxBytes)
     throw new Error(`${label} is larger than ${maxBytes} bytes`);
   const chunks: Buffer[] = [];
@@ -67,13 +70,16 @@ function readBounded(fd: number, maxBytes: number, label: string): Buffer {
       throw new Error(`${label} is larger than ${maxBytes} bytes`);
     chunks.push(Buffer.from(buf.subarray(0, n)));
   }
+  const after = fstatSync(fd);
+  if (after.nlink !== 1)
+    throw new Error(`${label} has link count ${after.nlink}, expected 1`);
   return Buffer.concat(chunks, total);
 }
 
 /**
  * The page's bytes, or null when no file is at `path`. Throws when `path` or a folder above it is
- * a symlink, when it is not a regular file, when it cannot be looked at, or when its content fails
- * `assertStationPage`.
+ * a symlink, when the opened file is not a regular file with link count 1, when it cannot be
+ * looked at, or when its content fails `assertStationPage`.
  */
 export function loadStationPage(path: string): Buffer | null {
   const label = `the station page at ${path}`;

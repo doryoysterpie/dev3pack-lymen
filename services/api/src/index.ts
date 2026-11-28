@@ -49,7 +49,7 @@ export async function start(
   const chainabuse = parseChainabuseMode(env.CHAINABUSE_POST);
   const port = parsePort(env.API_PORT);
   const host = env.API_HOST || "127.0.0.1";
-  // Read once, here: a symlink or anything but a regular file stops start-up. With no page built,
+  // Read once, here: a symlink, a link count other than 1, or anything but a regular file stops start-up. With no page built,
   // /station answers 503 with the build command.
   const stationPage = loadStationPage(stationPagePath);
   const db = openDatabase(env.DATABASE_PATH || "limen.db");

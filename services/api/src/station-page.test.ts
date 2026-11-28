@@ -23,6 +23,7 @@ import { openDatabase } from "./db.ts";
 import { start } from "./index.ts";
 import { createApiServer } from "./server.ts";
 import {
+  assertStationPage,
   loadStationPage,
   MAX_STATION_PAGE_BYTES,
   STATION_PAGE_DOCTYPE,
@@ -245,14 +246,126 @@ test("start-up stops on a symlinked station page, before it opens the database o
   }
 });
 
-test("hard links to a fake .env or fake keypair file are refused by content, and stop start-up before the database opens", async () => {
+test("a built station page hard-linked to .env with a generated secret appended passes content checks alone, but is refused by link count before the database opens", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "limen-station-page-")));
+  const outDir = join(dir, "dist");
+  try {
+    const built = spawnSync(
+      process.execPath,
+      [STATION_BUILD, "--outDir", outDir],
+      {
+        encoding: "utf8",
+        env: { PATH: process.env.PATH ?? "" },
+        timeout: 120_000,
+      },
+    );
+    assert.equal(built.status, 0, `build: ${built.stderr.slice(-600)}`);
+    const pagePath = join(outDir, "index.html");
+    const envPath = join(dir, ".env");
+    linkSync(pagePath, envPath);
+
+    const exampleLines = readFileSync(
+      new URL("../../../.env.example", import.meta.url),
+      "utf8",
+    ).split("\n");
+    const tokenLine = exampleLines.indexOf("STATION_DISPLAY_TOKEN=");
+    assert.ok(tokenLine > 0, ".env.example documents STATION_DISPLAY_TOKEN");
+    const setupCommand = exampleLines[tokenLine - 1]!.replace(
+      /^#?\s*/,
+      "",
+    ).trimEnd();
+
+    const appended = spawnSync("sh", ["-c", setupCommand], {
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? "" },
+      encoding: "utf8",
+    });
+    assert.deepEqual(
+      {
+        status: appended.status,
+        stdout: appended.stdout,
+        stderr: appended.stderr,
+      },
+      { status: 0, stdout: "", stderr: "" },
+    );
+
+    const sharedBytes = readFileSync(pagePath);
+    const match = /^STATION_DISPLAY_TOKEN=(.+)$/m.exec(
+      sharedBytes.toString("utf8"),
+    );
+    const generatedSecret = match?.[1] ?? "";
+    assert.ok(
+      generatedSecret.length >= 32,
+      "the documented command appended a secret to the shared inode",
+    );
+    // Content checks alone still pass: exact doctype, build marker, <= 256 KiB, 0 key-scan hits.
+    assert.doesNotThrow(() => assertStationPage(sharedBytes));
+
+    const fakeKey = join(dir, "organizer.json");
+    writeFileSync(
+      fakeKey,
+      JSON.stringify([
+        ...Buffer.from(
+          "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60" +
+            "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+          "hex",
+        ),
+      ]),
+    );
+    const probe = createNetServer();
+    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const port = (probe.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+    const dbPath = join(dir, "limen.db");
+    await assert.rejects(
+      start(
+        {
+          ORGANIZER_KEYPAIR_PATH: fakeKey,
+          STATION_DISPLAY_TOKEN: generatedSecret,
+          API_PORT: String(port),
+          DATABASE_PATH: dbPath,
+        },
+        pagePath,
+      ).then(async ({ server }) => {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, /link count 2/);
+        assert.ok(
+          !err.message.includes(generatedSecret),
+          "start-up error never echoes the secret",
+        );
+        return true;
+      },
+    );
+    assert.ok(!existsSync(dbPath), "refused before the database opens");
+
+    assert.throws(
+      () => loadStationPage(pagePath),
+      (err: unknown) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, /link count 2/);
+        assert.ok(
+          !err.message.includes(generatedSecret),
+          "error never echoes the secret",
+        );
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("hard links or copies of a fake .env or fake keypair file are refused, and stop start-up before the database opens", async () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "limen-station-page-")));
   try {
     const fakeEnv = join(dir, ".env");
-    writeFileSync(
-      fakeEnv,
-      "ORGANIZER_KEYPAIR_PATH=/tmp/fake.json\nSTATION_DISPLAY_TOKEN=fake-env-token-0123456789abcdefghij\n",
-    );
+    const envContent =
+      "ORGANIZER_KEYPAIR_PATH=/tmp/fake.json\nSTATION_DISPLAY_TOKEN=fake-env-token-0123456789abcdefghij\n";
+    writeFileSync(fakeEnv, envContent);
     const fakeKey = join(dir, "organizer.json");
     const keypairJson = JSON.stringify([
       ...Buffer.from(
@@ -267,18 +380,26 @@ test("hard links to a fake .env or fake keypair file are refused by content, and
     linkSync(fakeEnv, envHardLink);
     const keyHardLink = join(dir, "key-index.html");
     linkSync(fakeKey, keyHardLink);
+    const envCopy = join(dir, "env-copy.html");
+    writeFileSync(envCopy, envContent);
+    const keyCopy = join(dir, "key-copy.html");
+    writeFileSync(keyCopy, keypairJson);
 
-    assert.throws(() => loadStationPage(envHardLink), /doctype/);
-    assert.throws(() => loadStationPage(keyHardLink), /doctype/);
+    assert.throws(() => loadStationPage(envHardLink), /link count 2/);
+    assert.throws(() => loadStationPage(keyHardLink), /link count 2/);
+    assert.throws(() => loadStationPage(envCopy), /doctype/);
+    assert.throws(() => loadStationPage(keyCopy), /doctype/);
 
     const probe = createNetServer();
     await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
     const port = (probe.address() as AddressInfo).port;
     await new Promise<void>((resolve) => probe.close(() => resolve()));
 
-    for (const [label, link] of [
-      ["fake .env hard link", envHardLink],
-      ["fake keypair hard link", keyHardLink],
+    for (const [label, candidate, pattern] of [
+      ["fake .env hard link", envHardLink, /link count 2/],
+      ["fake keypair hard link", keyHardLink, /link count 2/],
+      ["fake .env copy", envCopy, /doctype/],
+      ["fake keypair copy", keyCopy, /doctype/],
     ] as const) {
       const dbPath = join(dir, `${label.replace(/[^a-z]+/g, "-")}.db`);
       const env = {
@@ -288,10 +409,10 @@ test("hard links to a fake .env or fake keypair file are refused by content, and
         DATABASE_PATH: dbPath,
       };
       await assert.rejects(
-        start(env, link).then(({ server }) => {
+        start(env, candidate).then(({ server }) => {
           server.close();
         }),
-        /doctype/,
+        pattern,
         label,
       );
       assert.ok(!existsSync(dbPath), `${label}: no database was opened`);
