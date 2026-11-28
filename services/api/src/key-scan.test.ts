@@ -11,6 +11,17 @@ import { base58, keyMaterialIn, scanTrackedFiles } from "./key-scan.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
+/** An Ed25519 key in PKCS#8 version 2: version 1, the seed, then the public key in [1]. */
+function pkcs8v2(): Buffer {
+  const pair = solanaKeypair();
+  return Buffer.concat([
+    Buffer.from("3053020101300506032b657004220420", "hex"),
+    pair.subarray(0, 32),
+    Buffer.from("a123032100", "hex"),
+    pair.subarray(32),
+  ]);
+}
+
 /** A real Solana-style keypair: the 32-byte Ed25519 seed, then its own public key. */
 function solanaKeypair(): Buffer {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -36,6 +47,15 @@ test("each kind of private-key material is found, in text and in raw bytes", () 
     ["json-keypair", Buffer.from(`${JSON.stringify(keypair)}\n`)],
     ["json-keypair", Buffer.from(`{"key": [${keypair.join(", ")}]}`)],
     ["base58-keypair", Buffer.from(`secret: ${base58(solanaKeypair())}\n`)],
+    // As Prettier writes an array in TypeScript: one value a line, with a trailing comma.
+    [
+      "json-keypair",
+      Buffer.from(
+        `const key = new Uint8Array([\n${[...solanaKeypair()].map((n) => `  ${n},\n`).join("")}]);\n`,
+      ),
+    ],
+    // PKCS#8 version 2 (RFC 8410's OneAsymmetricKey), which also carries the public key.
+    ["pkcs8-der", pkcs8v2()],
   ];
   for (const [reason, bytes] of cases)
     assert.deepEqual(keyMaterialIn(bytes), [reason], reason);

@@ -12,13 +12,17 @@ import { join } from "node:path";
 import { isMainModule } from "./main-module.ts";
 
 const PEM = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/;
-/** PKCS#8 DER: an Ed25519 key's prefix, and the version and algorithm of RSA and EC keys. */
+/**
+ * PKCS#8 DER: an Ed25519 key's version 1 and version 2 prefixes, and the version and algorithm of
+ * RSA and EC keys.
+ */
 const DER_PREFIXES = [
   "302e020100300506032b657004220420",
+  "020101300506032b657004220420",
   "020100300d06092a864886f70d0101010500",
   "020100301306072a8648ce3d0201",
 ].map((hex) => Buffer.from(hex, "hex"));
-const JSON_64 = /\[\s*(?:\d{1,3}\s*,\s*){63}\d{1,3}\s*\]/g;
+const JSON_64 = /\[\s*(?:\d{1,3}\s*,\s*){63}\d{1,3}\s*,?\s*\]/g;
 const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const BASE58_RUN =
   /(?<![1-9A-HJ-NP-Za-km-z])[1-9A-HJ-NP-Za-km-z]{80,90}(?![1-9A-HJ-NP-Za-km-z])/g;
@@ -75,7 +79,11 @@ export function keyMaterialIn(bytes: Buffer): string[] {
   if (DER_PREFIXES.some((prefix) => bytes.includes(prefix)))
     found.add("pkcs8-der");
   for (const m of text.matchAll(JSON_64)) {
-    const values = m[0].slice(1, -1).split(",").map(Number);
+    const values = m[0]
+      .slice(1, -1)
+      .split(",")
+      .filter((v) => v.trim() !== "")
+      .map(Number);
     if (values.every((n) => n <= 255) && isKeypair(Buffer.from(values)))
       found.add("json-keypair");
   }
