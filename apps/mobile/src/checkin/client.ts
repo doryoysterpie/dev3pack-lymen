@@ -41,7 +41,10 @@ export const CHECKIN_MESSAGES: Readonly<Record<string, string>> = {
     "This wallet is already linked to another registration ID.",
   no_registration_binding:
     "This wallet has no registration yet. Enter your registration ID.",
-  mint_failed: "The pass could not be minted. Try again.",
+  // The outcome of a mint_failed is uncertain: the pass may have landed. A retry reads the chain
+  // at the check-in's one mint address and finishes it (services/api/README.md, Minting).
+  mint_failed:
+    "The pass may already be in your wallet. Try again to finish the check-in.",
   check_in_unavailable: "Check-in is not available on this server yet.",
   invalid_request: "The server refused the request the app sent.",
   unreachable: "The check-in server cannot be reached.",

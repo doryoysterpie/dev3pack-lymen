@@ -85,6 +85,23 @@ test("a check-in the backend completes from the chain, with no transaction signa
     );
 });
 
+test("after mint_failed the participant reads that the pass may already be in the wallet, and how to finish", async () => {
+  // A 502 mint_failed leaves the check-in pending; the pass may have landed (services/api/README.md).
+  assert.deepEqual(
+    await postCheckin(
+      answering(502, { error: "mint_failed" }).fn,
+      "http://api",
+      REQ,
+    ),
+    {
+      ok: false,
+      error: "mint_failed",
+      message:
+        "The pass may already be in your wallet. Try again to finish the check-in.",
+    },
+  );
+});
+
 test("each refusal the backend gives becomes its sentence", async () => {
   for (const [error, status] of [
     ["already_checked_in", 409],
