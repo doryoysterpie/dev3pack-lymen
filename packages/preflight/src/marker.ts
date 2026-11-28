@@ -20,7 +20,9 @@ export const USER_TOKEN_ACCOUNT_MARKER = "user token account";
 /**
  * A report writes this, then a number from 1, for each other token account a
  * token instruction acts on with the wallet as its signing authority, owner
- * or delegate, where nothing shows the wallet owns it.
+ * or delegate, where nothing shows the wallet owns it; and, when no account
+ * was read, for the destination of such a transfer, which could be another
+ * of the wallet's token accounts.
  */
 export const USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER =
   "user-authorized token account";
@@ -78,5 +80,16 @@ export function scrubAddresses<T>(value: T): T {
     text.replace(BASE58_RUN, (run) =>
       run.length >= 32 && decodePublicKey(run) !== null ? SCRUBBED : run,
     ),
+  );
+}
+
+/**
+ * Replaces each of the given addresses wherever it occurs in every string of
+ * a plain JSON value, keys included, inside a longer run too, with SCRUBBED.
+ * For text the RPC wrote, with the wallet's address and its token accounts'.
+ */
+export function scrubWithin<T>(value: T, addresses: readonly string[]): T {
+  return mapStrings(value, (text) =>
+    addresses.reduce((out, address) => out.split(address).join(SCRUBBED), text),
   );
 }

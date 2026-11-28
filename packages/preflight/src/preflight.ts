@@ -29,6 +29,7 @@ import { drainPattern } from "./drain.ts";
 import { readUnsetFeePayer, withFeePayer } from "./fee-payer.ts";
 import {
   scrubAddresses,
+  scrubWithin,
   USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER,
   USER_TOKEN_ACCOUNT_MARKER,
   withMarker,
@@ -265,6 +266,9 @@ export async function preflight(
   let simulation: SimulationOutcome;
   let simulatedAt: SimulatedAt | null = null;
   let owned: string[] = [];
+  // Whether the accounts were read before the simulation; with no read,
+  // nothing shows which token accounts are the wallet's.
+  let read = false;
   try {
     await assertDevnet(rpc);
     tables = await loadTables(rpc, transaction);
@@ -278,6 +282,7 @@ export async function preflight(
     if (unwatched !== null) throw new Error(unwatched);
     const watched = watchedAddresses(feePayer, accounts);
     const before = validStates(await rpc.getAccounts(watched));
+    read = true;
     owned = ownedTokenAccounts(feePayer, watched, before, []);
     const result = await rpc.simulate(base64, watched);
     validStates(result.accounts);
@@ -379,9 +384,26 @@ export async function preflight(
   const tokenAccounts = [
     ...new Set([...owned, ...userTokenAccounts(transaction, tables)]),
   ].sort(inOrder);
-  const authorizedAccounts = userAuthorizedTokenAccounts(transaction, tables)
+  // With no read, a wallet-signed transfer's destination is marked too: it
+  // could be another of the wallet's token accounts.
+  const authorizedAccounts = userAuthorizedTokenAccounts(
+    transaction,
+    tables,
+    !read,
+  )
     .filter((address) => !tokenAccounts.includes(address))
     .sort(inOrder);
+  // The RPC's text can hold an address inside a longer run, which the scrub
+  // of whole runs leaves; the wallet's own addresses are removed wherever
+  // they occur.
+  const walletAddresses = [feePayer, ...tokenAccounts, ...authorizedAccounts];
+  simulation =
+    simulation.status === "ran"
+      ? { ...simulation, err: scrubWithin(simulation.err, walletAddresses) }
+      : {
+          ...simulation,
+          reason: scrubWithin(simulation.reason, walletAddresses),
+        };
   return {
     kind: "ready",
     base64,

@@ -446,12 +446,15 @@ export function userTokenAccounts(
  * source of a transfer, approval or revocation, the account burned from or
  * closed, and the account whose owner or close authority changes. A report
  * marks them (preflight.ts, toReport), since the wallet's authority over them
- * points to the wallet. Addresses only, in the order the instructions name
- * them, without repeats.
+ * points to the wallet. With withDestinations, for a pre-flight that read no
+ * account, a transfer's destination too, which could be another of the
+ * wallet's token accounts. Addresses only, in the order the instructions
+ * name them, without repeats.
  */
 export function userAuthorizedTokenAccounts(
   transaction: ParsedTransaction,
   tables: LookupTables,
+  withDestinations = false,
 ): string[] {
   const { message } = transaction;
   const accounts = messageAccounts(message, tables);
@@ -460,8 +463,12 @@ export function userAuthorizedTokenAccounts(
   for (const compiled of message.instructions) {
     const decoded = decodeInstruction(compiled, accounts);
     let account: Account | null = null;
+    let destination: Account | null = null;
     switch (decoded.kind) {
       case "token-transfer":
+        account = decoded.source;
+        if (withDestinations) destination = decoded.destination;
+        break;
       case "token-approve":
       case "token-revoke":
         account = decoded.source;
@@ -490,9 +497,10 @@ export function userAuthorizedTokenAccounts(
     ) {
       continue;
     }
-    const address = account.address;
-    if (address !== null && address !== user && !found.includes(address)) {
-      found.push(address);
+    for (const address of [account.address, destination?.address ?? null]) {
+      if (address !== null && address !== user && !found.includes(address)) {
+        found.push(address);
+      }
     }
   }
   return found;
