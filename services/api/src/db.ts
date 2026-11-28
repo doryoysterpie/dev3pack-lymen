@@ -128,6 +128,40 @@ export const MIGRATIONS: readonly string[] = [
       AND (mint_status = 'unrecorded' OR mint IS NOT NULL));
   UPDATE checkins SET mint_status = 'done' WHERE mint IS NOT NULL;
   `,
+  // E-05: every check-in has one named state, whichever migration 4 an install ran. 228e3f5's
+  // migration 4 left earlier rows with no state, and f547f8e's names them; an install already at
+  // version 4 runs neither again. The table is rebuilt with the state required: 'unrecorded'
+  // exactly when there is no mint address, and 'revoked' for a pass issued at the reservation's
+  // address that the wallet no longer holds. A row with no state is named as f547f8e names it.
+  `
+  CREATE TABLE checkins_next (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions (id),
+    station_id TEXT NOT NULL REFERENCES stations (id),
+    reg_hash TEXT NOT NULL REFERENCES registrations (reg_hash),
+    wallet TEXT NOT NULL,
+    station_nonce TEXT NOT NULL,
+    mint TEXT,
+    created_at INTEGER NOT NULL,
+    mint_status TEXT NOT NULL DEFAULT 'unrecorded'
+      CHECK (mint_status IN ('pending', 'done', 'revoked', 'unrecorded')
+        AND (mint_status = 'unrecorded') = (mint IS NULL)),
+    UNIQUE (session_id, reg_hash)
+  ) STRICT;
+
+  INSERT INTO checkins_next
+      (id, session_id, station_id, reg_hash, wallet, station_nonce, mint, created_at, mint_status)
+    SELECT id, session_id, station_id, reg_hash, wallet, station_nonce, mint, created_at,
+           CASE
+             WHEN mint IS NULL THEN 'unrecorded'
+             WHEN mint_status IS NULL OR mint_status = 'unrecorded' THEN 'done'
+             ELSE mint_status
+           END
+    FROM checkins;
+
+  DROP TABLE checkins;
+  ALTER TABLE checkins_next RENAME TO checkins;
+  `,
 ];
 
 /** The number of migrations the database has applied, read from PRAGMA user_version. */

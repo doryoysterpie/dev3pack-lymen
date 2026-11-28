@@ -409,7 +409,7 @@ test("with the flag on and no domain lists, the API still starts, serves /health
     assert.deepEqual(await health.json(), {
       status: "ok",
       version: "0.1.0",
-      schema_version: 4,
+      schema_version: 5,
     });
     const report = await fetch(`${url}/reports`, {
       method: "POST",

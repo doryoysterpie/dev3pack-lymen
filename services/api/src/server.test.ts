@@ -116,7 +116,7 @@ test("GET /health returns 200 with the API version and the migrated schema versi
   assert.deepEqual(await res.json(), {
     status: "ok",
     version: "0.1.0",
-    schema_version: 4,
+    schema_version: 5,
   });
 });
 
