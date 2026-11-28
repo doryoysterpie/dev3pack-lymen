@@ -703,7 +703,9 @@ describe("fix check N2: token balances come only with a token program", () => {
           err: null,
           logs: [],
           accounts: addresses.map((address) =>
-            address === USER ? system(4_999_994_000) : tokenState(9, null),
+            address === USER
+              ? system(4_999_994_000)
+              : { ...tokenState(9, null), lamports: 2_040_280 },
           ),
           preBalances: [5_000_000_000, 2_039_280, 1],
           postBalances: [4_999_994_000, 2_040_280, 1],
@@ -770,7 +772,7 @@ describe("fix check N2: token balances come only with a token program", () => {
           accounts: addresses.map((address) =>
             address === USER
               ? system(4_999_994_000)
-              : tokenState(9, K.attacker),
+              : { ...tokenState(9, K.attacker), lamports: 2_040_280 },
           ),
           preBalances: [5_000_000_000, 2_039_280, 1],
           postBalances: [4_999_994_000, 2_040_280, 1],
@@ -1032,7 +1034,9 @@ describe("re-audit A1 and A2: the token balances agree with the run's own accoun
                   : null,
             ),
             preBalances: [5_000_000_000, 2_039_280, 0, 1],
-            postBalances: [4_999_995_000, 2_039_280, 0, 1],
+            // The token account's post balance is the account the run
+            // returns, none when it returns none.
+            postBalances: [4_999_995_000, after === null ? 0 : 2_039_280, 0, 1],
             preTokenBalances,
             postTokenBalances,
           }),
@@ -1823,6 +1827,231 @@ describe("re-audit 2, item 9: any address limen cannot resolve holds signing", (
       reason: "an address comes from a lookup table limen could not read",
     });
     assert.deepEqual(result.summary.blocks, ["simulation-not-run"]);
+  });
+});
+
+describe("re-audit 2, item 2: every watched account's run evidence agrees", () => {
+  const LAMPORTS =
+    "the simulation's post balances do not match its own account state";
+  const TOKENS =
+    "the simulation's token balances do not match its own account state";
+  const attackerToken = key(K.userToken2022Account);
+  const tokenOf = (amount: number, owner: string) => {
+    const data = new Uint8Array(165);
+    data.set(decodePublicKey(K.mint) ?? new Uint8Array(32), 0);
+    data.set(decodePublicKey(owner) ?? new Uint8Array(32), 32);
+    data[64] = amount;
+    data[108] = 1;
+    return {
+      lamports: 2_039_280,
+      owner: TOKEN_PROGRAM,
+      data: [encodeBase64(data), "base64"],
+    };
+  };
+  const entry = (accountIndex: number, amount: string, owner = USER) => ({
+    accountIndex,
+    mint: K.mint,
+    owner,
+    uiTokenAmount: { amount },
+  });
+  const run = async (
+    transaction: Uint8Array,
+    read: Record<string, unknown>,
+    after: Record<string, unknown>,
+    balances: Json,
+  ) => {
+    const result = await preflightTransaction(transaction, {
+      endpoint: endpointFor(
+        endpoint({
+          accounts: (addresses) =>
+            addresses.map((address) => read[address] ?? null),
+          simulation: (addresses) => ({
+            err: null,
+            logs: [],
+            accounts: addresses.map((address) => after[address] ?? null),
+            ...balances,
+          }),
+        }),
+        "x",
+      ),
+      user: USER,
+    });
+    assert.ok(result.summary.kind === "ready");
+    return result.summary;
+  };
+  const notUsed = (
+    summary: Awaited<ReturnType<typeof run>>,
+    reason: string,
+  ) => {
+    assert.deepEqual(summary.simulation, { status: "not-run", reason });
+    assert.deepEqual(summary.blocks, ["simulation-not-run"]);
+  };
+  // A System transfer of 9.5 SOL to the attacker: wallet, attacker, System.
+  const sol = () => build([transfer()]);
+  const solRead = { [USER]: system(10_000_000_000) };
+
+  it("another watched account's lamports must equal its post balance", async () =>
+    notUsed(
+      await run(
+        sol(),
+        solRead,
+        { [USER]: system(500_000_000), [K.attacker]: system(9_500_000_000) },
+        {
+          preBalances: [10_000_000_000, 0, 1],
+          postBalances: [500_000_000, 1, 1],
+          preTokenBalances: [],
+          postTokenBalances: [],
+        },
+      ),
+      LAMPORTS,
+    ));
+
+  it("the wallet's lamports must equal its post balance", async () =>
+    notUsed(
+      await run(
+        sol(),
+        solRead,
+        { [USER]: system(1), [K.attacker]: system(9_500_000_000) },
+        {
+          preBalances: [10_000_000_000, 0, 1],
+          postBalances: [500_000_000, 9_500_000_000, 1],
+          preTokenBalances: [],
+          postTokenBalances: [],
+        },
+      ),
+      LAMPORTS,
+    ));
+
+  it("with no token program, a token entry is a contradiction", async () =>
+    notUsed(
+      await run(
+        sol(),
+        solRead,
+        { [USER]: system(500_000_000), [K.attacker]: system(9_500_000_000) },
+        {
+          preBalances: [10_000_000_000, 0, 1],
+          postBalances: [500_000_000, 9_500_000_000, 1],
+          preTokenBalances: [],
+          postTokenBalances: [entry(1, "5", K.attacker)],
+        },
+      ),
+      TOKENS,
+    ));
+
+  // A Token transfer of 5 from the wallet's token account to another
+  // owner's: wallet, its token account, the other, the Token program.
+  const tokenTransfer = () =>
+    build([
+      new web3.TransactionInstruction({
+        programId: new web3.PublicKey(TOKEN_PROGRAM),
+        keys: [
+          { pubkey: tokenAccount, isSigner: false, isWritable: true },
+          { pubkey: attackerToken, isSigner: false, isWritable: true },
+          { pubkey: user, isSigner: true, isWritable: false },
+        ],
+        data: Buffer.from([3, 5, 0, 0, 0, 0, 0, 0, 0]),
+      }),
+    ]);
+  const tokenRead = {
+    [USER]: system(5_000_000_000),
+    [K.userTokenAccount]: tokenOf(200, USER),
+    [K.userToken2022Account]: tokenOf(0, K.attacker),
+  };
+
+  it("another owner's token account must have a post entry that agrees", async () =>
+    notUsed(
+      await run(
+        tokenTransfer(),
+        tokenRead,
+        {
+          [USER]: system(4_999_995_000),
+          [K.userTokenAccount]: tokenOf(195, USER),
+          [K.userToken2022Account]: tokenOf(5, K.attacker),
+        },
+        {
+          preBalances: [5_000_000_000, 2_039_280, 2_039_280, 1],
+          postBalances: [4_999_995_000, 2_039_280, 2_039_280, 1],
+          preTokenBalances: [entry(1, "200"), entry(2, "0", K.attacker)],
+          postTokenBalances: [entry(1, "195")],
+        },
+      ),
+      TOKENS,
+    ));
+
+  it("closure is never read from an owner change", async () =>
+    notUsed(
+      await run(
+        tokenTransfer(),
+        tokenRead,
+        {
+          [USER]: system(4_999_995_000),
+          [K.userTokenAccount]: system(2_039_280),
+          [K.userToken2022Account]: tokenOf(5, K.attacker),
+        },
+        {
+          preBalances: [5_000_000_000, 2_039_280, 2_039_280, 1],
+          postBalances: [4_999_995_000, 2_039_280, 2_039_280, 1],
+          preTokenBalances: [entry(1, "200"), entry(2, "0", K.attacker)],
+          postTokenBalances: [entry(2, "5", K.attacker)],
+        },
+      ),
+      TOKENS,
+    ));
+
+  it("a closure is claimed for an account the run returns with no lamports and no data", async () => {
+    const summary = await run(
+      tokenTransfer(),
+      tokenRead,
+      {
+        [USER]: system(4_999_995_000),
+        [K.userTokenAccount]: null,
+        [K.userToken2022Account]: tokenOf(5, K.attacker),
+      },
+      {
+        preBalances: [5_000_000_000, 2_039_280, 2_039_280, 1],
+        postBalances: [4_999_995_000, 0, 2_039_280, 1],
+        preTokenBalances: [entry(1, "200"), entry(2, "0", K.attacker)],
+        postTokenBalances: [entry(2, "5", K.attacker)],
+      },
+    );
+    assert.ok(summary.simulation.status === "ran");
+    const closed = summary.simulation.changes.find((c) => c.kind === "token");
+    assert.ok(closed !== undefined && closed.kind === "token");
+    assert.equal(closed.ownerAfter, null);
+    assert.equal(closed.after, "0");
+  });
+
+  it("an account the wallet owns only after the run needs an entry that agrees", async () => {
+    const create = new web3.TransactionInstruction({
+      programId: key(K.unknownProgram),
+      keys: [
+        { pubkey: user, isSigner: true, isWritable: true },
+        { pubkey: tokenAccount, isSigner: false, isWritable: true },
+        {
+          pubkey: new web3.PublicKey(TOKEN_PROGRAM),
+          isSigner: false,
+          isWritable: false,
+        },
+      ],
+      data: Buffer.from([1]),
+    });
+    notUsed(
+      await run(
+        build([create]),
+        { [USER]: system(5_000_000_000) },
+        {
+          [USER]: system(4_997_955_720),
+          [K.userTokenAccount]: tokenOf(0, USER),
+        },
+        {
+          preBalances: [5_000_000_000, 0, 1, 1],
+          postBalances: [4_997_955_720, 2_039_280, 1, 1],
+          preTokenBalances: [],
+          postTokenBalances: [entry(1, "0", K.attacker)],
+        },
+      ),
+      TOKENS,
+    );
   });
 });
 

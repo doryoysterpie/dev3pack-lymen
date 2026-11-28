@@ -138,6 +138,63 @@ const READ_STATE =
 /** Why: they disagree with the run's own account state. */
 const OWN_STATE =
   "the simulation's token balances do not match its own account state";
+/** Why: a post balance disagrees with the account the run returns. */
+const OWN_LAMPORTS =
+  "the simulation's post balances do not match its own account state";
+
+/**
+ * Why the run's own evidence disagrees with itself, or null when it agrees.
+ * For every watched account: the account the run returns has the lamports
+ * of its post balance (none when absent); and, when a token program is among
+ * the message's keys, it has exactly one post token entry, with its mint,
+ * owner and amount, when it is a token account (parseTokenAccount) and none
+ * otherwise. With no token program, agave lists no token balances at all
+ * (anza-xyz/agave a64fa73, svm/src/transaction_balances.rs:83 and :96), so
+ * any entry disagrees. agave also leaves out the entry of a token account
+ * whose mint it cannot read (:96 to 104), which leaves the run unused here.
+ */
+export function runEvidenceProblem(
+  addresses: readonly string[],
+  after: readonly (AccountState | null)[],
+  balances: SimulatedBalances,
+): string | null {
+  const holdsTokenProgram = balances.keys.some(
+    (key) => key !== null && isTokenProgram(key),
+  );
+  if (
+    !holdsTokenProgram &&
+    (balances.preToken.length > 0 || balances.postToken.length > 0)
+  ) {
+    return OWN_STATE;
+  }
+  for (let i = 0; i < addresses.length; i += 1) {
+    const index = balances.keys.indexOf(addresses[i]);
+    if (index < 0 || index >= balances.post.length) return OWN_LAMPORTS;
+    const post = after[i] ?? null;
+    if ((post === null ? "0" : post.lamports) !== balances.post[index]) {
+      return OWN_LAMPORTS;
+    }
+    if (!holdsTokenProgram) continue;
+    const parsed =
+      post === null ? null : parseTokenAccount(post.owner, post.data);
+    const entries = balances.postToken.filter(
+      (balance) => balance.accountIndex === index,
+    );
+    if (parsed === null) {
+      if (entries.length !== 0) return OWN_STATE;
+      continue;
+    }
+    if (
+      entries.length !== 1 ||
+      entries[0].mint !== parsed.mint ||
+      entries[0].owner !== parsed.owner ||
+      entries[0].amount !== parsed.amount
+    ) {
+      return OWN_STATE;
+    }
+  }
+  return null;
+}
 
 /** Whether two token account states agree on everything but the amount. */
 function sameState(a: TokenAccount, b: TokenAccount): boolean {
@@ -260,11 +317,13 @@ export function balanceChanges(
         ? parseTokenAccount(pre.owner, pre.data)
         : null;
     const readOwned = was !== null && was.owner === user;
-    // The run's own account state: a token account, or not one any more,
-    // since a closed account is handed to the System Program with no data
-    // (solana-program/token 38de8d1, program/src/processor.rs:1042 to 1045).
-    const postIsToken = post !== null && isTokenProgram(post.owner);
-    const now = postIsToken ? parseTokenAccount(post.owner, post.data) : null;
+    // The run's own account state: a token account, or closed. A closed
+    // account is absent, or has no lamports and no data (solana-program/token
+    // 38de8d1, program/src/processor.rs:705 to 706 and 1042 to 1045); an
+    // account that is neither is not read as closed from its owner alone.
+    const now = post === null ? null : parseTokenAccount(post.owner, post.data);
+    const closed =
+      post === null || (post.lamports === "0" && post.data.length === 0);
     if (!holdsTokenProgram) {
       if (!readOwned) return;
       // Nothing in the transaction can change the account (see above), so a
@@ -299,10 +358,10 @@ export function balanceChanges(
     const postEntries = balances.postToken.filter(
       (balance) => balance.accountIndex === index,
     );
-    if (postIsToken) {
+    if (now === null && !closed) throw new Error(OWN_STATE);
+    if (now !== null) {
       const postBalance = postEntries[0];
       if (
-        now === null ||
         now.mint !== was.mint ||
         postEntries.length !== 1 ||
         postBalance.mint !== now.mint ||
