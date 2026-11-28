@@ -21,13 +21,15 @@ What the tests show, and no more: `src/organizer-key.test.ts` checks each key er
 
 ## Registrations (E-07)
 
-Set `REGISTRATION_SALT` in `.env` (at least 32 characters), then import the registration list, a JSON array of registration IDs:
+Set `REGISTRATION_SALT` in `.env` (at least 32 characters), then import the registration list, a JSON array of registration IDs. Put the list in `.registrations/` at the repository root, which git ignores, since it holds the IDs in plain text:
 
 ```bash
-npm run import-registrations -w @limen/api -- ../../fixtures/registrations.json
+npm run import-registrations -w @limen/api -- ../../.registrations/registrations.json
 ```
 
-The database stores only HMAC-SHA256 hashes of the IDs, keyed by the salt. An ID must be 1 to 64 ASCII letters, digits, `_` or `-` after trimming; it is upper-cased only after that check, so no other letter can map onto it. A wallet must be base58 that decodes to exactly 32 bytes. If the list file is not valid JSON, the tool names the file and, when the parser gives one, the line and column, never the file's content. `fixtures/registrations.json` is a mock list of ten IDs. A real import from the organizer's applicant list is H-07.
+Delete the list after the import: the database keeps only the IDs' hashes.
+
+The database stores only HMAC-SHA256 hashes of the IDs, keyed by the salt. An ID must be 1 to 64 ASCII letters, digits, `_` or `-` after trimming; it is upper-cased only after that check, so no other letter can map onto it. A wallet must be base58 that decodes to exactly 32 bytes. If the list file is not valid JSON, the tool names the file and, when the parser gives one, the line and column, never the file's content. `fixtures/registrations.json` is a mock list of ten IDs, for trying the import: copy it into `.registrations/` first. A real import from the organizer's applicant list is H-07.
 
 ## Reports (E-10)
 

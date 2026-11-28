@@ -236,3 +236,24 @@ test("every secret command in a README writes into .env without printing", () =>
       });
   }
 });
+
+test("the registration list the README imports is in a gitignored folder, and the README says to delete it after import", () => {
+  // The list holds plaintext registration IDs; only their salted hashes belong in the database.
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const commands = [
+    ...readme.matchAll(/npm run import-registrations -w @limen\/api -- (\S+)/g),
+  ];
+  assert.ok(commands.length > 0, "the README documents an import");
+  const apiDir = fileURLToPath(new URL("..", import.meta.url));
+  for (const [, path] of commands) {
+    const ignored = spawnSync("git", ["check-ignore", "-q", path!], {
+      cwd: apiDir,
+    });
+    assert.equal(ignored.status, 0, `${path} is ignored by git`);
+  }
+  const section = readme.slice(
+    readme.indexOf("then import the registration list"),
+    readme.indexOf("## Reports (E-10)"),
+  );
+  assert.match(section, /[Dd]elete the list after the import/);
+});
