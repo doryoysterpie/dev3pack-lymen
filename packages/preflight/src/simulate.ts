@@ -161,7 +161,7 @@ export function ownedTokenAccounts(
     state !== null &&
     state !== undefined &&
     isTokenProgram(state.owner) &&
-    parseTokenAccount(state.data)?.owner === user;
+    parseTokenAccount(state.owner, state.data)?.owner === user;
   return addresses.filter(
     (address, i) => address !== user && (owned(before[i]) || owned(after[i])),
   );
@@ -183,8 +183,8 @@ export function unchangedBetween(
     if (a === null || b === null) return a === b;
     if (a.owner !== b.owner || a.data.length !== b.data.length) return false;
     if (!isTokenProgram(a.owner)) return true;
-    const x = parseTokenAccount(a.data);
-    const y = parseTokenAccount(b.data);
+    const x = parseTokenAccount(a.owner, a.data);
+    const y = parseTokenAccount(b.owner, b.data);
     if (x === null || y === null) return x === y;
     return (
       x.mint === y.mint &&
@@ -253,14 +253,14 @@ export function balanceChanges(
     }
     const was =
       pre !== null && isTokenProgram(pre.owner)
-        ? parseTokenAccount(pre.data)
+        ? parseTokenAccount(pre.owner, pre.data)
         : null;
     const readOwned = was !== null && was.owner === user;
     // The run's own account state: a token account, or not one any more,
     // since a closed account is handed to the System Program with no data
     // (solana-program/token 38de8d1, program/src/processor.rs:1042 to 1045).
     const postIsToken = post !== null && isTokenProgram(post.owner);
-    const now = postIsToken ? parseTokenAccount(post.data) : null;
+    const now = postIsToken ? parseTokenAccount(post.owner, post.data) : null;
     if (!holdsTokenProgram) {
       if (!readOwned) return;
       // Nothing in the transaction can change the account (see above), so a
