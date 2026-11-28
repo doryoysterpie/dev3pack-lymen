@@ -173,3 +173,17 @@ describe("ruling 20a, item 8: a fetch's rejection is never read", () => {
     });
   });
 });
+
+describe("the audit of 21e1f9f, item 3: the report allowlist cannot be changed", () => {
+  it("is not exported, and the package exports no Set or array to change", () => {
+    assert.equal("REPORT_PROGRAMS" in pkg, false);
+    for (const [name, value] of Object.entries(pkg)) {
+      assert.equal(value instanceof Set, false, name);
+      assert.equal(
+        Array.isArray(value) && !Object.isFrozen(value),
+        false,
+        name,
+      );
+    }
+  });
+});

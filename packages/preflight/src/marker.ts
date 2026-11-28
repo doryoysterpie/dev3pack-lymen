@@ -4,7 +4,7 @@
 // A summary never carries the user's address as text: wherever it would
 // appear, the summary writes "user". A report goes further (preflight.ts,
 // toReport; the owner's ruling 20a): it carries no address but the six known
-// programs in REPORT_PROGRAMS. Every other address becomes a role marker:
+// programs in REPORT_PROGRAMS (isReportProgram). Every other address becomes a role marker:
 // "account N" for the account at index N of the message's account list,
 // "lookup table N" for the table at index N of its lookups, and "address N",
 // from 1 in the order first met, for any other, such as a new authority an
@@ -25,8 +25,12 @@ import {
 /** What a summary writes in place of the user's wallet address. */
 export const USER_MARKER = "user";
 
-/** The only addresses a report may carry: these programs' IDs. */
-export const REPORT_PROGRAMS: ReadonlySet<string> = new Set([
+/**
+ * The only addresses a report may carry: these programs' IDs. Module-private
+ * and frozen, read only through isReportProgram (the audit of 21e1f9f, item
+ * 3), so no caller can add to it.
+ */
+const REPORT_PROGRAMS: readonly string[] = Object.freeze([
   SYSTEM_PROGRAM,
   TOKEN_PROGRAM,
   TOKEN_2022_PROGRAM,
@@ -34,6 +38,11 @@ export const REPORT_PROGRAMS: ReadonlySet<string> = new Set([
   COMPUTE_BUDGET_PROGRAM,
   MEMO_PROGRAM,
 ]);
+
+/** Whether a report may carry this address: one of REPORT_PROGRAMS. */
+export function isReportProgram(address: string): boolean {
+  return REPORT_PROGRAMS.includes(address);
+}
 
 /** What scrubAddresses writes in place of an address. */
 export const SCRUBBED = "an address";
@@ -88,7 +97,7 @@ export function withMarker<T>(value: T, user: string): T {
 export function scrubAddresses<T>(value: T): T {
   return mapStrings(value, (text) =>
     text.replace(BASE58_RUN, (run) =>
-      run.length >= 32 && !REPORT_PROGRAMS.has(run) ? SCRUBBED : run,
+      run.length >= 32 && !isReportProgram(run) ? SCRUBBED : run,
     ),
   );
 }
@@ -107,7 +116,7 @@ export function withRoleMarkers<T>(
   const others = new Map<string, string>();
   return mapStrings(value, (text) =>
     text.replace(BASE58_RUN, (run) => {
-      if (REPORT_PROGRAMS.has(run)) return run;
+      if (isReportProgram(run)) return run;
       const known = markers.get(run) ?? others.get(run);
       if (known !== undefined) return known;
       if (run.length < 32 || decodePublicKey(run) === null) return run;

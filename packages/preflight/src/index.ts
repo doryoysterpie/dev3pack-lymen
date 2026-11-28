@@ -73,7 +73,6 @@ export {
   SCRUBBED,
   scrubAddresses,
   USER_MARKER,
-  REPORT_PROGRAMS,
   withMarker,
   withMarkers,
   withRoleMarkers,
