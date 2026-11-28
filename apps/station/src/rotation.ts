@@ -1,39 +1,33 @@
 // Station display rotation (E-03). Fetches a signed QR from the API, shows it, and fetches a
-// fresh one when the API says to, every 30 s or sooner near a session's end. A failed fetch
-// clears the QR, shows why, and retries after 5 s; a fetch that takes over 10 s counts as
-// failed. Each answer says how long its QR has left; the page counts its whole round trip off
-// that, never draws a QR with no time left, and clears a shown QR when its time runs out.
-// This file has no DOM code, and the tests drive it with fakes.
+// fresh one 30 s after the request for it left, or at its deadline if that comes first. A failed
+// fetch clears the QR, shows why, and retries after 5 s; a fetch that takes over 10 s counts as
+// failed. This file has no DOM code, and the tests drive it with fakes.
+//
+// Every time the page acts on comes from the QR's signed payload: issued_at and expires_at, in
+// the API's whole seconds. The answer's other fields are not read. The API signed the QR at some
+// instant in [issued_at, issued_at + 999 ms] on its clock, while the request was out, so on the
+// page's clock the QR expires no earlier than its deadline:
+//
+//   deadline = sentAt + (expires_at - issued_at) * 1000 - 999
+//
+// where sentAt is when the request left. A QR already past its deadline when it arrives is not
+// drawn, and a shown QR is cleared at its deadline.
 
-/** What the API returns from GET /stations/:id/qr. */
-export interface StationQrResponse {
-  readonly qr: string;
-  readonly station: string;
-  readonly session: string;
-  readonly issued_at: number;
-  readonly expires_at: number;
-  readonly refresh_after_s: number;
-  /** How long the QR has left as it leaves the API, in milliseconds. */
-  readonly expires_in_ms: number;
-}
-
-/**
- * One QR as the page shows it: the QR text, the station, session and times read from the
- * payload it carries, and the server's refresh interval.
- */
+/** One QR as the page shows it: the QR text and what its signed payload says. */
 export interface StationQr {
   readonly qr: string;
   readonly station: string;
   readonly session: string;
   readonly issuedAt: number;
   readonly expiresAt: number;
-  readonly refreshAfterS: number;
-  /** How long the QR had left as it left the API, in milliseconds. */
-  readonly expiresInMs: number;
 }
 
 export type StationView =
-  | ({ readonly kind: "qr" } & StationQr)
+  | ({
+      readonly kind: "qr";
+      /** The QR's deadline on the rotation's own clock (RotationDeps.now), in milliseconds. */
+      readonly deadline: number;
+    } & StationQr)
   | { readonly kind: "error"; readonly message: string }
   | { readonly kind: "refreshing" };
 
@@ -42,6 +36,11 @@ export const ROTATION_S = 30;
 export const RETRY_AFTER_MS = 5_000;
 /** A fetch that takes longer than this is abandoned and retried. */
 export const FETCH_TIMEOUT_MS = 10_000;
+
+/** The deadline of a QR whose request left at `sentAt`; see the comment at the top. */
+export function deadlineOf(sentAt: number, qr: StationQr): number {
+  return sentAt + (qr.expiresAt - qr.issuedAt) * 1000 - 999;
+}
 
 export interface RotationDeps {
   /** Fetches one QR. The rotation aborts `signal` when the fetch runs past FETCH_TIMEOUT_MS. */
@@ -91,25 +90,21 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
       }
       if (stopped) return;
       clearStale();
-      // The QR's time left, less the whole round trip: the API may have issued it as the
-      // request left, so this is the least that can be left.
-      const elapsed = deps.now() - sentAt;
-      const left = res.expiresInMs - elapsed;
-      if (left <= 0) {
-        // It expired on the way. It is never drawn; the next one is fetched at once.
+      const receivedAt = deps.now();
+      const deadline = deadlineOf(sentAt, res);
+      if (deadline <= receivedAt) {
+        // Its deadline passed on the way. It is not drawn; the next one is fetched at once.
         deps.render({ kind: "refreshing" });
         next = 0;
       } else {
-        deps.render({ kind: "qr", ...res });
-        // Once this QR's time has run out on screen, it can no longer check anyone in.
+        deps.render({ kind: "qr", ...res, deadline });
         staleTimer = deps.setTimeout(() => {
           staleTimer = null;
           if (!stopped) deps.render({ kind: "refreshing" });
-        }, left);
-        // The API's refresh point, or the QR's expiry if sooner, counted from when it was issued.
+        }, deadline - receivedAt);
         next = Math.max(
           0,
-          Math.min(res.refreshAfterS * 1000, res.expiresInMs) - elapsed,
+          Math.min(deadline, sentAt + ROTATION_S * 1000) - receivedAt,
         );
       }
     } catch (err) {
@@ -212,33 +207,24 @@ export function stationPayloadOf(qr: string): {
   };
 }
 
-/** The caption under a shown QR: its signed station and session, and the server's interval. */
+/**
+ * The caption under a shown QR, from its signed fields only. It is a statement, not a countdown,
+ * since it does not change while the QR is shown. A QR signed for less than 60 s was cut short
+ * by its session's end.
+ */
 export function captionFor(view: StationQr): string {
-  // A statement of the interval, not a countdown, since the caption is not updated while the QR
-  // is shown. The API asks for a refresh in under 30 s only when the QR expires at its
-  // session's end.
   const when =
-    view.refreshAfterS >= ROTATION_S
-      ? `A new QR every ${ROTATION_S} s.`
-      : "This QR lasts until the session ends.";
+    view.expiresAt < view.issuedAt + 60
+      ? "This QR expires by the session's end."
+      : `A new QR every ${ROTATION_S} s.`;
   return `Station ${view.station}, session ${view.session}. ${when}`;
 }
 
-function isQrResponse(value: unknown): value is StationQrResponse {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    typeof v.qr === "string" &&
-    v.qr.startsWith("limen:station:") &&
-    typeof v.station === "string" &&
-    typeof v.session === "string" &&
-    Number.isSafeInteger(v.issued_at) &&
-    Number.isSafeInteger(v.expires_at) &&
-    Number.isSafeInteger(v.refresh_after_s) &&
-    (v.refresh_after_s as number) > 0 &&
-    Number.isSafeInteger(v.expires_in_ms) &&
-    (v.expires_in_ms as number) > 0
-  );
+/** The QR text in the API's answer; the answer's other fields are not read. */
+function qrOf(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const qr = (value as Record<string, unknown>).qr;
+  return typeof qr === "string" && qr.startsWith("limen:station:") ? qr : null;
 }
 
 const STATUS_MESSAGES: Record<number, string> = {
@@ -278,8 +264,9 @@ export async function fetchStationQr(
         `The API answered with status ${res.status}.`,
     );
   const body: unknown = await res.json().catch(() => null);
-  const payload = isQrResponse(body) ? stationPayloadOf(body.qr) : null;
-  if (!isQrResponse(body) || payload === null)
+  const qr = qrOf(body);
+  const payload = qr === null ? null : stationPayloadOf(qr);
+  if (qr === null || payload === null)
     throw new Error(
       "The API answered with something that is not a station QR.",
     );
@@ -287,12 +274,10 @@ export async function fetchStationQr(
   if (payload.station !== config.station)
     throw new Error("The API sent a QR for another station.");
   return {
-    qr: body.qr,
+    qr,
     station: payload.station,
     session: payload.session,
     issuedAt: payload.issued_at,
     expiresAt: payload.expires_at,
-    refreshAfterS: body.refresh_after_s,
-    expiresInMs: body.expires_in_ms,
   };
 }

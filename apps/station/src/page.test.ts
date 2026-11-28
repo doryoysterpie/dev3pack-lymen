@@ -62,6 +62,10 @@ function fakeClock() {
     clearTimeout: (handle: unknown): void => {
       timers.delete(handle as number);
     },
+    /** Moves the clock forward without running any timer, as a slow step on the page would. */
+    jump(ms: number): void {
+      now += ms;
+    },
     async advance(ms: number): Promise<void> {
       const end = now + ms;
       for (;;) {
@@ -200,32 +204,41 @@ test("a response carrying another station's genuine QR is refused, not drawn und
   assert.ok(!log.some((l) => l.startsWith("caption: Station")));
 });
 
-test("the caption comes from the signed QR and states the interval as a fact, not a countdown", async () => {
-  // The response's own fields disagree with the QR; only the QR's signed payload counts.
-  const qr = signedQr("st-front");
-  const { elements } = await loadPage(
-    "http://127.0.0.1:5173/?station=st-front#token=station-token-0123456789",
+test("the caption comes from the signed QR's fields only, and states the interval as a fact, not a countdown", async () => {
+  const href =
+    "http://127.0.0.1:5173/?station=st-front#token=station-token-0123456789";
+  // A full 60 s QR, while the answer's own fields name another station, another session and a
+  // 7 s refresh: only the signed fields count.
+  const full = signedQr("st-front");
+  const first = await loadPage(
+    href,
     answering({
-      qr,
+      qr: full,
       station: "st-other",
       session: "day-9",
       issued_at: T,
-      expires_at: T + 60,
+      expires_at: T + 20,
       refresh_after_s: 7,
-      expires_in_ms: 60_000,
+      expires_in_ms: 20_000,
     }),
   );
-  assert.equal(elements.qr.dataset.qr, qr);
-  // Under 30 s means the QR expires at its session's end: the caption says so once, and does
-  // not count down a number it never updates.
+  assert.equal(first.elements.qr.dataset.qr, full);
   assert.equal(
-    elements.caption.textContent,
-    "Station st-front, session day-2. This QR lasts until the session ends.",
+    first.elements.caption.textContent,
+    "Station st-front, session day-2. A new QR every 30 s.",
   );
-  const full = await loadPage(
-    "http://127.0.0.1:5173/?station=st-front#token=station-token-0123456789",
+  // A QR the API cut to 20 s by its session's end says so, though the answer claims 60 s.
+  const cut = issueStationQr({
+    station: "st-front",
+    session: "day-2",
+    now: T,
+    signer: SIGNER,
+    notAfter: T + 20,
+  }).text;
+  const second = await loadPage(
+    href,
     answering({
-      qr,
+      qr: cut,
       station: "st-front",
       session: "day-2",
       issued_at: T,
@@ -235,9 +248,43 @@ test("the caption comes from the signed QR and states the interval as a fact, no
     }),
   );
   assert.equal(
-    full.elements.caption.textContent,
-    "Station st-front, session day-2. A new QR every 30 s.",
+    second.elements.caption.textContent,
+    "Station st-front, session day-2. This QR expires by the session's end.",
   );
+});
+
+test("a QR whose deadline passes while it is being drawn is not revealed", async () => {
+  const clock = fakeClock();
+  const qr = signedQr("st-front"); // 60 s: its deadline is 59 001 ms after the request left
+  const slow = (): Promise<Response> =>
+    new Promise((resolve) => {
+      clock.setTimeout(
+        () =>
+          resolve(
+            new Response(JSON.stringify({ qr }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+          ),
+        100,
+      );
+    });
+  const { elements, log } = await loadPage(
+    "http://127.0.0.1:5173/?station=st-front#token=station-token-0123456789",
+    slow,
+    clock,
+  );
+  // Drawing takes until past the deadline.
+  const ctx = elements.qr.getContext();
+  elements.qr.getContext = () => {
+    clock.jump(60_000);
+    return ctx;
+  };
+  await clock.advance(100);
+  assert.equal(elements.qr.hidden, true, "the canvas stays hidden");
+  assert.equal(elements.qr.dataset.qr, undefined);
+  assert.ok(!log.some((l) => l.startsWith("caption: Station")));
+  assert.equal(elements.caption.textContent, "Refreshing the QR. Please wait.");
 });
 
 test("with a 2 s response delay, a QR that expires in transit is never drawn, and changeover follows the server's expiry", async () => {
@@ -301,8 +348,8 @@ test("with a 2 s response delay, a QR that expires in transit is never drawn, an
       `day-1's QR, expired on arrival, is never drawn: ${captions.join(" | ")}`,
     );
     assert.ok(captions.some((c) => c.includes("session day-2")));
-    // The next fetch starts on day-1's arrival, and day-2's refresh comes 30 s after it was
-    // issued, at 32 s, not 30 s after it arrived.
+    // The next fetch starts on day-1's arrival, and day-2's refresh comes 30 s after its request
+    // left, at 32 s, not 30 s after it arrived.
     assert.deepEqual(fetchedAt, [0, 2000, 32_000]);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
