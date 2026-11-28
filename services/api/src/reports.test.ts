@@ -10,6 +10,7 @@ import { openDatabase } from "./db.ts";
 import { loadBundle } from "./evidence.ts";
 import { MAX_REPORT_BODY_BYTES } from "./reports.ts";
 import { API_VERSION, createApiServer } from "./server.ts";
+import { TEST_STATION_SETTINGS } from "./test-station.ts";
 
 const FIXTURES = JSON.parse(
   readFileSync(
@@ -57,6 +58,7 @@ before(async () => {
     createApiServer({
       db,
       version: API_VERSION,
+      ...TEST_STATION_SETTINGS,
       reports: { now: () => 1_795_000_500 },
     }),
   );
@@ -65,6 +67,7 @@ before(async () => {
     createApiServer({
       db: openDatabase(":memory:"),
       version: API_VERSION,
+      ...TEST_STATION_SETTINGS,
       reports: {
         now: () => 1_795_000_600,
         resimulator: async () => ({
@@ -138,6 +141,7 @@ test("a failing re-simulator still answers 201 once and stores one sighting, so 
   const failing = createApiServer({
     db: failingDb,
     version: API_VERSION,
+    ...TEST_STATION_SETTINGS,
     reports: {
       now: () => 1_795_000_700,
       resimulator: async () => {
@@ -169,6 +173,7 @@ test("a re-simulator that never answers still gets 201 once, after the time limi
   const hanging = createApiServer({
     db: hangingDb,
     version: API_VERSION,
+    ...TEST_STATION_SETTINGS,
     reports: {
       now: () => 1_795_000_700,
       resimulator: () => new Promise(() => {}),
