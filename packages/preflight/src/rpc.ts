@@ -451,7 +451,7 @@ async function fetchSimulation(
   if (value.err !== null) {
     return {
       // Parsed from the answer's text by this client, so it is JSON data.
-      err: value.err,
+      err: jsonSafe(value.err, (path) => raw(["value", "err", ...path])),
       slot,
       replacementBlockhash: null,
       preBalances: null,
@@ -526,6 +526,44 @@ function tokenAccountIndexesOf(
     }
     return item.accountIndex;
   });
+}
+
+/**
+ * value as JSON-safe data (the audit of 21e1f9f, item 7): a number JSON.parse
+ * read as Infinity, -Infinity or NaN, such as 1e999, becomes the text the
+ * answer wrote (raw, by its path within value), so the value keeps its
+ * meaning through JSON.stringify, which writes such a number as null.
+ * Everything else is copied as it is.
+ */
+function jsonSafe(
+  value: unknown,
+  raw: (path: readonly (string | number)[]) => string | undefined,
+  path: readonly (string | number)[] = [],
+): unknown {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : (raw(path) ?? String(value));
+  }
+  if (Array.isArray(value)) {
+    const out: unknown[] = [];
+    for (let i = 0; i < value.length; i += 1) {
+      out.push(jsonSafe(value[i], raw, [...path, i]));
+    }
+    return out;
+  }
+  if (isRecord(value)) {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value)) {
+      // Defined, not assigned, so a "__proto__" key stays a plain key.
+      Object.defineProperty(out, key, {
+        value: jsonSafe(value[key], raw, [...path, key]),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    return out;
+  }
+  return value;
 }
 
 /** A run's loaded addresses: two lists of public keys, or null. */
