@@ -75,6 +75,92 @@ test("seeding twice updates in place and adds no rows", () => {
   );
 });
 
+const session = (id: string, starts_at: number, ends_at: number) => ({
+  id,
+  name: id,
+  starts_at,
+  ends_at,
+});
+const sessionRows = (db: ReturnType<typeof openDatabase>) =>
+  db
+    .prepare("SELECT id, starts_at, ends_at FROM sessions ORDER BY id")
+    .all()
+    .map((r) => ({ ...r }));
+
+test("sessions may not overlap: a seed whose sessions overlap is refused, and nothing is written", () => {
+  const db = openDatabase(":memory:");
+  assert.throws(
+    () =>
+      seedEvent(
+        db,
+        {
+          stations: [{ id: "st-front", name: "Front desk" }],
+          sessions: [
+            session("day-1", 1000, 2000),
+            session("day-2", 1999, 3000),
+          ],
+        },
+        1,
+      ),
+    {
+      message:
+        "seed sessions: day-1 and day-2 overlap; sessions may not overlap",
+    },
+  );
+  assert.deepEqual(sessionRows(db), []);
+  assert.equal(
+    (db.prepare("SELECT count(*) AS n FROM stations").get() as { n: number }).n,
+    0,
+  );
+});
+
+test("a seed whose session overlaps one already in the database is refused, and the database keeps its rows", () => {
+  const db = openDatabase(":memory:");
+  seedEvent(db, { stations: [], sessions: [session("day-1", 1000, 2000)] }, 1);
+  assert.throws(
+    () =>
+      seedEvent(
+        db,
+        { stations: [], sessions: [session("day-2", 1500, 2500)] },
+        2,
+      ),
+    {
+      message:
+        "seed sessions: day-1 and day-2 overlap; sessions may not overlap",
+    },
+  );
+  assert.deepEqual(sessionRows(db), [
+    { id: "day-1", starts_at: 1000, ends_at: 2000 },
+  ]);
+  // Moving a session onto another's window is refused the same way.
+  seedEvent(db, { stations: [], sessions: [session("day-2", 2000, 3000)] }, 3);
+  assert.throws(
+    () =>
+      seedEvent(
+        db,
+        { stations: [], sessions: [session("day-2", 1999, 3000)] },
+        4,
+      ),
+    /day-1 and day-2 overlap/,
+  );
+});
+
+test("back-to-back sessions do not overlap, since a session's end is exclusive", () => {
+  const db = openDatabase(":memory:");
+  seedEvent(
+    db,
+    {
+      stations: [],
+      sessions: [session("day-1", 1000, 2000), session("day-2", 2000, 3000)],
+    },
+    1,
+  );
+  assert.deepEqual(sessionRows(db), [
+    { id: "day-1", starts_at: 1000, ends_at: 2000 },
+    { id: "day-2", starts_at: 2000, ends_at: 3000 },
+  ]);
+});
+
 test("a seed with a bad field is refused with a message naming the field", () => {
   const good = {
     id: "s",
