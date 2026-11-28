@@ -780,6 +780,96 @@ describe("fix check N2: token balances come only with a token program", () => {
   });
 });
 
+describe("fix check: a failed run claims no changes", () => {
+  // When the run fails, agave returns every requested account as null
+  // (a64fa73, rpc/src/rpc.rs:3554 and :3555), which says nothing about what
+  // the transaction would do.
+  const failed = { InstructionError: [0, { Custom: 1 }] };
+  const tokenTransfer = () =>
+    build([
+      new web3.TransactionInstruction({
+        programId: new web3.PublicKey(TOKEN_PROGRAM),
+        keys: [
+          { pubkey: tokenAccount, isSigner: false, isWritable: true },
+          { pubkey: attacker, isSigner: false, isWritable: true },
+          { pubkey: user, isSigner: true, isWritable: false },
+        ],
+        data: Buffer.from([3, 200, 0, 0, 0, 0, 0, 0, 0]),
+      }),
+    ]);
+
+  it("a token transfer whose run fails reports the error and no change", async () => {
+    const result = await preflightTransaction(tokenTransfer(), {
+      rpc: recordedRpc({
+        accounts: {
+          [USER]: system(5_000_000_000) as never,
+          [K.userTokenAccount]: tokenState(200, null) as never,
+        },
+        simulation: { err: failed, accounts: {} },
+      }),
+      user: USER,
+    });
+    assert.ok(result.summary.kind === "ready");
+    assert.deepEqual(result.summary.simulation, {
+      status: "ran",
+      err: failed,
+      changes: [],
+    });
+    assert.deepEqual(result.summary.blocks, ["simulation-failed"]);
+    assert.equal(result.drainPattern, false);
+  });
+
+  it("the same, through jsonRpc with agave's null accounts", async () => {
+    const rpc = jsonRpc(
+      endpoint({
+        accounts: (addresses) =>
+          addresses.map((address) =>
+            address === USER
+              ? system(5_000_000_000)
+              : address === K.userTokenAccount
+                ? tokenState(200, null)
+                : null,
+          ),
+        simulation: (addresses) => ({
+          err: failed,
+          logs: [],
+          accounts: addresses.map(() => null),
+          preBalances: [5_000_000_000, 2_039_280, 0, 1],
+          postBalances: [4_999_995_000, 2_039_280, 0, 1],
+          preTokenBalances: [
+            {
+              accountIndex: 1,
+              mint: K.mint,
+              owner: USER,
+              uiTokenAmount: { amount: "200" },
+            },
+          ],
+          postTokenBalances: [
+            {
+              accountIndex: 1,
+              mint: K.mint,
+              owner: USER,
+              uiTokenAmount: { amount: "200" },
+            },
+          ],
+        }),
+      }),
+      "x",
+    );
+    const result = await preflightTransaction(tokenTransfer(), {
+      rpc,
+      user: USER,
+    });
+    assert.ok(result.summary.kind === "ready");
+    assert.deepEqual(result.summary.simulation, {
+      status: "ran",
+      err: failed,
+      changes: [],
+    });
+    assert.deepEqual(result.summary.blocks, ["simulation-failed"]);
+  });
+});
+
 describe("audit 9: the report JSON and the blockhash", () => {
   const offline = () =>
     jsonRpc(async () => {

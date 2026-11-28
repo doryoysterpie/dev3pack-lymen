@@ -274,13 +274,19 @@ export async function preflight(
       );
     }
     owned = ownedTokenAccounts(feePayer, watched, before, result.accounts);
-    const changes = balanceChanges(feePayer, watched, before, result.accounts, {
-      keys,
-      pre: preBalances,
-      post: postBalances,
-      preToken: preTokenBalances,
-      postToken: postTokenBalances,
-    });
+    // A run that failed returns every account as null (anza-xyz/agave
+    // a64fa73, rpc/src/rpc.rs:3554 and :3555), which shows nothing the
+    // transaction would do, so a failed run lists no change.
+    const changes =
+      result.err === null
+        ? balanceChanges(feePayer, watched, before, result.accounts, {
+            keys,
+            pre: preBalances,
+            post: postBalances,
+            preToken: preTokenBalances,
+            postToken: postTokenBalances,
+          })
+        : [];
     simulation = {
       status: "ran",
       // The runtime's error, with any address the RPC wrote into it scrubbed.
