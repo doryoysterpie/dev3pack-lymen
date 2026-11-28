@@ -482,7 +482,16 @@ export type PreflightReport =
     };
 
 export function toReport(result: Preflight): PreflightReport {
-  if (result.kind !== "ready") return result;
+  // A refusal carries no address either: another wallet as fee payer is
+  // the message's account 0, and any other address is marked as below.
+  if (result.kind !== "ready") {
+    return withRoleMarkers(
+      result.kind === "user-not-fee-payer"
+        ? { kind: result.kind, feePayer: "account 0" }
+        : result,
+      new Map<string, string>(),
+    );
+  }
   const { feePayerSet, summary, simulation, blocks } = result;
   // A report carries no address but REPORT_PROGRAMS (the owner's ruling
   // 20a): the wallet is "user", an account of the message is "account N" by

@@ -213,11 +213,17 @@ describe("preflightTransaction, the server entry point", () => {
       ),
       user: ATTACKER,
     });
+    // The audit of 21e1f9f, item 1: a refusal report carries no address
+    // either; the fee payer is the message's account 0.
     assert.deepEqual(result, {
-      summary: { kind: "user-not-fee-payer", feePayer: USER },
+      summary: { kind: "user-not-fee-payer", feePayer: "account 0" },
       drainPattern: false,
       simulatedAt: null,
     });
+    assert.equal(
+      /[1-9A-HJ-NP-Za-km-z]{32,}/.test(JSON.stringify(result)),
+      false,
+    );
   });
 
   it("returns the slot the simulation ran at, outside the summary, and not the RPC's blockhash", async () => {
