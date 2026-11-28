@@ -149,7 +149,7 @@ test("with no built page, /station answers 503 and names the build command", asy
     assert.equal(res.status, 503);
     assert.deepEqual(await res.json(), {
       error: "station_page_not_built",
-      build: "npm run build -w @limen/station",
+      build: "node apps/station/build.ts",
     });
   } finally {
     await close();

@@ -1,7 +1,13 @@
 // E-03: the station build, one self-contained index.html that the API serves at /station.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -10,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const APP = fileURLToPath(new URL("..", import.meta.url));
 
-/** Builds the page with `npm run build`'s script into a fresh folder, with `env` set for it. */
+/** Builds the page with `apps/station/build.ts` into a fresh folder, with `env` set for it. */
 function buildWith(env: Record<string, string>): string {
   const outDir = mkdtempSync(join(tmpdir(), "limen-station-build-"));
   const r = spawnSync(
@@ -167,5 +173,82 @@ test("the build runs Vite with PATH and NODE_ENV alone: a VITE_ variable and DEB
     );
   } finally {
     rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+test("the station build is documented as node apps/station/build.ts, not an npm script, and under NODE_DEBUG=child_process prints neither an exported secret nor any spawn option holding it", () => {
+  const root = fileURLToPath(new URL("../../..", import.meta.url));
+  const stationReadme = readFileSync(join(APP, "README.md"), "utf8");
+  const documented = /## Run[\s\S]*?```bash\n([^\n]+)\n```/
+    .exec(stationReadme)?.[1]
+    ?.trim();
+  assert.ok(
+    documented !== undefined,
+    "apps/station/README.md documents a build command",
+  );
+
+  const secret = "station-build-shell-secret-0123456789abcdef";
+  const rpcSecret =
+    "https://rpc.devnet.example/?api-key=build-rpc-secret-987654";
+  const hadDist = existsSync(join(APP, "dist"));
+  try {
+    for (const debug of ["child_process", "*"]) {
+      const command: string = documented;
+      const r = spawnSync("sh", ["-c", command], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH ?? "",
+          STATION_DISPLAY_TOKEN: secret,
+          SOLANA_RPC_URL: rpcSecret,
+          NODE_DEBUG: debug,
+        },
+        timeout: 120_000,
+      });
+      assert.equal(r.status, 0, r.stderr.slice(-600));
+      assert.match(
+        r.stderr,
+        /CHILD_PROCESS/,
+        `NODE_DEBUG=${debug} traced child spawn`,
+      );
+      const combined = r.stdout + r.stderr;
+      for (const forbidden of [
+        secret,
+        rpcSecret,
+        "STATION_DISPLAY_TOKEN",
+        "SOLANA_RPC_URL",
+      ]) {
+        assert.ok(
+          !combined.includes(forbidden),
+          `NODE_DEBUG=${debug} leaked ${forbidden.startsWith("http") || forbidden.includes("secret") ? "secret value" : forbidden} in output`,
+        );
+      }
+    }
+  } finally {
+    if (!hadDist) rmSync(join(APP, "dist"), { recursive: true, force: true });
+  }
+
+  assert.equal(documented, "node apps/station/build.ts");
+  const apiReadme = readFileSync(
+    join(root, "services", "api", "README.md"),
+    "utf8",
+  );
+  assert.ok(apiReadme.includes("`node apps/station/build.ts`"));
+  assert.ok(!apiReadme.includes("npm run build"));
+  for (const manifestPath of [
+    join(root, "package.json"),
+    join(APP, "package.json"),
+    join(root, "services", "api", "package.json"),
+  ]) {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    for (const [name, cmd] of Object.entries(manifest.scripts ?? {})) {
+      assert.notEqual(name, "build", `${manifestPath} defines a build script`);
+      assert.ok(
+        !cmd.includes("build.ts"),
+        `${manifestPath} script ${name} invokes build.ts`,
+      );
+    }
   }
 });

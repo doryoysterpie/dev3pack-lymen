@@ -114,6 +114,7 @@ test("CI runs the scan, and git ignores .der, .pem, .key and .p12 files anywhere
   ]) {
     const r = spawnSync("git", ["check-ignore", "-q", "--no-index", path], {
       cwd: ROOT,
+      env: { PATH: process.env.PATH ?? "" },
     });
     assert.equal(r.status, 0, `${path} is ignored`);
   }
@@ -193,7 +194,11 @@ test("a tracked symlink, or a tracked file missing from the tree, fails the scan
   const dir = mkdtempSync(join(tmpdir(), "limen-key-scan-"));
   try {
     const git = (...args: string[]) =>
-      spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+      spawnSync("git", args, {
+        cwd: dir,
+        env: { PATH: process.env.PATH ?? "" },
+        encoding: "utf8",
+      });
     git("init", "-q");
     writeFileSync(join(dir, "kept.txt"), "fine\n");
     writeFileSync(join(dir, "gone.txt"), "soon gone\n");
@@ -207,5 +212,67 @@ test("a tracked symlink, or a tracked file missing from the tree, fails the scan
     ]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the key scan is documented as node services/api/src/key-scan.ts, not an npm script, and under NODE_DEBUG=child_process prints neither an exported secret nor any spawn option holding it", () => {
+  const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+  const documented = /`([^`\n]*key-scan\.ts[^`\n]*)`/.exec(readme)?.[1]?.trim();
+  assert.ok(
+    documented !== undefined,
+    "README.md documents the key-scan command",
+  );
+
+  const secret = "key-scan-shell-secret-0123456789abcdef";
+  const rpcSecret =
+    "https://rpc.devnet.example/?api-key=scan-rpc-secret-987654";
+  for (const debug of ["child_process", "*"]) {
+    const command: string = documented;
+    const r = spawnSync("sh", ["-c", command], {
+      cwd: ROOT,
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH ?? "",
+        STATION_DISPLAY_TOKEN: secret,
+        SOLANA_RPC_URL: rpcSecret,
+        NODE_DEBUG: debug,
+      },
+      timeout: 30_000,
+    });
+    assert.equal(r.status, 0, r.stderr.slice(-600));
+    assert.match(
+      r.stderr,
+      /CHILD_PROCESS/,
+      `NODE_DEBUG=${debug} traced child spawn`,
+    );
+    const combined = r.stdout + r.stderr;
+    for (const forbidden of [
+      secret,
+      rpcSecret,
+      "STATION_DISPLAY_TOKEN",
+      "SOLANA_RPC_URL",
+    ]) {
+      assert.ok(
+        !combined.includes(forbidden),
+        `NODE_DEBUG=${debug} leaked ${forbidden.startsWith("http") || forbidden.includes("secret") ? "secret value" : forbidden} in output`,
+      );
+    }
+  }
+
+  assert.equal(documented, "node services/api/src/key-scan.ts");
+  for (const rel of [
+    "package.json",
+    "apps/station/package.json",
+    "services/api/package.json",
+  ]) {
+    const manifest = JSON.parse(readFileSync(join(ROOT, rel), "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    for (const [name, cmd] of Object.entries(manifest.scripts ?? {})) {
+      assert.ok(
+        !cmd.includes("key-scan"),
+        `${rel} script ${name} invokes key-scan`,
+      );
+    }
   }
 });

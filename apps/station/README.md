@@ -4,10 +4,10 @@ The Vite page for the station display (D-02). It shows the station QR the API si
 
 ## Run
 
-Build the page once, then start the API (see `services/api/README.md`) with `STATION_DISPLAY_TOKEN` set and a station and session seeded:
+Build the page once from the repository root, then start the API (see `services/api/README.md`) with `STATION_DISPLAY_TOKEN` set and a station and session seeded:
 
 ```bash
-npm run build -w @limen/station
+node apps/station/build.ts
 ```
 
 The build writes one self-contained file, `dist/index.html`, with its script inlined and the build marker `<!-- limen:station-page:v1 -->` inserted. `build.ts` runs Vite in a child process whose environment is `PATH` and `NODE_ENV` alone, so no variable of yours, a secret or a `VITE_` one, reaches the build or its debug output (`src/build.test.ts`). The API reads that file once at start-up, checks on the opened descriptor that it is a regular file with link count 1, checks its doctype, build marker, size limit and key-scan result, and serves it at `/station`, whatever the query string, so the station's address is `http://127.0.0.1:8787/station?station=st-front` (`services/api/src/station-page.test.ts`). The page asks the API for its QR at `/api` on the same origin. To change the page, rebuild it and restart the API. No Vite server runs.

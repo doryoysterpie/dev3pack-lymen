@@ -90,7 +90,10 @@ export function scanTrackedFiles(root: string): {
   files: number;
   hits: { file: string; reasons: string[] }[];
 } {
-  const listed = spawnSync("git", ["ls-files", "-z"], { cwd: root });
+  const listed = spawnSync("git", ["ls-files", "-z"], {
+    cwd: root,
+    env: { PATH: process.env.PATH ?? "" },
+  });
   if (listed.status !== 0) throw new Error("git ls-files failed");
   const names = listed.stdout.toString("utf8").split("\0").filter(Boolean);
   const hits: { file: string; reasons: string[] }[] = [];

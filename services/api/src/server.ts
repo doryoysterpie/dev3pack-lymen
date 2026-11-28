@@ -173,7 +173,7 @@ export function createApiServer(ctx: ApiContext): Server {
         if (ctx.stationPage == null) {
           sendJson(res, 503, {
             error: "station_page_not_built",
-            build: "npm run build -w @limen/station",
+            build: "node apps/station/build.ts",
           });
           return;
         }

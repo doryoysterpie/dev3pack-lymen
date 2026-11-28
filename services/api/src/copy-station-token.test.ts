@@ -271,18 +271,32 @@ test("a missing or short secret is refused without echoing it, and pbcopy does n
   }
 });
 
-test("with NODE_DEBUG=child_process and NODE_OPTIONS set, stderr holds neither the token nor the secret", () => {
+test("with NODE_DEBUG=child_process and NODE_OPTIONS set, stderr holds neither the token, any exported secret, nor any spawn option holding them", () => {
+  const rpcSecret =
+    "https://rpc.devnet.example/?api-key=copy-rpc-secret-987654";
   for (const debug of ["child_process", "*"]) {
     const r = run(["st-front"], {
-      env: { NODE_DEBUG: debug, NODE_OPTIONS: "--no-deprecation" },
+      env: {
+        NODE_DEBUG: debug,
+        NODE_OPTIONS: "--no-deprecation",
+        SOLANA_RPC_URL: rpcSecret,
+      },
     });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.copied, FRONT_TOKEN);
-    for (const value of [FRONT_TOKEN, SECRET])
+    assert.match(r.stderr, /CHILD_PROCESS/);
+    for (const value of [FRONT_TOKEN, SECRET, rpcSecret, "SOLANA_RPC_URL"])
       assert.ok(
         !r.stderr.includes(value) && !r.stdout.includes(value),
-        `NODE_DEBUG=${debug}: ${r.stderr.slice(0, 400)}`,
+        `NODE_DEBUG=${debug} leaked secret or spawn option`,
       );
+    if (debug === "child_process") {
+      assert.ok(
+        !r.stderr.includes("STATION_DISPLAY_TOKEN") &&
+          !r.stdout.includes("STATION_DISPLAY_TOKEN"),
+        "NODE_DEBUG=child_process spawn options hold STATION_DISPLAY_TOKEN",
+      );
+    }
   }
 });
 

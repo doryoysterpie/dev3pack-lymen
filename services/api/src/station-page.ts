@@ -1,5 +1,5 @@
-// The station page (E-03): one self-contained HTML file, built by `npm run build -w
-// @limen/station`, which the API reads once at start-up and serves at /station
+// The station page (E-03): one self-contained HTML file, built by `node apps/station/build.ts`,
+// which the API reads once at start-up and serves at /station
 // (station-page.test.ts).
 import {
   closeSync,

@@ -1,4 +1,4 @@
-// Builds the station page (E-03): `npm run build -w @limen/station`, or this file with Node. Vite
+// Builds the station page (E-03): `node apps/station/build.ts`. Vite
 // runs in a child process whose environment is PATH and NODE_ENV alone, so no variable of the
 // caller's, a secret or a VITE_ one, reaches the build or its debug output (src/build.test.ts).
 // Arguments, such as --outDir, pass through to `vite build`.
