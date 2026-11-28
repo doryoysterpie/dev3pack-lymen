@@ -206,3 +206,82 @@ test("only a signed message that is exactly the message plus 64 bytes yields a s
   );
   assert.equal(signatureFromSignedPayload(sig, MESSAGE), null);
 });
+
+test("every account address in a wallet authorization answer must decode to a 32-byte key, in connect and in sign", async () => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const key = Buffer.from(
+    publicKey.export({ format: "jwk" }).x ?? "",
+    "base64url",
+  );
+  const validAddress = key.toString("base64");
+  const secondValid = encodeBase58(Buffer.alloc(32, 5));
+
+  const makeSigner = (
+    connectAccounts: { address: string }[],
+    signAccounts: { address: string }[],
+  ) => {
+    let signMessagesCalls = 0;
+    const wallet: MwaWallet = {
+      async authorize(params) {
+        return {
+          accounts:
+            params.auth_token === undefined ? connectAccounts : signAccounts,
+          auth_token: "token-1",
+        };
+      },
+      async signMessages(params) {
+        signMessagesCalls += 1;
+        const msg = Buffer.from(params.payloads[0] ?? "", "base64");
+        const sig = sign(null, msg, privateKey);
+        return {
+          signed_payloads: [Buffer.concat([msg, sig]).toString("base64")],
+        };
+      },
+    };
+    const transact: Transact = (cb) => cb(wallet);
+    return {
+      signer: mwaSigner(transact, {
+        appName: "limen",
+        chain: "solana:devnet",
+        verify: ed25519Verify,
+      }),
+      signMessagesCalls: () => signMessagesCalls,
+    };
+  };
+
+  // A malformed second account is refused in connect even though accounts[0] is valid.
+  await assert.rejects(
+    makeSigner(
+      [{ address: validAddress }, { address: "not-a-key" }],
+      [{ address: validAddress }],
+    ).signer.connect(),
+    { message: "The wallet's account is not a 32-byte key." },
+  );
+
+  // A malformed second account is refused in sign before signMessages is called.
+  const badSign = makeSigner(
+    [{ address: validAddress }],
+    [{ address: validAddress }, { address: "not-a-key" }],
+  );
+  const account = await badSign.signer.connect();
+  await assert.rejects(badSign.signer.sign(account, MESSAGE), {
+    message: "The wallet's account is not a 32-byte key.",
+  });
+  assert.equal(badSign.signMessagesCalls(), 0);
+
+  // Multiple accounts that all decode to 32-byte keys still work.
+  const bothValid = makeSigner(
+    [{ address: validAddress }, { address: secondValid }],
+    [{ address: secondValid }, { address: validAddress }],
+  );
+  const connected = await bothValid.signer.connect();
+  assert.equal(
+    ed25519Verify(
+      key,
+      MESSAGE,
+      await bothValid.signer.sign(connected, MESSAGE),
+    ),
+    true,
+  );
+  assert.equal(bothValid.signMessagesCalls(), 1);
+});

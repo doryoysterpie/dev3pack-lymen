@@ -71,7 +71,8 @@ export function mwaSigner(
     readonly verify: Ed25519Verify;
   },
 ): WalletSigner {
-  // The wallet's answer is checked whole before any part of it is used.
+  // The wallet's authorization answer is checked whole, with every account address decoded to a
+  // 32-byte key, before any part of it is used.
   const authorize = async (wallet: MwaWallet, authToken?: string) => {
     const auth = await wallet.authorize({
       identity: { name: opts.appName },
@@ -82,46 +83,46 @@ export function mwaSigner(
       typeof auth !== "object" ||
       auth === null ||
       typeof auth.auth_token !== "string" ||
-      !Array.isArray(auth.accounts) ||
-      !auth.accounts.every(
-        (a: unknown) =>
-          typeof a === "object" &&
-          a !== null &&
-          typeof (a as { address?: unknown }).address === "string",
-      )
+      !Array.isArray(auth.accounts)
     ) {
       throw new Error("The wallet's authorization is not in the owed form.");
     }
-    return auth;
+    const accounts: { key: Uint8Array; base58: string }[] = [];
+    for (const a of auth.accounts as unknown[]) {
+      if (
+        typeof a !== "object" ||
+        a === null ||
+        typeof (a as { address?: unknown }).address !== "string"
+      ) {
+        throw new Error("The wallet's authorization is not in the owed form.");
+      }
+      const named = accountKey((a as { address: string }).address);
+      if (named === null)
+        throw new Error("The wallet's account is not a 32-byte key.");
+      accounts.push(named);
+    }
+    return { authToken: auth.auth_token, accounts };
   };
   return {
     connect: () =>
       transact(async (wallet): Promise<WalletAccount> => {
         const auth = await authorize(wallet);
-        const account = auth.accounts[0];
-        if (account === undefined)
+        const named = auth.accounts[0];
+        if (named === undefined)
           throw new Error("The wallet authorized no account.");
-        const named = accountKey(account.address);
-        if (named === null)
-          throw new Error("The wallet's account is not a 32-byte key.");
         return {
           wallet: named.base58,
           key: named.key,
           // MWA declares an address base64 (Base64EncodedAddress), whichever spelling the wallet
           // gave, so the account is named to it by its key in base64.
           address: encodeBase64(named.key),
-          authToken: auth.auth_token,
+          authToken: auth.authToken,
         };
       }),
     sign: (account, message) =>
       transact(async (wallet) => {
         const auth = await authorize(wallet, account.authToken);
-        if (
-          !auth.accounts.some((a) => {
-            const named = accountKey(a.address);
-            return named !== null && sameKey(named.key, account.key);
-          })
-        ) {
+        if (!auth.accounts.some((named) => sameKey(named.key, account.key))) {
           throw new Error(
             "The wallet no longer authorizes the account the message names.",
           );
