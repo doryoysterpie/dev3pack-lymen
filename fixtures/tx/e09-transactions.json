@@ -215,22 +215,6 @@
       "owed": {
         "effects": [
           {
-            "kind": "token-out",
-            "instruction": 0,
-            "program": "token-2022",
-            "source": {
-              "address": "3BNZi6FHJLmHKiKPNed7CbkFsKZhAmmYDcAwbVHo6PFf"
-            },
-            "destination": {
-              "address": "E3RFTY1NdeAf1fD4HH8v6SJWCxTH3bkvBKMbapev8HGW"
-            },
-            "mint": {
-              "address": "M3enQnkvsuuvu9op88Yhr59UaXNsF1FqwedKDg248DB"
-            },
-            "amount": "2500000",
-            "decimals": 6
-          },
-          {
             "kind": "authority-changed",
             "instruction": 1,
             "program": "token-2022",
@@ -253,7 +237,13 @@
           }
         ],
         "others": [],
-        "undecoded": [],
+        "undecoded": [
+          {
+            "instruction": 0,
+            "programId": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+            "reason": "instruction-not-decoded"
+          }
+        ],
         "signers": {
           "feePayer": "user",
           "others": [],

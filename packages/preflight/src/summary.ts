@@ -6,7 +6,8 @@
 // from the transaction itself, so the app and a server summarize the same
 // bytes the same way. "Yours" means an instruction the user's wallet
 // authorizes: the wallet is the System funding account, the account being
-// assigned, or a signing owner, delegate or authority of a token instruction.
+// assigned, or the signing owner, delegate or authority account of a token
+// instruction itself (authorizedByUser).
 // The summary writes the role marker "user" (marker.ts) wherever the user's
 // address would appear, so it carries no wallet address. It still names the
 // wallet's token accounts by address; a report marks those too (preflight.ts,
@@ -180,12 +181,23 @@ function isUser(account: Account, user: string): boolean {
 }
 
 /** A token instruction is the user's when the wallet signs as an authorizer. */
+/**
+ * Whether the user's wallet is the authority a token instruction names, and
+ * signs. The token programs check the account at the authority position
+ * against the owner, delegate or authority, and a multisig's signers only
+ * when that account is the multisig (solana-program/token 38de8d1,
+ * program/src/processor.rs, validate_owner, from line 989). So the wallet as
+ * one signer of a multisig, or as an extra signer after the authority, is not
+ * the authority.
+ */
 function authorizedByUser(
   authorizers: readonly Account[],
   user: string,
 ): boolean {
-  return authorizers.some(
-    (account) => account.signer && account.address === user,
+  return (
+    authorizers.length > 0 &&
+    authorizers[0].signer &&
+    authorizers[0].address === user
   );
 }
 
@@ -363,7 +375,8 @@ function priorityFee(decoded: readonly Decoded[]): Effect | null {
 
 /**
  * The token accounts the decoded instructions show the user owns: the account
- * of an Approve, Revoke or SetAuthority (AccountOwner) the user signs as the
+ * of an Approve, a Token program Revoke or a SetAuthority (AccountOwner) the
+ * user signs as the
  * direct authority, which the token program lets only the account's owner
  * sign (solana-program/token 38de8d1, program/src/processor.rs, validate_owner
  * against the account's owner at lines 379, 407 and 442), and an associated
@@ -387,8 +400,12 @@ export function userTokenAccounts(
   for (const compiled of message.instructions) {
     const decoded = decodeInstruction(compiled, accounts);
     let account: Account | null = null;
+    // Token-2022's Revoke also lets the current delegate sign
+    // (solana-program/token-2022 efe55b4, program/src/processor.rs:729), so
+    // only the Token program's Revoke proves ownership.
     if (
-      (decoded.kind === "token-approve" || decoded.kind === "token-revoke") &&
+      (decoded.kind === "token-approve" ||
+        (decoded.kind === "token-revoke" && decoded.program === "token")) &&
       direct(decoded.authorizers)
     ) {
       account = decoded.source;

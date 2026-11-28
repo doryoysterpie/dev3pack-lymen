@@ -272,17 +272,9 @@ const cases = [
     ]),
     tables: {},
     owed: {
+      // A Token-2022 transfer is not decoded: a transfer fee or a transfer
+      // hook on the mint would change what it does (E-09 audit finding 3).
       effects: [
-        {
-          kind: "token-out",
-          instruction: 0,
-          program: "token-2022",
-          source: at(userToken2022Account),
-          destination: at(organizer),
-          mint: at(mint),
-          amount: "2500000",
-          decimals: 6,
-        },
         {
           kind: "authority-changed",
           instruction: 1,
@@ -300,7 +292,13 @@ const cases = [
         },
       ],
       others: [],
-      undecoded: [],
+      undecoded: [
+        {
+          instruction: 0,
+          programId: TOKEN_2022_PROGRAM_ID.toBase58(),
+          reason: "instruction-not-decoded",
+        },
+      ],
       signers: userSigner(),
       unresolvedAccounts: 0,
     },
