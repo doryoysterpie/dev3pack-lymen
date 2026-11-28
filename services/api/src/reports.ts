@@ -29,6 +29,12 @@ export interface ReportOptions {
   readonly lists?: DomainLists | null;
   /** The bearer token for the dashboard's JSON routes (E-12). Unset: those routes answer 503. */
   readonly triageToken?: string;
+  /**
+   * Called with the case ID when this report moves its case from held to escalated (E-13), and
+   * when a human escalates a case on the dashboard (E-12's route; owner ruling 6a).
+   * Unset means nothing is called. A failure inside it never changes the response.
+   */
+  readonly onEscalated?: (caseId: number) => void;
 }
 
 function sendJson(
@@ -136,6 +142,13 @@ async function postReport(
         : outcome.status;
   }
   const triage = triageSighting(db, sightingId, lists, now());
+  if (triage.escalatedNow && options.onEscalated !== undefined) {
+    try {
+      options.onEscalated(triage.case.id);
+    } catch {
+      // The report is stored and triaged either way; the hook's failure stays in the process.
+    }
+  }
   sendJson(res, 201, {
     sighting_id: sightingId,
     resimulation,
@@ -167,7 +180,12 @@ export function routeReports(
     }
     lists = loaded;
   }
-  const dashboard = { triageToken: options.triageToken, lists, now };
+  const dashboard = {
+    triageToken: options.triageToken,
+    onEscalated: options.onEscalated,
+    lists,
+    now,
+  };
   if (routeDashboard(db, dashboard, req, res, pathname)) return true;
   if (pathname !== "/reports") return false;
   if (req.method !== "POST") {
