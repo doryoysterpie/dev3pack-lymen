@@ -60,6 +60,7 @@ function fakeClock(start = 0) {
 const flush = (): Promise<void> =>
   new Promise((resolve) => setImmediate(resolve));
 
+/** Placeholder QR values injected directly into startRotation; not issued or signed by the API. */
 function response(n: number): StationQr {
   return {
     qr: `limen:station:v1.payload-${n}.signer.signature`,
@@ -100,7 +101,7 @@ function wireBody(
   };
 }
 
-test("the display shows a fresh QR from the API at 0 s, 30 s and 60 s", async () => {
+test("startRotation fetches and renders injected placeholder QRs at 0 s, 30 s and 60 s", async () => {
   const clock = fakeClock();
   const fetchedAt: number[] = [];
   const shown: StationView[] = [];
@@ -558,9 +559,9 @@ test("a QR whose payload's window has passed when it arrives is not drawn, whate
   assert.deepEqual(shown, [{ at: 2000, kind: "refreshing" }]);
 });
 
-test("with the station's clock 2 s behind the API's, the deadline is 5 s before the window ends on the station's clock, T + 53 s, and T + 55 s on the API's", async () => {
+test("with the fake clock 2 s behind an injected QR's issuedAt T, the deadline is T + 53 s on the fake clock (T + 55 s relative to T)", async () => {
   const T = 1_795_000_000;
-  // The API signs at T for 60 s; the station's clock reads T - 2 s.
+  // Injected placeholder QR with issuedAt T and expiresAt T + 60; the fake clock reads T - 2 s.
   const clock = fakeClock(T * 1000 - 2000);
   const deadlines: number[] = [];
   let calls = 0;
@@ -581,9 +582,9 @@ test("with the station's clock 2 s behind the API's, the deadline is 5 s before 
     clearTimeout: clock.clearTimeout,
   });
   await flush();
-  // min(T + 60 s, (T - 2 s) + 60 s) - 5 s, on the station's clock.
+  // min(T + 60 s, (T - 2 s) + 60 s) - 5 s, on the fake clock.
   assert.deepEqual(deadlines, [T * 1000 + 53_000]);
-  // On the API's clock that is T + 55 s, 5 s before the verifier's T + 60 s.
+  // Relative to T, that is T + 55 s, 5 s before T + 60 s.
   assert.ok(deadlines[0]! + 2000 <= (T + 60) * 1000 - 5000);
 });
 
