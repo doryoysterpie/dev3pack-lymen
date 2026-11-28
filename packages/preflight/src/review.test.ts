@@ -21,6 +21,7 @@ import {
   SYSTEM_PROGRAM,
   TOKEN_PROGRAM,
 } from "./programs.ts";
+import { asSigners } from "../test-support/build.ts";
 import type { Fetch } from "./rpc.ts";
 import {
   endpointFor,
@@ -468,7 +469,7 @@ describe("n3: which token accounts a report marks as the wallet's", () => {
           attacker,
           attacker,
           BigInt(5),
-          [user],
+          asSigners([user]),
         ),
       ],
       offline(),

@@ -9,6 +9,7 @@ import { describe, it } from "node:test";
 import * as spl from "@solana/spl-token";
 import * as web3 from "@solana/web3.js";
 
+import { asSigners } from "../test-support/build.ts";
 import { messageAccounts } from "./accounts.ts";
 import { decodeInstruction, type Decoded } from "./decode.ts";
 import { parseTransaction } from "./wire.ts";
@@ -232,7 +233,7 @@ describe("cross-check: instruction decoder against spl-token and web3.js builder
             destination,
             authority,
             amount,
-            multisig,
+            asSigners(multisig),
             programId,
           ),
           payer,
@@ -276,7 +277,7 @@ describe("cross-check: instruction decoder against spl-token and web3.js builder
             authority,
             amount,
             decimals,
-            multisig,
+            asSigners(multisig),
             programId,
           ),
           payer,
@@ -316,7 +317,7 @@ describe("cross-check: instruction decoder against spl-token and web3.js builder
             delegate,
             authority,
             amount,
-            multisig,
+            asSigners(multisig),
             programId,
           ),
           payer,
@@ -347,7 +348,7 @@ describe("cross-check: instruction decoder against spl-token and web3.js builder
             authority,
             amount,
             decimals,
-            multisig,
+            asSigners(multisig),
             programId,
           ),
           payer,
@@ -359,7 +360,12 @@ describe("cross-check: instruction decoder against spl-token and web3.js builder
         );
 
         d = decodeOne(
-          spl.createRevokeInstruction(source, authority, multisig, programId),
+          spl.createRevokeInstruction(
+            source,
+            authority,
+            asSigners(multisig),
+            programId,
+          ),
           payer,
         );
         assert.ok(d.kind === "token-revoke");
@@ -378,7 +384,7 @@ describe("cross-check: instruction decoder against spl-token and web3.js builder
             authority,
             type,
             newAuthority,
-            multisig,
+            asSigners(multisig),
             programId,
           ),
           payer,
@@ -404,7 +410,7 @@ describe("cross-check: instruction decoder against spl-token and web3.js builder
             source,
             destination,
             authority,
-            multisig,
+            asSigners(multisig),
             programId,
           ),
           payer,
@@ -435,7 +441,7 @@ describe("cross-check: instruction decoder against spl-token and web3.js builder
             authority,
             amount,
             decimals,
-            multisig,
+            asSigners(multisig),
             programId,
           ),
           payer,

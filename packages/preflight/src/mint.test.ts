@@ -12,6 +12,7 @@ import { describe, it } from "node:test";
 import * as spl from "@solana/spl-token";
 import * as web3 from "@solana/web3.js";
 
+import { asSigners } from "../test-support/build.ts";
 import { summarizeTransaction } from "./summary.ts";
 import { parseTransaction } from "./wire.ts";
 
@@ -99,9 +100,13 @@ describe("m7: tokens minted with the wallet's mint authority", () => {
   // mint authority (token 38de8d1, processor.rs, validate_owner).
   it("the wallet as one signer of a multisig mint authority: not the wallet's effect", () => {
     const got = summary(
-      spl.createMintToInstruction(mint, destination, attacker, BigInt(1), [
-        user,
-      ]),
+      spl.createMintToInstruction(
+        mint,
+        destination,
+        attacker,
+        BigInt(1),
+        asSigners([user]),
+      ),
     );
     assert.deepEqual(got.effects, []);
     assert.deepEqual(got.others, [{ instruction: 0, kind: "token-mint-to" }]);

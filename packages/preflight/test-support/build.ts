@@ -51,6 +51,23 @@ export function edited(
   };
 }
 
+/**
+ * Multisig signers as @solana/spl-token takes them. Since the services pin
+ * @solana/web3.js 1.98.4 (services/api/package.json), spl-token resolves that
+ * copy, not this package's 1.99.0, and its addSigners takes a signer that is
+ * not its own PublicKey class by the signer's publicKey (@solana/spl-token
+ * 0.4.15, src/instructions/internal.ts). So each key is given as a Signer;
+ * the secret key is never read.
+ */
+export function asSigners(
+  keys: readonly web3.PublicKey[],
+): { publicKey: web3.PublicKey; secretKey: Uint8Array }[] {
+  return keys.map((publicKey) => ({
+    publicKey,
+    secretKey: new Uint8Array(64),
+  }));
+}
+
 /** Replaces the one occurrence of find in text; there must be exactly one. */
 export function once(text: string, find: string, replace: string): string {
   const at = text.indexOf(find);

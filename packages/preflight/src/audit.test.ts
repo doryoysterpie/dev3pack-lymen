@@ -19,6 +19,7 @@ import {
   TOKEN_2022_PROGRAM,
   TOKEN_PROGRAM,
 } from "./programs.ts";
+import { asSigners } from "../test-support/build.ts";
 import { endpointFor, recordedEndpoint } from "../test-support/recorded.ts";
 import { summarizeTransaction } from "./summary.ts";
 import { parseTransaction, type ParsedTransaction } from "./wire.ts";
@@ -220,7 +221,7 @@ describe("audit 4: only the authority account itself authorizes", () => {
           attacker,
           organizer,
           BigInt(5),
-          [user],
+          asSigners([user]),
         ),
       ]).effects,
       [],
