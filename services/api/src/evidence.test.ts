@@ -7,6 +7,7 @@ import { decodeBase58 } from "./base58.ts";
 import { openDatabase } from "./db.ts";
 import {
   canonicalJson,
+  decodedPart,
   loadBundle,
   MAX_CLOCK_AHEAD_S,
   MAX_DATE_SECONDS,
@@ -313,6 +314,89 @@ test("a re-simulation that never answers counts as failed after the time limit",
   );
   assert.equal(loadBundle(db, id)?.resimulationFailedAt, 60);
   assert.equal(loadBundle(db, id)?.resimulation, null);
+});
+
+test("a re-simulation matches on the decoded instructions, not on drifting balances (owner ruling 7a)", async () => {
+  // A summary in the pre-flight report's shape: decoded instructions, then the simulation's
+  // balance changes, which drift as account state moves.
+  const report = (lamports: string, before: string, after: string) => ({
+    kind: "ready",
+    summary: {
+      effects: [
+        {
+          kind: "sol-out",
+          instruction: 0,
+          to: { address: RECIPIENT },
+          lamports,
+          reason: "transfer",
+        },
+      ],
+      others: [],
+      undecoded: [],
+      signers: { feePayer: "user", others: [], unsigned: true },
+      unresolvedAccounts: 0,
+    },
+    simulation: {
+      status: "ran",
+      err: null,
+      changes: [{ kind: "sol", account: "user", before, after }],
+    },
+    blocks: [],
+  });
+  const db = openDatabase(":memory:");
+  const stored = report("4990000000", "5000000000", "9995000");
+  const id = storeReport(
+    db,
+    parsed({ ...fixture("drainer_device_1"), summary: stored }),
+    1,
+  );
+
+  // Same instructions, different balances: the wallet held less when the server re-simulated.
+  const drifted = report("4990000000", "2000000000", "0");
+  const same = await resimulateBundle(
+    db,
+    id,
+    async () => ({ summary: drifted, drainPattern: true }),
+    10,
+  );
+  assert.equal(same.status === "resimulated" && same.matches, true);
+  assert.deepEqual(loadBundle(db, id)?.resimulation, {
+    at: 10,
+    matches: true,
+    drainPattern: true,
+  });
+
+  // One decoded instruction changed: a different amount leaves the wallet.
+  const changed = report("1", "5000000000", "9995000");
+  const differs = await resimulateBundle(
+    db,
+    id,
+    async () => ({ summary: changed, drainPattern: false }),
+    11,
+  );
+  assert.equal(differs.status === "resimulated" && differs.matches, false);
+  assert.deepEqual(loadBundle(db, id)?.resimulation, {
+    at: 11,
+    matches: false,
+    drainPattern: false,
+  });
+});
+
+test("the decoded part drops only the top-level simulation", () => {
+  assert.deepEqual(
+    decodedPart({
+      kind: "ready",
+      summary: { simulation: 1 },
+      simulation: 2,
+      blocks: [],
+    }),
+    { kind: "ready", summary: { simulation: 1 }, blocks: [] },
+  );
+  assert.deepEqual(decodedPart({ kind: "malformed", problem: "truncated" }), {
+    kind: "malformed",
+    problem: "truncated",
+  });
+  assert.equal(decodedPart(null), null);
 });
 
 test("re-simulation of a bundle with no transaction or no bundle runs nothing", async () => {

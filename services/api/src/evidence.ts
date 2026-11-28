@@ -105,6 +105,27 @@ export function canonicalJson(value: unknown): string {
   throw new TypeError(`${typeof value} is not JSON`);
 }
 
+/**
+ * The part of a summary a re-simulation must reproduce for the bundle to match (owner ruling 7a):
+ * the decoded instructions, not the simulation's balance changes, which drift as account state
+ * moves. For the pre-flight report shape { kind, summary, simulation, blocks } this drops the
+ * top-level `simulation` field and keeps the rest.
+ */
+export function decodedPart(summary: unknown): unknown {
+  if (
+    typeof summary !== "object" ||
+    summary === null ||
+    Array.isArray(summary)
+  ) {
+    return summary;
+  }
+  const rest: Record<string, unknown> = {
+    ...(summary as Record<string, unknown>),
+  };
+  delete rest.simulation;
+  return rest;
+}
+
 /** The stored device hash: SHA-256 of a fixed prefix and the app's install-scoped device ID. */
 export function deviceHash(deviceId: string): string {
   return createHash("sha256")
@@ -423,7 +444,9 @@ export async function resimulateBundle(
     ).run(now, sightingId);
     return { status: "failed" };
   }
-  const matches = summaryJson === bundle.summaryJson;
+  const matches =
+    canonicalJson(decodedPart(result.summary)) ===
+    canonicalJson(decodedPart(JSON.parse(bundle.summaryJson)));
   db.prepare(
     `UPDATE evidence_bundles SET resimulated_at = ?, resimulation_matches = ?, drain_pattern = ?,
        resimulation_failed_at = NULL
