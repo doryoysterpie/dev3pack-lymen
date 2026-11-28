@@ -191,9 +191,14 @@ test("a QR issued in a session's last second expires when the session ends", asy
     });
     return r.ok ? "ok" : r.reason;
   };
-  assert.equal(at(T * 1000), "ok");
+  assert.equal(at(T * 1000 - 1), "ok");
+  assert.equal(at(T * 1000), "expired");
   assert.equal(at(T * 1000 + 1), "expired");
   assert.equal(at((T + 59) * 1000), "expired");
+  // At T itself the API has moved to day-2, and day-1's QR is already refused.
+  clock = T;
+  const next = (await (await getQr("st-front")).json()) as { session: string };
+  assert.equal(next.session, "day-2");
 });
 
 test("the QR endpoint refuses methods other than GET", async () => {
