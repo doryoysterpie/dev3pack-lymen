@@ -305,6 +305,90 @@ describe("audit 8: a malformed balance is refused, not thrown later", () => {
     assert.ok(result.summary.kind === "ready");
     assert.equal(result.summary.simulation.status, "not-run");
   });
+
+  // Each balance an Rpc returns must be a whole number from 0 to the largest
+  // u64, written in decimal; anything else holds signing, through a custom Rpc
+  // as through jsonRpc, and the report still builds.
+  const notWhole = [
+    "unknown",
+    "-1",
+    "1.5",
+    "01",
+    "1e3",
+    "18446744073709551616",
+  ];
+  const solTransfer = recordedRpc({
+    accounts: { [USER]: system(5_000_000_000) as never },
+    simulation: { err: null, accounts: { [USER]: system(1) as never } },
+  });
+
+  for (const bad of notWhole) {
+    it(`an Rpc whose pre-balance is ${JSON.stringify(bad)} is not used`, async () => {
+      const rpc: Rpc = {
+        ...solTransfer,
+        simulate: async (base64, addresses) => ({
+          ...(await solTransfer.simulate(base64, addresses)),
+          preBalances: [bad, "0", "1"],
+        }),
+      };
+      const result = await preflightTransaction(build([transfer()]), {
+        rpc,
+        user: USER,
+      });
+      assert.ok(result.summary.kind === "ready");
+      assert.equal(result.summary.simulation.status, "not-run");
+      assert.deepEqual(result.summary.blocks, ["simulation-not-run"]);
+      assert.equal(result.drainPattern, false);
+    });
+  }
+
+  it("an Rpc whose token amounts are not whole numbers is not used", async () => {
+    const recorded = recordedRpc({
+      accounts: {
+        [USER]: system(5_000_000_000) as never,
+        [K.userTokenAccount]: tokenState(200, null) as never,
+      },
+      simulation: {
+        err: null,
+        accounts: {
+          [USER]: system(4_999_995_000) as never,
+          [K.userTokenAccount]: tokenState(0, null) as never,
+        },
+      },
+    });
+    for (const which of ["preTokenBalances", "postTokenBalances"] as const) {
+      const rpc: Rpc = {
+        ...recorded,
+        simulate: async (base64, addresses) => {
+          const simulation = await recorded.simulate(base64, addresses);
+          return {
+            ...simulation,
+            [which]: (simulation[which] ?? []).map((balance) => ({
+              ...balance,
+              amount: "unknown",
+            })),
+          };
+        },
+      };
+      const result = await preflightTransaction(
+        build([
+          new web3.TransactionInstruction({
+            programId: new web3.PublicKey(TOKEN_PROGRAM),
+            keys: [
+              { pubkey: tokenAccount, isSigner: false, isWritable: true },
+              { pubkey: attacker, isSigner: false, isWritable: true },
+              { pubkey: user, isSigner: true, isWritable: false },
+            ],
+            data: Buffer.from([3, 200, 0, 0, 0, 0, 0, 0, 0]),
+          }),
+        ]),
+        { rpc, user: USER },
+      );
+      assert.ok(result.summary.kind === "ready", which);
+      assert.equal(result.summary.simulation.status, "not-run", which);
+      assert.deepEqual(result.summary.blocks, ["simulation-not-run"], which);
+    }
+  });
 });
 
 describe("audit 12: more writable accounts than limen watches", () => {

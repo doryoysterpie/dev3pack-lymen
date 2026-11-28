@@ -35,7 +35,7 @@ import {
   withMarkers,
 } from "./marker.ts";
 import { ADDRESS_LOOKUP_TABLE_PROGRAM } from "./programs.ts";
-import { assertDevnet, RpcError, type Rpc } from "./rpc.ts";
+import { assertDevnet, isAmount, RpcError, type Rpc } from "./rpc.ts";
 import {
   balanceChanges,
   ownedTokenAccounts,
@@ -248,6 +248,18 @@ export async function preflight(
     ) {
       throw new Error(
         "the simulation did not return the balances of its own run",
+      );
+    }
+    // Any Rpc can be passed in, not only jsonRpc, so every amount is checked
+    // here as well: a balance that is not a whole amount is not used.
+    if (
+      ![...preBalances, ...postBalances].every(isAmount) ||
+      ![...preTokenBalances, ...postTokenBalances].every((balance) =>
+        isAmount(balance.amount),
+      )
+    ) {
+      throw new Error(
+        "the simulation returned a balance that is not a whole amount",
       );
     }
     // The amounts come from the simulation's own run. The other fields come
