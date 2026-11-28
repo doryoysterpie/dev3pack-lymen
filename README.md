@@ -8,7 +8,7 @@ limen is a mobile build-station check-in pass with QR pre-flight, and a report t
 
 ## Status
 
-Repository skeleton only (E-01). Each feature lands with its unit, E-02 to E-17, and the claims table below records what each check proves once it exists.
+Each feature lands with its unit. The claims table below records what each check proves, for the units on the default branch and, at their heads, for the units still in review.
 
 ## Built before and during the event
 
