@@ -47,6 +47,7 @@ import {
 } from "./rpc.ts";
 import {
   balanceChanges,
+  FROM_READ_BEFORE,
   ownedTokenAccounts,
   unchangedBetween,
   watchedAddresses,
@@ -72,6 +73,11 @@ export type SimulationOutcome =
       /** The runtime error the simulation reported, or null. */
       readonly err: unknown;
       readonly changes: readonly BalanceChange[];
+      /**
+       * Always FROM_READ_BEFORE (simulate.ts): the fields of the changes
+       * taken from a read before the simulation, not simulated.
+       */
+      readonly fromReadBefore: typeof FROM_READ_BEFORE;
     }
   | { readonly status: "not-run"; readonly reason: string };
 
@@ -355,6 +361,7 @@ export async function preflight(
       err: scrubAddresses(err),
       // Like the summary, the changes name the user's wallet by its role.
       changes: withMarker(changes, feePayer),
+      fromReadBefore: FROM_READ_BEFORE,
     };
     // A blockhash is never one of the transaction's own accounts; such a
     // value from the RPC is not kept.

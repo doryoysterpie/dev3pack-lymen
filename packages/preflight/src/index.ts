@@ -64,6 +64,7 @@ export {
   balanceChanges,
   MAX_WATCHED,
   watchedAddresses,
+  FROM_READ_BEFORE,
   type BalanceChange,
 } from "./simulate.ts";
 export {

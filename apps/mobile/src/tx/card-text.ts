@@ -216,6 +216,14 @@ function otherText(kind: TransactionSummary["others"][number]["kind"]): string {
   }
 }
 
+// The amounts and a token account's owner after come from the simulation's
+// own run. The other values before come from a read taken before the
+// simulation (FROM_READ_BEFORE), so each row says so instead of calling the
+// difference simulated: another transaction may have made it.
+const READ = "in a read taken before the simulation";
+const orNone = (address: string | null): string =>
+  address === null ? "none" : shown(address);
+
 function changeRow(change: BalanceChange): CardRow {
   if (change.kind === "sol") {
     const parts = [`${sol(change.before)} before, ${sol(change.after)} after.`];
@@ -225,12 +233,12 @@ function changeRow(change: BalanceChange): CardRow {
       change.ownerBefore !== change.ownerAfter
     ) {
       parts.push(
-        `Your wallet account's owner program changes from ${change.ownerBefore} to ${change.ownerAfter}, which would then control its SOL.`,
+        `Your wallet account's owner program: ${change.ownerBefore} ${READ}, ${change.ownerAfter} after it, which would then control its SOL.`,
       );
     }
     if (change.dataLengthBefore !== change.dataLengthAfter) {
       parts.push(
-        `Your wallet account's data changes from ${change.dataLengthBefore} to ${change.dataLengthAfter} bytes.`,
+        `Your wallet account's data: ${change.dataLengthBefore} bytes ${READ}, ${change.dataLengthAfter} bytes after it.`,
       );
     }
     return { label: "Your wallet, simulated", value: parts.join(" ") };
@@ -245,22 +253,20 @@ function changeRow(change: BalanceChange): CardRow {
     if (change.delegateAfter !== change.delegateBefore) {
       parts.push(
         change.delegateAfter === null
-          ? "The delegate is removed."
-          : `Delegate after: ${shown(change.delegateAfter)}, for up to ${tokenAmount(change.delegatedAmountAfter, null)}.`,
+          ? `The delegate: ${orNone(change.delegateBefore)} ${READ}, none after it.`
+          : `The delegate: ${orNone(change.delegateBefore)} ${READ}, ${shown(change.delegateAfter)} after it, for up to ${tokenAmount(change.delegatedAmountAfter, null)}.`,
       );
     } else if (
       change.delegateAfter !== null &&
       change.delegatedAmountAfter !== change.delegatedAmountBefore
     ) {
       parts.push(
-        `The allowance of delegate ${shown(change.delegateAfter)} changes from ${tokenAmount(change.delegatedAmountBefore, null)} to ${tokenAmount(change.delegatedAmountAfter, null)}.`,
+        `The allowance of delegate ${shown(change.delegateAfter)}: ${tokenAmount(change.delegatedAmountBefore, null)} ${READ}, ${tokenAmount(change.delegatedAmountAfter, null)} after it.`,
       );
     }
     if (change.closeAuthorityAfter !== change.closeAuthorityBefore) {
       parts.push(
-        change.closeAuthorityAfter === null
-          ? "The close authority is removed."
-          : `Close authority after: ${shown(change.closeAuthorityAfter)}.`,
+        `The close authority: ${orNone(change.closeAuthorityBefore)} ${READ}, ${orNone(change.closeAuthorityAfter)} after it.`,
       );
     }
   }
@@ -286,9 +292,11 @@ const DRAIN = {
   // ownership, so no account is called the wallet's here.
   decoded:
     "It asks your wallet to give another address control of tokens or accounts.",
-  // Clauses 2 and 3 of the drain pattern (drain.ts), each named.
+  // Clauses 3 and 2 of the drain pattern (drain.ts), each named. Clause 2's
+  // values before come from a read (FROM_READ_BEFORE), so it is said as a
+  // comparison with that read.
   simulated:
-    "As simulated, it would hand control of your wallet or tokens to another address, give your wallet account a different amount of data, or leave your wallet or a token account with less than a tenth of what it holds.",
+    "As simulated, your wallet or one of its token accounts would be left with less than a tenth of what it held, or, compared with a read taken before the simulation, would come under another address's control or hold a different amount of data.",
 } as const;
 
 // What the simulation adds to a card, said only as far as a result is used.

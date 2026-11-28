@@ -9,9 +9,11 @@
 // token program is among the transaction's accounts, is the amount read
 // before, which the transaction cannot change; simulate.ts), and it is not
 // used when it cannot cover every account the transaction writes or when the
-// accounts changed between the reads around it (preflight.ts). Ownership is
-// taken from the token programs' own authority rule (summary.ts,
-// authorizedByUser).
+// accounts changed between the reads around it (preflight.ts). Clause 2's
+// values before come from the read before the simulation, not from the run
+// (FROM_READ_BEFORE in simulate.ts), so a change another transaction makes
+// between that read and the simulation counts too. Ownership is taken from
+// the token programs' own authority rule (summary.ts, authorizedByUser).
 //
 // A ready report shows a drain pattern when, for the user's wallet (the
 // transaction's fee payer, written "user" in the report), any of these holds:

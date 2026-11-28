@@ -698,6 +698,13 @@ describe("fix check N2: token balances come only with a token program", () => {
     assert.ok(result.summary.kind === "ready");
     assert.deepEqual(result.summary.simulation, {
       status: "ran",
+      fromReadBefore: [
+        "ownerBefore",
+        "dataLengthBefore",
+        "delegateBefore",
+        "delegatedAmountBefore",
+        "closeAuthorityBefore",
+      ],
       err: null,
       changes: [
         {
@@ -863,6 +870,13 @@ describe("fix check: a failed run claims no changes", () => {
     assert.ok(result.summary.kind === "ready");
     assert.deepEqual(result.summary.simulation, {
       status: "ran",
+      fromReadBefore: [
+        "ownerBefore",
+        "dataLengthBefore",
+        "delegateBefore",
+        "delegatedAmountBefore",
+        "closeAuthorityBefore",
+      ],
       err: failed,
       changes: [],
     });
@@ -914,6 +928,13 @@ describe("fix check: a failed run claims no changes", () => {
     assert.ok(result.summary.kind === "ready");
     assert.deepEqual(result.summary.simulation, {
       status: "ran",
+      fromReadBefore: [
+        "ownerBefore",
+        "dataLengthBefore",
+        "delegateBefore",
+        "delegatedAmountBefore",
+        "closeAuthorityBefore",
+      ],
       err: failed,
       changes: [],
     });
@@ -1151,6 +1172,13 @@ describe("re-audit A3: recordedRpc's post state agrees with its balances", () =>
     assert.ok(result.summary.kind === "ready");
     assert.deepEqual(result.summary.simulation, {
       status: "ran",
+      fromReadBefore: [
+        "ownerBefore",
+        "dataLengthBefore",
+        "delegateBefore",
+        "delegatedAmountBefore",
+        "closeAuthorityBefore",
+      ],
       err: null,
       changes: [
         {
@@ -1390,6 +1418,13 @@ describe("re-audit A6: the runtime error is JSON data", () => {
       assert.ok(result.summary.kind === "ready");
       assert.deepEqual(result.summary.simulation, {
         status: "ran",
+        fromReadBefore: [
+          "ownerBefore",
+          "dataLengthBefore",
+          "delegateBefore",
+          "delegatedAmountBefore",
+          "closeAuthorityBefore",
+        ],
         err: owed,
         changes: [],
       });
@@ -1511,6 +1546,31 @@ describe("re-audit A4: the report names no address of the wallet's", () => {
       assert.equal(json.includes(USER), false, json);
       assert.equal(json.includes(K.userTokenAccount), false, json);
     }
+  });
+});
+
+describe("re-audit A2: the report says which fields come from a read", () => {
+  it("a used simulation names the fields taken from the read before it", async () => {
+    const result = await preflightTransaction(build([transfer()]), {
+      rpc: recordedRpc({
+        accounts: { [USER]: system(5_000_000_000) as never },
+        simulation: {
+          err: null,
+          accounts: { [USER]: system(4_999_995_000) as never },
+        },
+      }),
+      user: USER,
+    });
+    assert.ok(result.summary.kind === "ready");
+    const simulation = result.summary.simulation;
+    assert.ok(simulation.status === "ran");
+    assert.deepEqual(simulation.fromReadBefore, [
+      "ownerBefore",
+      "dataLengthBefore",
+      "delegateBefore",
+      "delegatedAmountBefore",
+      "closeAuthorityBefore",
+    ]);
   });
 });
 
