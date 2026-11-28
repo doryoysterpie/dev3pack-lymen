@@ -35,6 +35,10 @@ function fakeClock(start = 0) {
     clearTimeout: (handle: unknown): void => {
       timers.delete(handle as number);
     },
+    /** Moves the clock forward without running any timer, as a slow step would. */
+    jump(ms: number): void {
+      now += ms;
+    },
     async advance(ms: number): Promise<void> {
       const end = now + ms;
       for (;;) {
@@ -43,11 +47,11 @@ function fakeClock(start = 0) {
           .sort((a, b) => a[1].at - b[1].at)[0];
         if (due === undefined) break;
         timers.delete(due[0]);
-        now = due[1].at;
+        now = Math.max(now, due[1].at);
         due[1].fn();
         await flush();
       }
-      now = end;
+      now = Math.max(now, end);
     },
   };
 }
@@ -105,7 +109,9 @@ test("the display shows a fresh QR from the API at 0 s, 30 s and 60 s", async ()
       fetchedAt.push(clock.now);
       return response(++n);
     },
-    render: (view) => shown.push(view),
+    render: (view) => {
+      shown.push(view);
+    },
     now: () => clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -129,8 +135,8 @@ test("the display shows a fresh QR from the API at 0 s, 30 s and 60 s", async ()
     issuedAt: 1090,
     expiresAt: 1150,
     // Fetched at 60 s: the earlier of its signed expiry, 1150 s, and 60 s of signed window after
-    // the request left.
-    deadline: 60_000 + 60_000,
+    // the request left, less the 5 s skew.
+    deadline: 60_000 + 60_000 - 5_000,
   });
 });
 
@@ -146,7 +152,9 @@ test("a failed fetch clears the QR, shows why, and retries after 5 s", async () 
       if (calls === 2) throw new Error("The API cannot be reached.");
       return response(calls);
     },
-    render: (view) => shown.push(view),
+    render: (view) => {
+      shown.push(view);
+    },
     now: () => clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -339,7 +347,9 @@ test("a fetch that does not answer is abandoned after 10 s, shown as a failure, 
       }
       return Promise.resolve(response(calls));
     },
-    render: (view) => shown.push(view),
+    render: (view) => {
+      shown.push(view);
+    },
     now: () => clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -375,7 +385,7 @@ function signedAnswer(
   }) as unknown as typeof fetch;
 }
 
-test("a QR signed for 20 s carries the deadline 20 s after its request left, and the next fetch comes then", async () => {
+test("a QR signed for 20 s carries the deadline 15 s after its request left, 5 s early, and the next fetch comes then", async () => {
   const clock = fakeClock();
   const fetchedAt: number[] = [];
   const deadlines: number[] = [];
@@ -402,11 +412,11 @@ test("a QR signed for 20 s carries the deadline 20 s after its request left, and
     clearTimeout: clock.clearTimeout,
   });
   await flush();
-  assert.deepEqual(deadlines, [20_000]);
-  await clock.advance(19_999);
+  assert.deepEqual(deadlines, [15_000]);
+  await clock.advance(14_999);
   assert.deepEqual(fetchedAt, [0]);
   await clock.advance(1);
-  assert.deepEqual(fetchedAt, [0, 20_000]);
+  assert.deepEqual(fetchedAt, [0, 15_000]);
 });
 
 test("with a 2 s response delay, the deadline is counted from when the request left", async () => {
@@ -438,7 +448,7 @@ test("with a 2 s response delay, the deadline is counted from when the request l
   });
   await flush();
   await clock.advance(2_000);
-  assert.deepEqual(deadlines, [{ at: 2000, deadline: 10_000 }]);
+  assert.deepEqual(deadlines, [{ at: 2000, deadline: 10_000 - 5_000 }]);
 });
 
 test("a genuine full-length QR issued 2 minutes ago is not drawn: its signed expiry has passed on the page's clock", async () => {
@@ -460,7 +470,9 @@ test("a genuine full-length QR issued 2 minutes ago is not drawn: its signed exp
         signal.addEventListener("abort", () => reject(new Error("aborted"))),
       );
     },
-    render: (view) => shown.push(view.kind),
+    render: (view) => {
+      shown.push(view.kind);
+    },
     now: () => clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -472,11 +484,11 @@ test("a genuine full-length QR issued 2 minutes ago is not drawn: its signed exp
 });
 
 test("the deadline and the next fetch come from the signed times, not from the answer's other fields", async () => {
-  // The answer says 60 s left and a 30 s refresh; the QR itself is signed for 2 s.
+  // The answer says 60 s left and a 30 s refresh; the QR itself is signed for 8 s.
   const clock = fakeClock();
   const fetchedAt: number[] = [];
   const shown: { at: number; kind: string }[] = [];
-  const answer = signedAnswer(clock, 0, 2);
+  const answer = signedAnswer(clock, 0, 8);
   startRotation({
     fetchQr: (signal) => {
       fetchedAt.push(clock.now);
@@ -487,18 +499,21 @@ test("the deadline and the next fetch come from the signed times, not from the a
         signal,
       );
     },
-    render: (view) => shown.push({ at: clock.now, kind: view.kind }),
+    render: (view) => {
+      shown.push({ at: clock.now, kind: view.kind });
+    },
     now: () => clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
   });
   await clock.advance(0);
   assert.deepEqual(shown, [{ at: 0, kind: "qr" }]);
-  // The signed window is 2 s, so the next fetch comes at 2 s, not at the answer's 30 s.
-  await clock.advance(1_999);
+  // The signed window is 8 s, so the next fetch comes 5 s before it ends, at 3 s, not at the
+  // answer's 30 s.
+  await clock.advance(2_999);
   assert.deepEqual(fetchedAt, [0]);
   await clock.advance(1);
-  assert.deepEqual(fetchedAt, [0, 2_000]);
+  assert.deepEqual(fetchedAt, [0, 3_000]);
 });
 
 test("a QR whose signed window has passed when it arrives is not drawn, whatever the answer's other fields say", async () => {
@@ -521,7 +536,9 @@ test("a QR whose signed window has passed when it arrives is not drawn, whatever
         signal.addEventListener("abort", () => reject(new Error("aborted"))),
       );
     },
-    render: (view) => shown.push({ at: clock.now, kind: view.kind }),
+    render: (view) => {
+      shown.push({ at: clock.now, kind: view.kind });
+    },
     now: () => clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -529,4 +546,61 @@ test("a QR whose signed window has passed when it arrives is not drawn, whatever
   await flush();
   await clock.advance(2_000);
   assert.deepEqual(shown, [{ at: 2000, kind: "refreshing" }]);
+});
+
+test("with the station's clock 2 s behind the API's, the QR stops showing 5 s before its signed window ends, still before the API's expiry", async () => {
+  const T = 1_795_000_000;
+  // The API signs at T for 60 s; the station's clock reads T - 2 s.
+  const clock = fakeClock(T * 1000 - 2000);
+  const deadlines: number[] = [];
+  let calls = 0;
+  startRotation({
+    fetchQr: (signal) =>
+      calls++ === 0
+        ? Promise.resolve({ ...response(1), issuedAt: T, expiresAt: T + 60 })
+        : new Promise<StationQr>((_, reject) =>
+            signal.addEventListener("abort", () =>
+              reject(new Error("aborted")),
+            ),
+          ),
+    render: (view) => {
+      if (view.kind === "qr") deadlines.push(view.deadline);
+    },
+    now: () => clock.now,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+  });
+  await flush();
+  // min(T + 60 s, (T - 2 s) + 60 s) - 5 s, on the station's clock.
+  assert.deepEqual(deadlines, [T * 1000 + 53_000]);
+  // On the API's clock that is T + 55 s, 5 s before the verifier's T + 60 s.
+  assert.ok(deadlines[0]! + 2000 <= (T + 60) * 1000 - 5000);
+});
+
+test("the next fetch is timed from the clock after the QR is drawn", async () => {
+  const clock = fakeClock();
+  const delays: number[] = [];
+  const fetchedAt: number[] = [];
+  startRotation({
+    fetchQr: async () => {
+      fetchedAt.push(clock.now);
+      return response(1);
+    },
+    // Drawing takes 10 s.
+    render: async (view) => {
+      if (view.kind === "qr") clock.jump(10_000);
+    },
+    now: () => clock.now,
+    setTimeout: (fn, ms) => {
+      delays.push(ms);
+      return clock.setTimeout(fn, ms);
+    },
+    clearTimeout: clock.clearTimeout,
+  });
+  await flush();
+  // The fetch timeout's 10 s, then the next fetch: 30 s after the request left, less the 10 s
+  // the draw took.
+  assert.deepEqual(delays, [10_000, 20_000]);
+  await clock.advance(20_000);
+  assert.deepEqual(fetchedAt, [0, 30_000]);
 });

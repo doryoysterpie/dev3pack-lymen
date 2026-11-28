@@ -19,7 +19,7 @@ The page keeps the token in memory and sends it in the `Authorization` header of
 
 **Upgrading from link files.** An earlier version wrote each station's address, token included, to a link file in `~/limen-station-links`, or in `.station-links/` in the repository. If any exist, delete them and set a new `STATION_DISPLAY_TOKEN`: every station's token derives from it, so the old tokens stop working. The page clears any fragment from its address on load, without reading it, and `.gitignore` still ignores `*.url` files and `.station-links/`.
 
-If a fetch fails, or gets no answer within 10 s, the page clears the QR, shows the reason, and tries again after 5 s. Every time the page acts on comes from the QR's signed `issued_at` and `expires_at`, read against the page's own clock, and none from the answer's other fields. That assumes the station's clock agrees with the API's within the verifier's 5 s skew; the page does not check it. A QR's deadline is `min(expires_at * 1000, sentAt + (expires_at - issued_at) * 1000)` ms, where `sentAt` is when the request left. A QR whose deadline has passed when it arrives is not drawn, and the next one is fetched at once. After drawing a QR, the page reads its clock again. It shows the QR only if the deadline is still ahead, and clears it at the deadline, when the page says it is refreshing.
+If a fetch fails, or gets no answer within 10 s, the page clears the QR, shows the reason, and tries again after 5 s. The page times each QR on its own clock against the signed `issued_at` and `expires_at`, and none of the answer's other fields. It assumes the station's clock agrees with the API's within the verifier's 5 s skew, and does not check it, so it stops showing a QR 5 s early: its deadline is `min(expires_at * 1000, sentAt + (expires_at - issued_at) * 1000) - 5000` ms, where `sentAt` is when the request left. A QR past its deadline on arrival is not drawn, and the next is fetched at once. After drawing a QR the page reads its clock again: it shows the QR only if the deadline is still ahead, and arms a timer for the time left to clear it. A busy browser may run that timer late. The next fetch is timed from the clock after the draw.
 
 What the servers serve (`vite.config.ts`):
 
@@ -52,7 +52,7 @@ npm test -w @limen/station
 - the caption comes from the signed fields, whatever the answer's other fields say, and states the interval rather than counting down;
 - a QR whose deadline passes while it is drawn is not shown;
 - a genuine full-length QR issued 2 minutes ago is not shown;
-- a QR whose draw ends 100 ms before its deadline is shown, and cleared at the deadline.
+- a QR whose draw ends 100 ms before its deadline is shown, with its clearing timer armed for those 100 ms, and cleared when the timer runs.
 
 Against the real API, with every answer delayed 2 s, it checks that a QR past its deadline on arrival is not drawn, and that the next session's QR is fetched on arrival and refreshed 30 s after its request left.
 
@@ -61,7 +61,8 @@ Against the real API, with every answer delayed 2 s, it checks that a QR past it
 - the page fetches and shows a QR at 0 s, 30 s and 60 s and not before;
 - a failed fetch clears the QR and retries after 5 s;
 - a fetch with no answer is abandoned at 10 s and retried;
-- a QR's deadline comes from its signed times and from when its request left, with and without a 2 s delay, and the next fetch comes at it when that is sooner than 30 s;
+- a QR's deadline is the earlier of its signed expiry and its signed window from when its request left, less 5 s, with and without a 2 s delay, and with the station's clock 2 s behind the API's; the next fetch comes at the deadline when that is sooner than 30 s;
+- the next fetch is timed from the clock after the draw;
 - a genuine full-length QR issued 2 minutes ago is not drawn;
 - the deadline and the next fetch come from the signed times when the answer's other fields disagree, and a QR past its deadline on arrival is not drawn;
 - each API failure becomes the owed message;

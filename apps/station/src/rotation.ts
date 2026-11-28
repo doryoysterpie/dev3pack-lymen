@@ -3,17 +3,15 @@
 // fetch clears the QR, shows why, and retries after 5 s; a fetch that takes over 10 s counts as
 // failed. This file has no DOM code, and the tests drive it with fakes.
 //
-// Every time the page acts on comes from the QR's signed payload, issued_at and expires_at in the
-// API's whole seconds, read against the page's own clock. That assumes the station's clock
-// agrees with the API's within the verifier's 5 s skew; the page does not check it. The answer's
-// other fields are not read. A QR's deadline is
+// The page times each QR on its own clock against the signed issued_at and expires_at, and
+// assumes the station's clock agrees with the API's within the verifier's 5 s skew; it does not
+// check that. So it stops showing a QR 5 s early:
 //
-//   deadline = min(expires_at * 1000, sentAt + (expires_at - issued_at) * 1000)
+//   deadline = min(expires_at * 1000, sentAt + (expires_at - issued_at) * 1000) - 5000
 //
-// where sentAt is when the request left, on the page's clock. A QR whose deadline has passed
-// when it arrives is not drawn, and the next one is fetched at once. The page (main.ts) reads
-// the clock again after drawing a QR, shows it only if its deadline is still ahead, and clears it
-// at its deadline.
+// where sentAt is when the request left. A QR past its deadline on arrival is not drawn, and the
+// next is fetched at once. Otherwise the rotation waits for the page to draw it, then reads the
+// clock again to time the next fetch.
 
 /** One QR as the page shows it: the QR text and what its signed payload says. */
 export interface StationQr {
@@ -38,19 +36,24 @@ export const ROTATION_S = 30;
 export const RETRY_AFTER_MS = 5_000;
 /** A fetch that takes longer than this is abandoned and retried. */
 export const FETCH_TIMEOUT_MS = 10_000;
+/** The verifier's clock skew, by which the page stops showing a QR early. */
+export const CLOCK_SKEW_MS = 5_000;
 
 /** The deadline of a QR whose request left at `sentAt`; see the comment at the top. */
 export function deadlineOf(sentAt: number, qr: StationQr): number {
-  return Math.min(
-    qr.expiresAt * 1000,
-    sentAt + (qr.expiresAt - qr.issuedAt) * 1000,
+  return (
+    Math.min(
+      qr.expiresAt * 1000,
+      sentAt + (qr.expiresAt - qr.issuedAt) * 1000,
+    ) - CLOCK_SKEW_MS
   );
 }
 
 export interface RotationDeps {
   /** Fetches one QR. The rotation aborts `signal` when the fetch runs past FETCH_TIMEOUT_MS. */
   readonly fetchQr: (signal: AbortSignal) => Promise<StationQr>;
-  readonly render: (view: StationView) => void;
+  /** Shows a view; for a QR, resolves once it is drawn. */
+  readonly render: (view: StationView) => void | Promise<void>;
   /** The page's clock, in milliseconds since the Unix epoch, such as Date.now(). */
   readonly now: () => number;
   readonly setTimeout: (fn: () => void, ms: number) => unknown;
@@ -95,10 +98,12 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
         deps.render({ kind: "refreshing" });
         next = 0;
       } else {
-        deps.render({ kind: "qr", ...res, deadline });
+        await deps.render({ kind: "qr", ...res, deadline });
+        if (stopped) return;
+        // The next fetch is timed from the clock after the draw.
         next = Math.max(
           0,
-          Math.min(deadline, sentAt + ROTATION_S * 1000) - receivedAt,
+          Math.min(deadline, sentAt + ROTATION_S * 1000) - deps.now(),
         );
       }
     } catch (err) {
