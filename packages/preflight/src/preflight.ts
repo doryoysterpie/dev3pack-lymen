@@ -47,6 +47,7 @@ import {
 import {
   balanceChanges,
   FROM_READ_BEFORE,
+  runEvidenceProblem,
   ownedTokenAccounts,
   unchangedBetween,
   watchedAddresses,
@@ -299,6 +300,20 @@ export async function preflight(
         "the simulation did not return the balances of its own run",
       );
     }
+    const balances = {
+      keys,
+      pre: preBalances,
+      post: postBalances,
+      preToken: preTokenBalances,
+      postToken: postTokenBalances,
+    };
+    // A clean run's evidence must agree with itself for every account it
+    // returns, or no result is used (simulate.ts, runEvidenceProblem). A
+    // failed run returns every account as null and lists no change (below).
+    if (err === null) {
+      const problem = runEvidenceProblem(watched, result.accounts, balances);
+      if (problem !== null) throw new Error(problem);
+    }
     // The amounts come from the simulation's own run, except a token
     // account's in a transaction with no token program, which cannot change
     // (simulate.ts, balanceChanges). The other fields come from the read
@@ -321,13 +336,7 @@ export async function preflight(
     // transaction would do, so a failed run lists no change.
     const changes =
       err === null
-        ? balanceChanges(feePayer, watched, before, result.accounts, {
-            keys,
-            pre: preBalances,
-            post: postBalances,
-            preToken: preTokenBalances,
-            postToken: postTokenBalances,
-          })
+        ? balanceChanges(feePayer, watched, before, result.accounts, balances)
         : [];
     simulation = {
       status: "ran",
