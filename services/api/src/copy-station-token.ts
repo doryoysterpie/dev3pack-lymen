@@ -47,7 +47,9 @@ export async function copyStationToken(
     child.stdin.end(token);
   });
   if (status !== 0)
-    throw new Error("pbcopy failed, so the token was not copied.");
+    throw new Error(
+      "pbcopy did not run to exit status 0, so the clipboard may not hold the token.",
+    );
   return `Copied the display token for ${station}.`;
 }
 

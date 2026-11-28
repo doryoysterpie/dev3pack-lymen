@@ -228,7 +228,7 @@ test("off macOS the tool refuses with a clear message, and runs no pbcopy", () =
   }
 });
 
-test("a failed or missing pbcopy is reported, and the tool says nothing was copied", () => {
+test("a failed or missing pbcopy is reported as a pbcopy that did not exit 0", () => {
   for (const r of [
     run(["st-front"], { pbcopyExit: 1 }),
     run(["st-front"], { pbcopy: false }),
@@ -237,7 +237,7 @@ test("a failed or missing pbcopy is reported, and the tool says nothing was copi
     assert.equal(r.stdout, "");
     assert.equal(
       r.stderr,
-      "station-token: pbcopy failed, so the token was not copied.\n",
+      "station-token: pbcopy did not run to exit status 0, so the clipboard may not hold the token.\n",
     );
   }
 });
@@ -262,7 +262,7 @@ test("the tool takes exactly one station ID of 1 to 64 characters of [A-Za-z0-9_
   }
 });
 
-test("a missing or short secret is refused without echoing it, and nothing is copied", () => {
+test("a missing or short secret is refused without echoing it, and pbcopy does not run", () => {
   for (const secret of [null, "", "short"]) {
     const r = run(["st-front"], { secret });
     assert.equal(r.status, 1);
