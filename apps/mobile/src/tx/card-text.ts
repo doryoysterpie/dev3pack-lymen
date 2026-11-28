@@ -41,10 +41,11 @@ const sol = (lamports: string) => `${withDecimals(lamports, 9)} SOL`;
 const shown = (address: string): string =>
   address === USER_MARKER ? "your wallet" : address;
 
-// The pre-flight resolves a lookup table's addresses only with a
-// simulation result it uses (the audit of 6c4e64e, Major 2), so an address
-// it leaves unresolved may come from a table it read; the card says only
-// that it does not show it.
+// The pre-flight resolves a lookup table's addresses only on a clean
+// simulation whose loaded addresses match the tables read (the audit of
+// 6c4e64e, Major 2; the audit of 1856942, bug 1), so an address it leaves
+// unresolved may come from a table it read; the card says only that it does
+// not show it.
 const unread = (place: { table: string; index: number }): string =>
   `address in lookup table ${place.table} (index ${place.index}) that limen does not show`;
 
@@ -486,8 +487,8 @@ export function transactionCardText(
       label: "Lookup tables",
       value:
         summary.unresolvedAccounts === 1
-          ? "1 address comes from a lookup table. limen shows an address from a lookup table only with a simulation result it uses, so this one is not shown."
-          : `${summary.unresolvedAccounts} addresses come from lookup tables. limen shows an address from a lookup table only with a simulation result it uses, so these are not shown.`,
+          ? "1 address comes from a lookup table. limen shows an address from a lookup table only after a simulation runs without an error, so this one is not shown."
+          : `${summary.unresolvedAccounts} addresses come from lookup tables. limen shows an address from a lookup table only after a simulation runs without an error, so these are not shown.`,
     });
   }
 

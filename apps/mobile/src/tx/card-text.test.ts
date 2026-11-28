@@ -288,7 +288,7 @@ describe("transaction card text", () => {
         (row) =>
           row.label === "Lookup tables" &&
           row.value ===
-            "1 address comes from a lookup table. limen shows an address from a lookup table only with a simulation result it uses, so this one is not shown.",
+            "1 address comes from a lookup table. limen shows an address from a lookup table only after a simulation runs without an error, so this one is not shown.",
       ),
     );
   });

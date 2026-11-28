@@ -197,8 +197,9 @@ export interface TransactionSummary {
   readonly signers: Signers;
   /**
    * Addresses from lookup tables not among the tables given, so left
-   * unresolved. The pre-flight gives the tables only with a simulation
-   * result it uses (preflight.ts; the audit of 6c4e64e, Major 2).
+   * unresolved. The pre-flight gives the tables only on a clean simulation
+   * whose loaded addresses match the tables read (preflight.ts; the audit of
+   * 6c4e64e, Major 2; the audit of 1856942, bug 1).
    */
   readonly unresolvedAccounts: number;
 }

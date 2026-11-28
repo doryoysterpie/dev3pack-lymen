@@ -133,8 +133,9 @@ export type Preflight =
       /**
        * The message's account list, in order: static keys, then the
        * addresses loaded from lookup tables, null where a lookup entry is
-       * unresolved, as every one is unless a simulation result is used. A
-       * report marks each address by its index here (toReport).
+       * unresolved, as every one is except on a clean run whose
+       * loadedAddresses match the tables read. A report marks each address
+       * by its index here (toReport).
        */
       readonly accountKeys: readonly (string | null)[];
       /**
@@ -144,8 +145,9 @@ export type Preflight =
        * close's or a mint's destination, a new owner program), in the
        * effects' order, from the unmarked decode (bundleLists). It leaves out
        * the wallet, and any address from a lookup table the pre-flight
-       * leaves unresolved: every one, unless a simulation result is used
-       * (the audit of 6c4e64e, Major 2). A report (toReport) never holds
+       * leaves unresolved: every one, except on a clean run whose
+       * loadedAddresses match the tables read (the audit of 6c4e64e, Major 2;
+       * the audit of 1856942, bug 1). A report (toReport) never holds
        * it: a report marks every account a wallet-signed instruction names,
        * these included.
        */
@@ -269,9 +271,10 @@ export async function preflight(
   }
 
   // The lookup tables the decode, the card and the bundle use. None until
-  // the last step of the one path on which every check passed, so every
-  // other way out leaves every lookup entry unresolved (the audit of
-  // 6c4e64e, Major 2).
+  // the last step of the reconciled clean-run path, where every check passed
+  // and loadedAddresses matched the tables read; a failed run or any other
+  // exit leaves every lookup entry unresolved (the audit of 6c4e64e,
+  // Major 2; the audit of 1856942, bug 1).
   let resolved: LookupTables = new Map();
   let simulation: SimulationOutcome;
   let simulatedAt: SimulatedAt | null = null;
@@ -381,10 +384,12 @@ export async function preflight(
           ? result.replacementBlockhash
           : null;
       simulatedAt = { slot: result.slot, blockhash };
+      // The last step of the reconciled clean-run path: every check passed
+      // and loadedAddresses matched the tables read, so the table addresses
+      // reach the decode, the card and the bundle. A failed run never
+      // compares loadedAddresses, so its lookup entries stay unresolved.
+      resolved = read;
     }
-    // The last step of the one path on which every check passed: the run's
-    // answer is used, so the table read it did not dispute is too.
-    resolved = read;
   } catch (error) {
     if (isNotDevnet(error)) return { kind: "not-devnet" };
     // The reason can quote the RPC's own error text, which can name any

@@ -369,7 +369,25 @@ describe("the audit of 6c4e64e, Major 2: the card shows no address from a lookup
     assert.equal(JSON.stringify(disputed).includes(ATTACKER), false);
     assert.match(
       rowValue(disputed, "Lookup tables"),
-      /^1 address comes from a lookup table\. limen shows an address from a lookup table only with a simulation result it uses, so this one is not shown\.$/,
+      /^1 address comes from a lookup table\. limen shows an address from a lookup table only after a simulation runs without an error, so this one is not shown\.$/,
+    );
+  });
+
+  it("audit of 1856942, bug 1: leaves lookup-table addresses unresolved on the card after a failed v0 run", async () => {
+    const failed = await cardFor(
+      edited(cleanWithTable(), "simulateTransaction", (text) =>
+        once(text, '"err":null', '"err":"InsufficientFundsForFee"'),
+      ),
+      loadedV0.transaction,
+    );
+    assert.equal(JSON.stringify(failed).includes(ATTACKER), false);
+    assert.equal(
+      rowValue(failed, "Simulation"),
+      "Failed on devnet: InsufficientFundsForFee. Signed now, the transaction would most likely fail the same way.",
+    );
+    assert.equal(
+      rowValue(failed, "Lookup tables"),
+      "1 address comes from a lookup table. limen shows an address from a lookup table only after a simulation runs without an error, so this one is not shown.",
     );
   });
 });

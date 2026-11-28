@@ -98,6 +98,24 @@ describe("the audit of 6c4e64e, Major 2: lookup addresses only on the path where
     });
   }
 
+  it("leaves every lookup entry unresolved after a failed v0 run", async () => {
+    const result = ready(
+      await preflight(
+        edited(clean(), "simulateTransaction", (text) =>
+          once(text, '"err":null', '"err":"InsufficientFundsForFee"'),
+        ),
+        loadedV0.transaction,
+        USER,
+      ),
+    );
+    assert.equal(result.simulation.status, "ran");
+    assert.notEqual(result.simulation.err, null);
+    assert.deepEqual(result.blocks, ["simulation-failed"]);
+    assert.equal(attackerFound(result), false);
+    assert.equal(result.recipients.includes(ATTACKER), false);
+    assert.equal(result.summary.unresolvedAccounts > 0, true);
+  });
+
   it("leaves every lookup entry unresolved when the run cannot be reached", async () => {
     const base = clean();
     const result = ready(
