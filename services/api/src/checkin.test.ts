@@ -2039,3 +2039,15 @@ test("the minter refuses a cluster that is not devnet's after one genesis check,
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("the check-in section of services/api/README.md states ruling 25a word for word", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const section =
+    /## Check-in \(E-05\)\n([\s\S]*?)\n## Test\n/.exec(readme)?.[1] ?? "";
+  const owed =
+    "limen trusts the operator's own machine, files and shell environment. The credential stores are the gitignored .env, keys/ and .registrations/; a finding that needs the operator to alias their own files, export a secret into the shell that starts limen, or turn on debug tracing is a stated limit, not a defect (ruling 25a). Anything a remote caller, a participant or limen's own code can cause stays in scope.";
+  assert.ok(
+    section.split("\n\n").includes(owed),
+    "ruling 25a paragraph must appear word for word in Check-in (E-05)",
+  );
+});
