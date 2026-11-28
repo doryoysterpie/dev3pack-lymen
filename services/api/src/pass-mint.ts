@@ -6,8 +6,8 @@
 //   - MetadataPointer pointing at the mint itself, which holds TokenMetadata: the name, the
 //     symbol, and the station, session and check-in time as additional fields.
 // The organizer key is the mint authority and the metadata update authority, and pays for
-// everything. Devnet only (D-03): connectDevnet refuses any cluster whose genesis hash is not
-// devnet's.
+// everything. Devnet only (D-03): connectDevnet, mintPass and revokePass each refuse a connection
+// whose cluster's genesis hash is not devnet's, before anything is sent.
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   createBurnCheckedInstruction,
@@ -206,28 +206,37 @@ export function buildRevokeTransaction(input: {
   return tx;
 }
 
-/** Opens a connection and refuses it unless the cluster's genesis hash is devnet's. */
-export async function connectDevnet(
-  url: string = DEVNET_URL,
-  make = (u: string) => new Connection(u, "confirmed"),
-): Promise<Connection> {
-  const connection = make(url);
+/** Refuses the connection unless its cluster's genesis hash is devnet's (D-03). */
+async function requireDevnet(connection: Connection): Promise<void> {
   const genesis = await connection.getGenesisHash();
   if (genesis !== DEVNET_GENESIS_HASH) {
     throw new Error(
       `SOLANA_RPC_URL is not devnet: its genesis hash is ${genesis}. limen runs on devnet only (D-03).`,
     );
   }
+}
+
+/** Opens a connection and refuses it unless the cluster's genesis hash is devnet's. */
+export async function connectDevnet(
+  url: string = DEVNET_URL,
+  make = (u: string) => new Connection(u, "confirmed"),
+): Promise<Connection> {
+  const connection = make(url);
+  await requireDevnet(connection);
   return connection;
 }
 
-/** Mints one pass to `holder` on devnet. Returns the new mint, the holder's token account and the signature. */
+/**
+ * Mints one pass to `holder` on devnet. Returns the new mint, the holder's token account and the
+ * signature. A connection to any other cluster is refused before anything is sent.
+ */
 export async function mintPass(
   connection: Connection,
   organizer: Keypair,
   holder: PublicKey,
   details: PassDetails,
 ): Promise<{ mint: PublicKey; tokenAccount: PublicKey; signature: string }> {
+  await requireDevnet(connection);
   const mint = Keypair.generate();
   const lamports = await connection.getMinimumBalanceForRentExemption(
     passAccountLen(details),
@@ -250,13 +259,17 @@ export async function mintPass(
   };
 }
 
-/** Revokes a pass: the organizer burns the holder's token as permanent delegate. */
+/**
+ * Revokes a pass: the organizer burns the holder's token as permanent delegate. A connection to
+ * any other cluster than devnet is refused before anything is sent.
+ */
 export async function revokePass(
   connection: Connection,
   organizer: Keypair,
   mint: PublicKey,
   holder: PublicKey,
 ): Promise<string> {
+  await requireDevnet(connection);
   const tx = buildRevokeTransaction({
     organizer: organizer.publicKey,
     mint,

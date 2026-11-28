@@ -24,9 +24,11 @@ import {
   buildRevokeTransaction,
   connectDevnet,
   DEVNET_GENESIS_HASH,
+  mintPass,
   passAccountLen,
   passFields,
   passTokenAccount,
+  revokePass,
   tokenMetadataLen,
 } from "./pass-mint.ts";
 
@@ -233,4 +235,66 @@ test("a cluster whose genesis hash is not devnet's is refused", async () => {
     fake(DEVNET_GENESIS_HASH),
   );
   assert.equal(typeof ok.getGenesisHash, "function");
+});
+
+/** A genesis hash that is not devnet's. A stand-in, so no other cluster's value is in the repo. */
+const NOT_DEVNET = "SomeOtherGenesisHash1111111111111111111111";
+const NOT_DEVNET_MESSAGE =
+  /^SOLANA_RPC_URL is not devnet: its genesis hash is SomeOtherGenesisHash1+\. limen runs on devnet only \(D-03\)\.$/;
+
+/**
+ * A stand-in connection for mintPass and revokePass: it answers getGenesisHash with `genesis`,
+ * prices rent, accepts sends and confirms them, and records each call in order.
+ */
+function recordingConnection(genesis: string) {
+  const calls: string[] = [];
+  const answer =
+    <T>(name: string, value: T) =>
+    async (): Promise<T> => {
+      calls.push(name);
+      return value;
+    };
+  const connection = {
+    getGenesisHash: answer("getGenesisHash", genesis),
+    getMinimumBalanceForRentExemption: answer(
+      "getMinimumBalanceForRentExemption",
+      4_181_760,
+    ),
+    sendTransaction: answer("sendTransaction", "stand-in-signature"),
+    sendRawTransaction: answer("sendRawTransaction", "stand-in-signature"),
+    confirmTransaction: answer("confirmTransaction", {
+      context: { slot: 1 },
+      value: { err: null },
+    }),
+  } as unknown as Connection;
+  return { connection, calls };
+}
+
+test("mintPass and revokePass refuse a cluster whose genesis hash is not devnet's, before anything is sent (D-03)", async () => {
+  const minting = recordingConnection(NOT_DEVNET);
+  await assert.rejects(
+    mintPass(minting.connection, organizer, holder, DETAILS),
+    {
+      message: NOT_DEVNET_MESSAGE,
+    },
+  );
+  assert.deepEqual(minting.calls, ["getGenesisHash"]);
+
+  const revoking = recordingConnection(NOT_DEVNET);
+  await assert.rejects(
+    revokePass(revoking.connection, organizer, mint.publicKey, holder),
+    { message: NOT_DEVNET_MESSAGE },
+  );
+  assert.deepEqual(revoking.calls, ["getGenesisHash"]);
+
+  // Control: on devnet's genesis hash the same stand-in reaches the send.
+  const devnet = recordingConnection(DEVNET_GENESIS_HASH);
+  const minted = await mintPass(devnet.connection, organizer, holder, DETAILS);
+  assert.equal(minted.signature, "stand-in-signature");
+  assert.deepEqual(devnet.calls, [
+    "getGenesisHash",
+    "getMinimumBalanceForRentExemption",
+    "sendTransaction",
+    "confirmTransaction",
+  ]);
 });
