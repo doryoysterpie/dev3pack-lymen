@@ -2,7 +2,7 @@
 // Open it as /?station=<station ID>#token=<that station's display token>, the address
 // `npm run station-link -w @limen/api` writes. The token sits in the
 // fragment, which the browser never sends to a server, and is removed from the address bar
-// once read. Requests go to /api, which the Vite server forwards to the limen API.
+// before anything else happens, an error included. Requests go to /api, which the Vite server forwards to the limen API.
 import QRCode from "qrcode";
 
 import {
@@ -58,13 +58,16 @@ function render(view: StationView): void {
   );
 }
 
-const config = readStationConfig(window.location.href);
+// The token leaves the address bar before anything renders, so no copy of this page's address,
+// even of an error page, carries it.
+const href = window.location.href;
+const bare = new URL(href);
+bare.hash = "";
+window.history.replaceState(null, "", bare);
+const config = readStationConfig(href);
 if ("error" in config) {
   showProblem(config.error);
 } else {
-  const url = new URL(window.location.href);
-  url.hash = "";
-  window.history.replaceState(null, "", url);
   startRotation({
     fetchQr: (signal) =>
       fetchStationQr(window.fetch.bind(window), "/api", config, signal),
