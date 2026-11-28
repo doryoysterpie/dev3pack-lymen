@@ -14,10 +14,12 @@ import { CHECKIN_MESSAGES } from "./client.ts";
 import { parseApiUrl, parseStationSigners } from "./config.ts";
 import {
   FLOW_MESSAGES,
-  runCheckin,
+  prepareCheckin,
   type CheckinFlowDeps,
+  type WalletAccount,
   type WalletSigner,
 } from "./flow.ts";
+import type { CheckinResult } from "./client.ts";
 import type { Ed25519Verify } from "./station-qr.ts";
 import { encodeBase58 } from "./wallet-address.ts";
 
@@ -44,25 +46,42 @@ const spki = (key: Uint8Array) =>
 const nodeVerify: Ed25519Verify = (key, message, signature) =>
   verify(null, message, spki(key), signature);
 
-/** A wallet that signs whatever message the flow builds for its address. */
-function fakeWallet(opts: { decline?: boolean } = {}) {
+/**
+ * A wallet that connects as one account and signs whatever bytes it is asked to, recording each
+ * step in `events` and each signed message in `signed`.
+ */
+function fakeWallet(
+  opts: { declineConnect?: boolean; declineSign?: boolean } = {},
+) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const key = Buffer.from(
     publicKey.export({ format: "jwk" }).x ?? "",
     "base64url",
   );
   const address = encodeBase58(key);
+  const account: WalletAccount = {
+    wallet: address,
+    key,
+    address: key.toString("base64"),
+    authToken: "auth-token-1",
+  };
+  const events: string[] = [];
   const signed: Uint8Array[] = [];
   const signer: WalletSigner = {
-    async signCheckin(build) {
-      if (opts.decline) throw new Error("user declined");
-      const message = build(address);
-      if (message === null) throw new Error("nothing to sign");
+    async connect() {
+      events.push("connect");
+      if (opts.declineConnect) throw new Error("user declined");
+      return account;
+    },
+    async sign(as, message) {
+      events.push("sign");
+      if (opts.declineSign) throw new Error("user declined");
+      assert.equal(as, account, "it signs as the account it connected");
       signed.push(message);
-      return { wallet: address, signature: sign(null, message, privateKey) };
+      return sign(null, message, privateKey);
     },
   };
-  return { key, address, signed, signer };
+  return { key, address, events, signed, signer, privateKey };
 }
 
 /** A server that checks the signature as the backend does, by rebuilding the message. */
@@ -112,25 +131,57 @@ function fakeServer(walletKey: Buffer) {
 function deps(
   wallet: ReturnType<typeof fakeWallet>,
   server: ReturnType<typeof fakeServer>,
-  now = T + 10,
+  clock: () => number = () => T + 10,
 ): CheckinFlowDeps {
   return {
     apiBase: "http://10.0.2.2:8787",
     allowlist: new Set([FIXTURE.organizer_signer_id]),
-    nowMs: () => now * 1000,
+    nowMs: () => clock() * 1000,
     verify: nodeVerify,
     signer: wallet.signer,
     fetchFn: server.fn,
   };
 }
 
-test("a valid QR is signed by the wallet with the owed message and accepted by a backend-style check", async () => {
+/** Prepares a check-in and, if it is ready, signs it: the panel's two steps, run at once. */
+async function prepareAndSign(
+  d: CheckinFlowDeps,
+  input: { qr: string; registrationText: string },
+): Promise<CheckinResult> {
+  const prepared = await prepareCheckin(d, input);
+  return prepared.ok ? prepared.sign() : prepared;
+}
+
+test("nothing is signed before the message is shown: prepareCheckin gives its six lines, and only sign() has the wallet sign, exactly those bytes", async () => {
   const wallet = fakeWallet();
   const server = fakeServer(wallet.key);
-  const result = await runCheckin(deps(wallet, server), {
+  const prepared = await prepareCheckin(deps(wallet, server), {
     qr: FIXTURE.valid,
     registrationText: "  LMN-0001 ",
   });
+  assert.ok(prepared.ok);
+  // What the panel shows before its Sign this message action: the account and nonce included.
+  assert.deepEqual(prepared.preview.lines, [
+    "limen check-in v1",
+    "station: st-front",
+    "session: day-2",
+    `nonce: ${FIXTURE.nonce}`,
+    `wallet: ${wallet.address}`,
+    "registration: LMN-0001",
+  ]);
+  assert.deepEqual(wallet.events, ["connect"], "connected, nothing signed");
+  assert.equal(server.posted.length, 0);
+  const result = await prepared.sign();
+  assert.deepEqual(wallet.events, ["connect", "sign"]);
+  assert.deepEqual(
+    Buffer.from(wallet.signed[0]!),
+    Buffer.from(prepared.preview.lines.join("\n"), "ascii"),
+    "the bytes signed are the lines shown",
+  );
+  assert.deepEqual(
+    Buffer.from(wallet.signed[0]!),
+    Buffer.from(prepared.preview.bytes),
+  );
   assert.deepEqual(result, {
     ok: true,
     station: "st-front",
@@ -138,18 +189,38 @@ test("a valid QR is signed by the wallet with the owed message and accepted by a
     mint: "Mint1",
     signature: "Sig1",
   });
-  assert.equal(
-    Buffer.from(wallet.signed[0]!).toString("ascii"),
-    `limen check-in v1\nstation: st-front\nsession: day-2\nnonce: ${FIXTURE.nonce}\nwallet: ${wallet.address}\nregistration: LMN-0001`,
-  );
   assert.deepEqual(server.posted, [
     {
       qr: FIXTURE.valid,
       wallet: wallet.address,
       registration_id: "LMN-0001",
-      signature: (server.posted[0] as { signature: string }).signature,
+      signature: Buffer.from(
+        sign(null, prepared.preview.bytes, wallet.privateKey),
+      ).toString("base64"),
     },
   ]);
+});
+
+test("a QR that expires while its message is on screen is refused at sign(), before the wallet signs or the server hears", async () => {
+  const wallet = fakeWallet();
+  const server = fakeServer(wallet.key);
+  let now = T + 10;
+  const prepared = await prepareCheckin(
+    deps(wallet, server, () => now),
+    {
+      qr: FIXTURE.valid,
+      registrationText: "",
+    },
+  );
+  assert.ok(prepared.ok);
+  now = T + 61;
+  assert.deepEqual(await prepared.sign(), {
+    ok: false,
+    error: "station_qr_expired",
+    message: CHECKIN_MESSAGES.station_qr_expired,
+  });
+  assert.deepEqual(wallet.events, ["connect"]);
+  assert.equal(server.posted.length, 0);
 });
 
 test("an expired or foreign QR, or a malformed registration ID, stops before the wallet or the server", async () => {
@@ -161,20 +232,19 @@ test("an expired or foreign QR, or a malformed registration ID, stops before the
   for (const [qr, registrationText, now, error] of cases) {
     const wallet = fakeWallet();
     const server = fakeServer(wallet.key);
-    const result = await runCheckin(deps(wallet, server, now), {
-      qr,
-      registrationText,
-    });
+    const result = await prepareCheckin(
+      deps(wallet, server, () => now),
+      {
+        qr,
+        registrationText,
+      },
+    );
     assert.deepEqual(
       result,
       { ok: false, error, message: CHECKIN_MESSAGES[error] },
       error,
     );
-    assert.equal(
-      wallet.signed.length,
-      0,
-      `${error}: nothing reaches the wallet`,
-    );
+    assert.deepEqual(wallet.events, [], `${error}: nothing reaches the wallet`);
     assert.equal(
       server.posted.length,
       0,
@@ -183,11 +253,23 @@ test("an expired or foreign QR, or a malformed registration ID, stops before the
   }
 });
 
-test("a declined signature sends nothing, and no API URL means no check-in at all", async () => {
-  const declining = fakeWallet({ decline: true });
-  const server = fakeServer(declining.key);
+test("a wallet that does not connect, or does not sign, sends nothing, and no API URL means no check-in at all", async () => {
+  const notConnecting = fakeWallet({ declineConnect: true });
+  const server = fakeServer(notConnecting.key);
   assert.deepEqual(
-    await runCheckin(deps(declining, server), {
+    await prepareCheckin(deps(notConnecting, server), {
+      qr: FIXTURE.valid,
+      registrationText: "",
+    }),
+    {
+      ok: false,
+      error: "wallet_not_connected",
+      message: FLOW_MESSAGES.wallet_not_connected,
+    },
+  );
+  const declining = fakeWallet({ declineSign: true });
+  assert.deepEqual(
+    await prepareAndSign(deps(declining, server), {
       qr: FIXTURE.valid,
       registrationText: "",
     }),
@@ -200,13 +282,13 @@ test("a declined signature sends nothing, and no API URL means no check-in at al
   assert.equal(server.posted.length, 0);
   const wallet = fakeWallet();
   assert.deepEqual(
-    await runCheckin(
+    await prepareCheckin(
       { ...deps(wallet, server), apiBase: null },
       { qr: FIXTURE.valid, registrationText: "" },
     ),
     { ok: false, error: "no_server", message: FLOW_MESSAGES.no_server },
   );
-  assert.equal(wallet.signed.length, 0);
+  assert.deepEqual(wallet.events, []);
 });
 
 test("a later check-in without a registration ID signs an empty registration line", async () => {
@@ -214,7 +296,7 @@ test("a later check-in without a registration ID signs an empty registration lin
   const server = fakeServer(wallet.key);
   assert.equal(
     (
-      await runCheckin(deps(wallet, server), {
+      await prepareAndSign(deps(wallet, server), {
         qr: FIXTURE.valid,
         registrationText: "",
       })

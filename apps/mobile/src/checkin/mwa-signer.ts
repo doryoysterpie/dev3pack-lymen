@@ -1,15 +1,16 @@
 // Signing the check-in message through Mobile Wallet Adapter (E-05, app half). Pure module: MWA's
 // transact() is passed in (mwa.ts binds the real one), so the Node tests drive it with a fake.
 //
-// In one MWA session: authorize on devnet, take the first account, build the message for that
-// account's address, ask the wallet to sign it, and check the result before anything is sent.
+// Two MWA sessions, with the message on screen between them. connect: authorize on devnet and
+// take the first account; nothing is signed. sign: authorize again with that account's token,
+// ask the wallet to sign exactly the bytes shown, and check the result before anything is sent.
 // A wallet's signed message is the message followed by one 64-byte Ed25519 signature per
 // signer; the MWA fake wallet builds it that way (SolanaSigningUseCase.signMessage in
 // solana-mobile/mobile-wallet-adapter, commit 2695142).
 
 import { decodeBase58 } from "../qr/base58.ts";
 import { encodeBase64 } from "./base64.ts";
-import type { WalletSigner } from "./flow.ts";
+import type { WalletAccount, WalletSigner } from "./flow.ts";
 import type { Ed25519Verify } from "./station-qr.ts";
 import { decodeBase64, encodeBase58 } from "./wallet-address.ts";
 
@@ -18,7 +19,11 @@ export interface MwaWallet {
   authorize(params: {
     identity: { name?: string };
     chain?: string;
-  }): Promise<{ readonly accounts: readonly { readonly address: string }[] }>;
+    auth_token?: string;
+  }): Promise<{
+    readonly accounts: readonly { readonly address: string }[];
+    readonly auth_token: string;
+  }>;
   signMessages(params: {
     addresses: string[];
     payloads: string[];
@@ -53,6 +58,11 @@ function accountKey(
   return null;
 }
 
+/** True when the two keys are the same 32 bytes. */
+function sameKey(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, i) => byte === b[i]);
+}
+
 export function mwaSigner(
   transact: Transact,
   opts: {
@@ -61,22 +71,42 @@ export function mwaSigner(
     readonly verify: Ed25519Verify;
   },
 ): WalletSigner {
+  const authorize = (wallet: MwaWallet, authToken?: string) =>
+    wallet.authorize({
+      identity: { name: opts.appName },
+      chain: opts.chain,
+      ...(authToken === undefined ? {} : { auth_token: authToken }),
+    });
   return {
-    signCheckin: (build) =>
-      transact(async (wallet) => {
-        const auth = await wallet.authorize({
-          identity: { name: opts.appName },
-          chain: opts.chain,
-        });
+    connect: () =>
+      transact(async (wallet): Promise<WalletAccount> => {
+        const auth = await authorize(wallet);
         const account = auth.accounts[0];
         if (account === undefined)
           throw new Error("The wallet authorized no account.");
         const named = accountKey(account.address);
         if (named === null)
           throw new Error("The wallet's account is not a 32-byte key.");
-        const message = build(named.base58);
-        if (message === null)
-          throw new Error("There is no check-in message to sign.");
+        return {
+          wallet: named.base58,
+          key: named.key,
+          address: account.address,
+          authToken: auth.auth_token,
+        };
+      }),
+    sign: (account, message) =>
+      transact(async (wallet) => {
+        const auth = await authorize(wallet, account.authToken);
+        if (
+          !auth.accounts.some((a) => {
+            const named = accountKey(a.address);
+            return named !== null && sameKey(named.key, account.key);
+          })
+        ) {
+          throw new Error(
+            "The wallet no longer authorizes the account the message names.",
+          );
+        }
         const { signed_payloads } = await wallet.signMessages({
           addresses: [account.address],
           payloads: [encodeBase64(message)],
@@ -84,12 +114,15 @@ export function mwaSigner(
         const signed = decodeBase64(signed_payloads[0] ?? "");
         const signature =
           signed === null ? null : signatureFromSignedPayload(signed, message);
-        if (signature === null || !opts.verify(named.key, message, signature)) {
+        if (
+          signature === null ||
+          !opts.verify(account.key, message, signature)
+        ) {
           throw new Error(
             "The wallet's signature does not verify for its own key.",
           );
         }
-        return { wallet: named.base58, signature };
+        return signature;
       }),
   };
 }
