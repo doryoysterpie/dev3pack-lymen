@@ -2,8 +2,17 @@
 // network, through the same JSON-RPC parsing as jsonRpc. For tests, and for a
 // server that replays a recorded simulation with no network.
 
-import { DEVNET_GENESIS_HASH } from "./programs.ts";
+import { messageAccounts, type LookupTables } from "./accounts.ts";
+import { decodeBase64 } from "./base64.ts";
+import {
+  ADDRESS_LOOKUP_TABLE_PROGRAM,
+  DEVNET_GENESIS_HASH,
+  TOKEN_2022_PROGRAM,
+  TOKEN_PROGRAM,
+} from "./programs.ts";
 import { jsonRpc, type Fetch, type Rpc } from "./rpc.ts";
+import { parseLookupTable, parseTokenAccount } from "./state.ts";
+import { parseTransaction } from "./wire.ts";
 
 /**
  * An account as getMultipleAccounts and simulateTransaction return it with
@@ -33,6 +42,13 @@ export interface Recording {
     readonly slot?: number;
     /** The blockhash the simulation used in place of the transaction's own. */
     readonly replacementBlockhash?: string;
+    /**
+     * Leaves out preBalances, postBalances and the token balances, which the
+     * recording otherwise derives: before from accounts, after from these
+     * accounts where they name an address, for every account the
+     * transaction lists.
+     */
+    readonly omitBalances?: boolean;
   };
   /** getLatestBlockhash's blockhash. */
   readonly latestBlockhash?: string;
@@ -42,6 +58,62 @@ interface Request {
   readonly id: number;
   readonly method: string;
   readonly params: readonly unknown[];
+}
+
+type AccountMap = Readonly<Record<string, RecordedAccount | null>>;
+
+/** The transaction's account list, its lookup tables read from the map. */
+function keysOf(base64: string, map: AccountMap): (string | null)[] {
+  const bytes = decodeBase64(base64);
+  const parsed = bytes === null ? null : parseTransaction(bytes);
+  if (parsed === null || !parsed.ok) return [];
+  const tables = new Map<string, readonly string[]>();
+  for (const lookup of parsed.transaction.message.lookups) {
+    const state = map[lookup.table];
+    const data = state ? decodeBase64(state.data[0]) : null;
+    const addresses =
+      state && state.owner === ADDRESS_LOOKUP_TABLE_PROGRAM && data !== null
+        ? parseLookupTable(data)
+        : null;
+    if (addresses !== null) tables.set(lookup.table, addresses);
+  }
+  return messageAccounts(
+    parsed.transaction.message,
+    tables as LookupTables,
+  ).map((account) => account.address);
+}
+
+function tokenBalances(
+  keys: readonly (string | null)[],
+  stateOf: (address: string) => RecordedAccount | null,
+) {
+  return keys.flatMap((address, accountIndex) => {
+    if (address === null) return [];
+    const state = stateOf(address);
+    if (
+      state === null ||
+      (state.owner !== TOKEN_PROGRAM && state.owner !== TOKEN_2022_PROGRAM)
+    ) {
+      return [];
+    }
+    const data = decodeBase64(state.data[0]);
+    const account = data === null ? null : parseTokenAccount(data);
+    if (account === null) return [];
+    return [
+      {
+        accountIndex,
+        mint: account.mint,
+        owner: account.owner,
+        programId: state.owner,
+        uiTokenAmount: {
+          amount: account.amount,
+          decimals: 0,
+          uiAmount: null,
+          uiAmountString: account.amount,
+        },
+      },
+    ];
+  });
 }
 
 const byAddress = (
@@ -69,6 +141,24 @@ export function recordedRpc(recording: Recording): Rpc {
           accounts: { addresses: string[] };
         };
         const { slot, replacementBlockhash } = recording.simulation;
+        const keys = keysOf(request.params[0] as string, recording.accounts);
+        const pre = (address: string) => recording.accounts[address] ?? null;
+        const post = (address: string) =>
+          address in recording.simulation.accounts
+            ? (recording.simulation.accounts[address] ?? null)
+            : pre(address);
+        const balances = recording.simulation.omitBalances
+          ? {}
+          : {
+              preBalances: keys.map((k) =>
+                k === null ? 0 : (pre(k)?.lamports ?? 0),
+              ),
+              postBalances: keys.map((k) =>
+                k === null ? 0 : (post(k)?.lamports ?? 0),
+              ),
+              preTokenBalances: tokenBalances(keys, pre),
+              postTokenBalances: tokenBalances(keys, post),
+            };
         result = {
           context: { slot: slot ?? 0 },
           value: {
@@ -83,6 +173,7 @@ export function recordedRpc(recording: Recording): Rpc {
               recording.simulation.accounts,
               options.accounts.addresses,
             ),
+            ...balances,
           },
         };
         break;

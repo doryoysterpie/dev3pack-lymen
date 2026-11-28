@@ -1,12 +1,16 @@
-// Balance changes from a simulation (E-09). Pure module: it compares account
-// state read before the simulation with the state the simulation reports
-// after it, for the user's wallet (its SOL, owner and data length) and the
-// token accounts the wallet owns (amount, delegate, allowance, owner and close
-// authority).
+// Balance changes from a simulation (E-09). Pure module. The amounts, the
+// wallet's SOL and each token account's balance, before and after, come from
+// the simulation's own run (its pre and post balances), so they cannot hold a
+// transaction that landed between a read and the simulation. The rest, the
+// wallet's owner and data length and each token account's delegate,
+// allowance, owner and close authority, compares account state read before
+// the simulation with the state the simulation reports after it; the
+// pre-flight uses that only when a second read, after the simulation, agrees
+// with the first (unchangedBetween).
 
 import type { Account } from "./accounts.ts";
 import { TOKEN_2022_PROGRAM, TOKEN_PROGRAM } from "./programs.ts";
-import type { AccountState } from "./rpc.ts";
+import type { AccountState, TokenBalance } from "./rpc.ts";
 import { parseTokenAccount } from "./state.ts";
 
 export type BalanceChange =
@@ -42,6 +46,41 @@ export type BalanceChange =
 
 /** The simulateTransaction accounts list is capped like getMultipleAccounts. */
 export const MAX_WATCHED = 100;
+
+/** The simulation's own balances, for every account the transaction lists. */
+export interface SimulatedBalances {
+  /** The transaction's account list in index order; null where unknown. */
+  readonly keys: readonly (string | null)[];
+  readonly pre: readonly string[];
+  readonly post: readonly string[];
+  readonly preToken: readonly TokenBalance[];
+  readonly postToken: readonly TokenBalance[];
+}
+
+/**
+ * Why the watched accounts would not cover every account the transaction can
+ * write, or null when they do: a writable account behind a lookup table that
+ * could not be read, or more writable accounts than MAX_WATCHED.
+ */
+export function watchProblem(
+  user: string,
+  accounts: readonly Account[],
+): string | null {
+  if (
+    accounts.some((account) => account.writable && account.address === null)
+  ) {
+    return "a writable account comes from a lookup table limen could not read";
+  }
+  const writable = new Set(
+    accounts
+      .filter((account) => account.writable && account.address !== null)
+      .map((account) => account.address),
+  );
+  writable.add(user);
+  return writable.size > MAX_WATCHED
+    ? `the transaction writes to more than ${MAX_WATCHED} accounts, more than limen watches`
+    : null;
+}
 
 /**
  * The accounts to read before and after: the user's wallet first, then every
@@ -90,13 +129,52 @@ export function ownedTokenAccounts(
   );
 }
 
+/**
+ * Whether two reads of the same addresses agree on everything the changes
+ * compare apart from amounts: which accounts exist, their owner program and
+ * data length, and for a token account its mint, owner, delegate, allowance
+ * and close authority.
+ */
+export function unchangedBetween(
+  first: readonly (AccountState | null)[],
+  second: readonly (AccountState | null)[],
+): boolean {
+  if (first.length !== second.length) return false;
+  return first.every((a, i) => {
+    const b = second[i] ?? null;
+    if (a === null || b === null) return a === b;
+    if (a.owner !== b.owner || a.data.length !== b.data.length) return false;
+    if (!isTokenProgram(a.owner)) return true;
+    const x = parseTokenAccount(a.data);
+    const y = parseTokenAccount(b.data);
+    if (x === null || y === null) return x === y;
+    return (
+      x.mint === y.mint &&
+      x.owner === y.owner &&
+      x.delegate === y.delegate &&
+      x.delegatedAmount === y.delegatedAmount &&
+      x.closeAuthority === y.closeAuthority
+    );
+  });
+}
+
 /** Lists what changed for the user, in the order of the watched addresses. */
 export function balanceChanges(
   user: string,
   addresses: readonly string[],
   before: readonly (AccountState | null)[],
   after: readonly (AccountState | null)[],
+  balances: SimulatedBalances,
 ): BalanceChange[] {
+  const indexOf = (address: string): number => {
+    const index = balances.keys.indexOf(address);
+    if (index < 0 || index >= balances.pre.length) {
+      throw new Error(
+        "the simulation's balances do not list a watched account",
+      );
+    }
+    return index;
+  };
   const changes: BalanceChange[] = [];
   addresses.forEach((address, i) => {
     const pre = before[i] ?? null;
@@ -104,11 +182,12 @@ export function balanceChanges(
     if (address === user) {
       // The wallet's SOL, and also who owns it and how much data it holds:
       // a program that takes ownership of the wallet controls its SOL.
+      const index = indexOf(address);
       const change: BalanceChange = {
         kind: "sol",
         account: address,
-        before: pre?.lamports ?? "0",
-        after: post?.lamports ?? "0",
+        before: balances.pre[index],
+        after: balances.post[index],
         ownerBefore: pre?.owner ?? null,
         ownerAfter: post?.owner ?? null,
         dataLengthBefore: pre?.data.length ?? 0,
@@ -130,12 +209,25 @@ export function balanceChanges(
       post !== null && isTokenProgram(post.owner)
         ? parseTokenAccount(post.data)
         : null;
+    const index = indexOf(address);
+    const preBalance = balances.preToken.find(
+      (balance) => balance.accountIndex === index,
+    );
+    if (preBalance === undefined || preBalance.owner !== user) {
+      throw new Error(
+        "the simulation's token balances do not match the accounts read",
+      );
+    }
+    const postBalance = balances.postToken.find(
+      (balance) => balance.accountIndex === index,
+    );
     const change: BalanceChange = {
       kind: "token",
       account: address,
       mint: was.mint,
-      before: was.amount,
-      after: now?.amount ?? "0",
+      before: preBalance.amount,
+      // A closed account has no balance after.
+      after: postBalance?.amount ?? "0",
       delegateBefore: was.delegate,
       delegateAfter: now?.delegate ?? null,
       delegatedAmountBefore: was.delegatedAmount,
