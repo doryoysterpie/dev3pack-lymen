@@ -265,7 +265,7 @@ describe("transaction card text", () => {
     assert.equal(card.tone, "neutral");
     assert.equal(
       card.status,
-      "This card shows what the transaction would do before you sign.",
+      "This card shows what the transaction would do to your wallet and to the token accounts a read shows it owns, before you sign.",
     );
     assert.deepEqual(card.rows[1], {
       label: "Closes a token account",
@@ -973,6 +973,26 @@ describe("the owner's audit: what the card claims", () => {
         label: "Requested from",
         value: owed,
       });
+    }
+  });
+
+  it("hunt: a malformed transaction's status names what limen found", () => {
+    for (const [problem, owed] of [
+      ["not-base64", "the request did not send a transaction limen can read"],
+      [
+        "duplicate-key",
+        "it names the same account twice, which Solana refuses",
+      ],
+      [
+        "bad-lookup-index",
+        "a lookup index points past the end of its table, which Solana refuses",
+      ],
+      ["truncated", "it does not follow the Solana transaction format"],
+    ] as const) {
+      assert.equal(
+        transactionCardText(LINK, null, { kind: "malformed", problem }).status,
+        `limen flags this transaction: ${owed} (${problem}).`,
+      );
     }
   });
 
