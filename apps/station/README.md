@@ -4,13 +4,15 @@ The Vite page for the station display (D-02). It shows the station QR the API si
 
 ## Run
 
-Start the API (see `services/api/README.md`) with `STATION_DISPLAY_TOKEN` set and a station and session seeded, then:
+Build the page once, then start the API (see `services/api/README.md`) with `STATION_DISPLAY_TOKEN` set and a station and session seeded:
 
 ```bash
-npm run dev -w @limen/station
+npm run build -w @limen/station
 ```
 
-On macOS, copy the station's display token by running `node --env-file=.env services/api/src/copy-station-token.ts st-front` from the repository root (see `services/api/README.md`), open `http://127.0.0.1:5173/?station=st-front`, and paste the token into the password field. The dev and preview servers forward `/api` to the API at `STATION_API_URL`, or `http://127.0.0.1:8787`. The config loads that variable alone, from the environment or the repository's `.env` (`src/dev-server.test.ts`).
+The build writes one self-contained file, `dist/index.html`, with its script inlined, and loads no environment (`src/build.test.ts`). The API reads that file once at start-up and serves it at `/station`, whatever the query string, so the station's address is `http://127.0.0.1:8787/station?station=st-front` (`services/api/src/station-page.test.ts`). The page asks the API for its QR at `/api` on the same origin. To change the page, rebuild it and restart the API. No Vite server runs.
+
+On macOS, copy the station's display token by running `node --env-file=.env services/api/src/copy-station-token.ts st-front` from the repository root (see `services/api/README.md`), open the station's address, and paste the token into the password field.
 
 The page keeps the token in memory and sends it in the `Authorization` header. It puts it in no address, history entry, cookie or storage, so a reload asks again (`src/page.test.ts`). The token stays on the clipboard until something else is copied over it, and a browser may offer to save the field; decline it.
 
@@ -20,21 +22,10 @@ The page keeps the token in memory and sends it in the `Authorization` header. I
 
 The page times each QR on its own clock against the signed `issued_at` and `expires_at`. It assumes the station's clock agrees with the API's within the verifier's 5 s skew, and does not check it, so it stops 5 s early: the deadline is `min(expires_at * 1000, sentAt + (expires_at - issued_at) * 1000) - 5000` ms, where `sentAt` is when the request left. A QR past its deadline on arrival is not drawn, and the next fetch waits 5 s, so stale QRs do not cause a refetch loop. After drawing a QR, the page reads its clock again, shows the QR only with time left, and arms a timer for that time to clear it; a busy browser may run the timer late. The next fetch comes 30 s after the request left, or at the deadline if sooner, timed from the clock after the draw. A failed fetch, or one with no answer in 10 s, shows why and is retried after 5 s.
 
-## What the servers serve
-
-See `vite.config.ts` and `src/dev-server.test.ts`.
-
-- **Dev:** the page's import graph: `/`, `index.html`, the module scripts it names, Vite's client, and each module the graph holds as imported by one already served. Any other request outside `/api` gets 403, so a file in `src` that nothing imports is not served. Git ignores key-shaped files (`.json` other than `package.json`, `.pem`, `.key`, `.p12`, `.pfx`) anywhere in this folder.
-- **Preview:** `/` and the files Vite's manifest names. Any other path outside `/api` gets 403. A manifest that is missing, is not JSON, or is not the manifest's shape, a path outside the output folder included, stops the preview from starting.
-- **Both:** 403 by name, outside `/api`, for key and certificate files, keypair files, databases, `.env` files and the `node_modules/@limen` links, and no CORS header.
-- **Build:** no public folder, and a failure when the output holds a file Vite's manifest does not name.
-
-The API refuses to start with an organizer key inside this folder (see `services/api/README.md`).
-
 ## Test
 
 ```bash
 npm test -w @limen/station
 ```
 
-`src/dev-server.test.ts` covers the servers and the build. `src/page.test.ts` covers the page, with a stand-in document and window, and against the real API with every answer delayed 2 s. `src/rotation.test.ts` covers the rotation with a fake clock. No test draws a QR and decodes it.
+`src/build.test.ts` covers the build. `src/page.test.ts` covers the page, with a stand-in document and window, and against the real API with every answer delayed 2 s. `src/rotation.test.ts` covers the rotation with a fake clock. No test draws a QR and decodes it.

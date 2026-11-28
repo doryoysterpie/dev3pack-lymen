@@ -37,9 +37,12 @@ export interface ApiContext {
   readonly now: () => number;
   /** The current Unix time in milliseconds. Unset: now() * 1000. */
   readonly nowMs?: () => number;
+  /** The built station page, served at /station (station-page.ts). Unset or null: 503. */
+  readonly stationPage?: Buffer | null;
 }
 
-const STATION_QR_PATH = /^\/stations\/([A-Za-z0-9_-]{1,64})\/qr$/;
+// The page asks for its QR at /api on the API's own origin.
+const STATION_QR_PATH = /^(?:\/api)?\/stations\/([A-Za-z0-9_-]{1,64})\/qr$/;
 
 function sendJson(
   res: ServerResponse,
@@ -158,6 +161,25 @@ export function createApiServer(ctx: ApiContext): Server {
           version: ctx.version,
           schema_version: schemaVersion(ctx.db),
         });
+        return;
+      }
+      if (pathname === "/station") {
+        if (req.method !== "GET") {
+          sendJson(res, 405, { error: "method_not_allowed" }, { allow: "GET" });
+          return;
+        }
+        if (ctx.stationPage == null) {
+          sendJson(res, 503, {
+            error: "station_page_not_built",
+            build: "npm run build -w @limen/station",
+          });
+          return;
+        }
+        res.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+        });
+        res.end(ctx.stationPage);
         return;
       }
       const qr = STATION_QR_PATH.exec(pathname);
