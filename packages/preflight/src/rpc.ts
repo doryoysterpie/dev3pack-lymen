@@ -333,17 +333,29 @@ async function fetchSimulation(
     throw new RpcError("shape", "simulateTransaction: context slot");
   }
   const slot = given ?? null;
+  // A missing err field is not a clean run: it is refused, so the pre-flight
+  // marks the simulation not run instead of showing no changes.
+  if (!("err" in value)) {
+    throw new RpcError("shape", "simulateTransaction: no err field");
+  }
+  // From a failed run limen uses nothing but its error (ruling 20a): its
+  // balances and blockhash are not read, so they cannot refuse it either.
+  if (value.err !== null) {
+    return {
+      // Parsed from the answer's text by this client, so it is JSON data.
+      err: value.err,
+      slot,
+      replacementBlockhash: null,
+      preBalances: null,
+      postBalances: null,
+    };
+  }
   const replacement = value.replacementBlockhash;
   // A blockhash is 32 bytes in base58; anything else is not kept.
   const replacementBlockhash =
     isRecord(replacement) && isPublicKey(replacement.blockhash)
       ? replacement.blockhash
       : null;
-  // A missing err field is not a clean run: it is refused, so the pre-flight
-  // marks the simulation not run instead of showing no changes.
-  if (!("err" in value)) {
-    throw new RpcError("shape", "simulateTransaction: no err field");
-  }
   return {
     // Parsed from the answer's text by this client, so it is JSON data.
     err: value.err ?? null,

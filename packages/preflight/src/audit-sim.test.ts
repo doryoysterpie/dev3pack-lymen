@@ -917,3 +917,48 @@ describe("audit 9: the report JSON and the blockhash", () => {
     assert.equal(JSON.stringify(result).includes(K.mint), false);
   });
 });
+
+describe("ruling 20a, item 2: from a failed run limen uses nothing but its error", () => {
+  const failed = { InstructionError: [0, { Custom: 1 }] };
+  const failedRun = (value: Json) =>
+    endpointFor(
+      endpoint({
+        accounts: () => [],
+        simulation: () => ({ err: failed, logs: [], ...value }),
+      }),
+      "x",
+    );
+
+  for (const [name, value] of [
+    ["no balances", {}],
+    [
+      "balances that are not amounts",
+      { preBalances: ["x"], postBalances: [-1] },
+    ],
+    ["balances of another length", { preBalances: [1], postBalances: [1] }],
+    [
+      "a replacement blockhash",
+      {
+        preBalances: [1, 0, 1],
+        postBalances: [1, 0, 1],
+        replacementBlockhash: { blockhash: K.mint, lastValidBlockHeight: 0 },
+      },
+    ],
+  ] as const) {
+    it(`a failed run with ${name} reports its error, no change and no blockhash`, async () => {
+      const result = await preflight(
+        failedRun(value as Json),
+        encodeBase64(build([transfer()])),
+        USER,
+      );
+      assert.ok(result.kind === "ready");
+      assert.deepEqual(result.simulation, {
+        status: "ran",
+        err: failed,
+        changes: [],
+      });
+      assert.deepEqual(result.simulatedAt, { slot: 2, blockhash: null });
+      assert.deepEqual(result.blocks, ["simulation-failed"]);
+    });
+  }
+});

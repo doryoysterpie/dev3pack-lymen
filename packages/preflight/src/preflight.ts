@@ -286,38 +286,47 @@ export async function preflight(
     // limen reads no account before or after the run (ruling 20a): it asks
     // for none, and takes the wallet's SOL from the run's own balances.
     const result = await rpc.simulate(base64);
-    const err = result.err;
-    const keys = accounts.map((account) => account.address);
-    const { preBalances, postBalances } = result;
-    if (
-      preBalances === null ||
-      postBalances === null ||
-      preBalances.length !== keys.length ||
-      postBalances.length !== keys.length
-    ) {
-      throw new Error(
-        "the simulation did not return the balances of its own run",
-      );
+    // From a failed run, limen uses nothing but its error (ruling 20a): no
+    // balances, no accounts and no blockhash. agave returns every account
+    // of a failed run as null (anza-xyz/agave a64fa73, rpc/src/rpc.rs:3554
+    // and :3555), which shows nothing the transaction would do. The slot is
+    // the answer's context, not the run's.
+    if (result.err !== null) {
+      simulation = {
+        status: "ran",
+        // The runtime's error, with any address the RPC wrote into it
+        // scrubbed.
+        err: scrubAddresses(result.err),
+        changes: [],
+      };
+      simulatedAt = { slot: result.slot, blockhash: null };
+    } else {
+      const keys = accounts.map((account) => account.address);
+      const { preBalances, postBalances } = result;
+      if (
+        preBalances === null ||
+        postBalances === null ||
+        preBalances.length !== keys.length ||
+        postBalances.length !== keys.length
+      ) {
+        throw new Error(
+          "the simulation did not return the balances of its own run",
+        );
+      }
+      simulation = {
+        status: "ran",
+        err: null,
+        changes: walletSolChange(USER_MARKER, preBalances, postBalances),
+      };
+      // A blockhash is 32 bytes, and never one of the transaction's own
+      // accounts; any other value from the RPC is not kept.
+      const blockhash =
+        isPublicKey(result.replacementBlockhash) &&
+        !keys.includes(result.replacementBlockhash)
+          ? result.replacementBlockhash
+          : null;
+      simulatedAt = { slot: result.slot, blockhash };
     }
-    // A run that failed returns every account as null (anza-xyz/agave
-    // a64fa73, rpc/src/rpc.rs:3554 and :3555), which shows nothing the
-    // transaction would do, so a failed run lists no change.
-    const changes =
-      err === null ? walletSolChange(USER_MARKER, preBalances, postBalances) : [];
-    simulation = {
-      status: "ran",
-      // The runtime's error, with any address the RPC wrote into it scrubbed.
-      err: scrubAddresses(err),
-      changes,
-    };
-    // A blockhash is 32 bytes, and never one of the transaction's own
-    // accounts; any other value from the RPC is not kept.
-    const blockhash =
-      isPublicKey(result.replacementBlockhash) &&
-      !keys.includes(result.replacementBlockhash)
-        ? result.replacementBlockhash
-        : null;
-    simulatedAt = { slot: result.slot, blockhash };
   } catch (error) {
     if (isNotDevnet(error)) return { kind: "not-devnet" };
     // The reason can quote the RPC's own error text, which can name any
@@ -345,18 +354,12 @@ export async function preflight(
   // Every other account an instruction the wallet signs names, whatever the
   // instruction (summary.ts, walletSignedAccounts).
   const signedAccounts = walletSignedAccounts(transaction, tables)
-    .filter(
-      (address) => !authorizedAccounts.includes(address),
-    )
+    .filter((address) => !authorizedAccounts.includes(address))
     .sort(inOrder);
   // The RPC's text can hold an address inside a longer run, which the scrub
   // of whole runs leaves; every address a report marks is removed wherever
   // it occurs.
-  const walletAddresses = [
-    feePayer,
-    ...authorizedAccounts,
-    ...signedAccounts,
-  ];
+  const walletAddresses = [feePayer, ...authorizedAccounts, ...signedAccounts];
   simulation =
     simulation.status === "ran"
       ? { ...simulation, err: scrubWithin(simulation.err, walletAddresses) }
@@ -390,10 +393,7 @@ function bundleLists(
 ): { recipients: string[]; programIds: string[] } {
   const recipients: string[] = [];
   const add = (address: string) => {
-    if (
-      address !== USER_MARKER &&
-      !recipients.includes(address)
-    ) {
+    if (address !== USER_MARKER && !recipients.includes(address)) {
       recipients.push(address);
     }
   };
