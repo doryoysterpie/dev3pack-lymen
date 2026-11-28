@@ -170,7 +170,10 @@ test("a QR issued near the end of its session expires when the session ends", ()
     notAfter: sessionEnd,
   });
   assert.equal(payload.expires_at, sessionEnd);
-  assert.equal(reasonOf(text, sessionEnd), "ok");
+  // A session's end is exclusive: from that instant the API issues for the next session, so a
+  // QR cut short by the end is refused at the end itself, and accepted only before it.
+  assert.equal(reasonOf(text, sessionEnd - 0.001), "ok");
+  assert.equal(reasonOf(text, sessionEnd), "expired");
   assert.equal(reasonOf(text, sessionEnd + 0.001), "expired");
   assert.equal(reasonOf(text, T + 59), "expired");
   // Without a cap, or with one past 60 s, the QR keeps its full 60 s.

@@ -18,7 +18,9 @@
 // has 30 s to finish. A QR issued near the end of a session expires when the session ends.
 //
 // The verifier measures time in milliseconds: a QR is refused at any instant more than 60 s
-// after issued_at, or after expires_at, not only from the next whole second.
+// after issued_at, or after expires_at, not only from the next whole second. A QR cut short by
+// its session's end is refused from that end itself, since a session's end is exclusive and at
+// that instant the API already issues for the next session.
 import {
   createPublicKey,
   randomBytes,
@@ -250,9 +252,15 @@ export function verifyStationQr(
   const issuedMs = parsed.issued_at * 1000;
   if (options.nowMs < issuedMs - STATION_QR_CLOCK_SKEW_S * 1000)
     return reject("not_yet_valid");
+  // A full-length QR is accepted up to and including 60,000 ms after issue. A QR whose expiry
+  // was cut short by its session's end is refused from that end on, where the issuer's
+  // half-open session window has already moved to the next session.
+  const cutShort = parsed.expires_at < parsed.issued_at + STATION_QR_LIFETIME_S;
+  const expiresMs = parsed.expires_at * 1000;
   if (
     options.nowMs - issuedMs > STATION_QR_LIFETIME_S * 1000 ||
-    options.nowMs > parsed.expires_at * 1000
+    options.nowMs > expiresMs ||
+    (cutShort && options.nowMs >= expiresMs)
   ) {
     return reject("expired");
   }
