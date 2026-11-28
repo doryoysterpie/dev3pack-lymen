@@ -230,8 +230,8 @@ function tokenBalancesOf(value: unknown, what: string): TokenBalance[] | null {
       typeof accountIndex !== "number" ||
       !Number.isSafeInteger(accountIndex) ||
       accountIndex < 0 ||
-      typeof mint !== "string" ||
-      (owner !== undefined && owner !== null && typeof owner !== "string")
+      !isPublicKey(mint) ||
+      (owner !== undefined && owner !== null && !isPublicKey(owner))
     ) {
       throw new RpcError("shape", `${what}: entry`);
     }
@@ -244,11 +244,21 @@ function tokenBalancesOf(value: unknown, what: string): TokenBalance[] | null {
   });
 }
 
+/** Whether a value is a public key: base58 for 32 bytes. */
+export function isPublicKey(value: unknown): value is string {
+  return typeof value === "string" && decodePublicKey(value) !== null;
+}
+
+/** Whether a value is a slot: a whole number from 0, as a JSON number. */
+export function isSlot(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 function accountState(value: unknown): AccountState | null {
   if (value === null) return null;
   if (!isRecord(value)) throw new RpcError("shape", "account: not an object");
   const { lamports, owner, data } = value;
-  if (typeof owner !== "string") throw new RpcError("shape", "account: owner");
+  if (!isPublicKey(owner)) throw new RpcError("shape", "account: owner");
   if (
     !Array.isArray(data) ||
     data[1] !== "base64" ||
@@ -314,8 +324,12 @@ async function fetchSimulation(
   if (!isRecord(value))
     throw new RpcError("shape", "simulateTransaction: value");
   const context = isRecord(result) ? result.context : undefined;
-  const slot =
-    isRecord(context) && typeof context.slot === "number" ? context.slot : null;
+  // A slot that is given must be one; with none given, it is unknown.
+  const given = isRecord(context) ? context.slot : undefined;
+  if (given !== undefined && !isSlot(given)) {
+    throw new RpcError("shape", "simulateTransaction: context slot");
+  }
+  const slot = given ?? null;
   const replacement = value.replacementBlockhash;
   // A blockhash is 32 bytes in base58; anything else is not kept.
   const replacementBlockhash =

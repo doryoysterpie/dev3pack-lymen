@@ -82,6 +82,8 @@ function endpoint(answers: {
   accounts: (addresses: string[], read: number) => unknown[];
   simulation: (addresses: string[]) => Json;
   id?: (id: number, method: string) => number;
+  /** The simulation's context slot; 2 when left out. */
+  slot?: unknown;
 }): Fetch {
   let reads = 0;
   return async (_url, init) => {
@@ -103,7 +105,7 @@ function endpoint(answers: {
         accounts: { addresses: string[] };
       };
       result = {
-        context: { slot: 2 },
+        context: { slot: "slot" in answers ? answers.slot : 2 },
         value: answers.simulation(options.accounts.addresses),
       };
     }
@@ -1163,6 +1165,195 @@ describe("re-audit A3: recordedRpc's post state agrees with its balances", () =>
         },
       ],
     });
+  });
+});
+
+describe("re-audit A5: a slot, owner or mint that is not valid is not evidence", () => {
+  const solRun = (options: {
+    slot?: unknown;
+    walletOwnerAfter?: string;
+    walletOwnerBefore?: string;
+  }) =>
+    jsonRpc(
+      endpoint({
+        ...("slot" in options ? { slot: options.slot } : {}),
+        accounts: (addresses) =>
+          addresses.map((address) =>
+            address === USER
+              ? {
+                  ...system(5_000_000_000),
+                  owner: options.walletOwnerBefore ?? SYSTEM_PROGRAM,
+                }
+              : null,
+          ),
+        simulation: (addresses) => ({
+          err: null,
+          logs: [],
+          accounts: addresses.map((address) =>
+            address === USER
+              ? {
+                  ...system(4_999_995_000),
+                  owner: options.walletOwnerAfter ?? SYSTEM_PROGRAM,
+                }
+              : null,
+          ),
+          preBalances: [5_000_000_000, 0, 1],
+          postBalances: [4_999_995_000, 0, 1],
+          preTokenBalances: [],
+          postTokenBalances: [],
+        }),
+      }),
+      "x",
+    );
+  const notUsed = async (rpc: Rpc) => {
+    const result = await preflightTransaction(build([transfer()]), {
+      rpc,
+      user: USER,
+    });
+    assert.ok(result.summary.kind === "ready");
+    assert.equal(result.summary.simulation.status, "not-run");
+    assert.deepEqual(result.summary.blocks, ["simulation-not-run"]);
+    assert.equal(result.drainPattern, false);
+    assert.equal(result.simulatedAt, null);
+  };
+
+  for (const slot of [-1, 1.5, "7"]) {
+    it(`a context slot of ${JSON.stringify(slot)} is refused`, () =>
+      notUsed(solRun({ slot })));
+  }
+
+  it("a wallet owner after the run that is not a public key is refused", () =>
+    notUsed(solRun({ walletOwnerAfter: "not a public key" })));
+
+  it("a wallet owner in the read that is not a public key is refused", () =>
+    notUsed(solRun({ walletOwnerBefore: "11111111" })));
+
+  it("a custom Rpc's slot or owner that is not valid is refused too", async () => {
+    const recorded = recordedRpc({
+      accounts: { [USER]: system(5_000_000_000) as never },
+      simulation: {
+        err: null,
+        accounts: { [USER]: system(4_999_995_000) as never },
+      },
+    });
+    for (const change of [
+      { slot: -3 },
+      { slot: 2.5 },
+      {
+        accounts: [
+          {
+            lamports: "4999995000",
+            owner: "not a public key",
+            data: new Uint8Array(),
+          },
+          null,
+        ],
+      },
+    ]) {
+      await notUsed({
+        ...recorded,
+        simulate: async (base64, addresses) => ({
+          ...(await recorded.simulate(base64, addresses)),
+          ...change,
+        }),
+      });
+    }
+    await notUsed({
+      ...recorded,
+      getAccounts: async (addresses) =>
+        addresses.map((address) =>
+          address === USER
+            ? { lamports: "5000000000", owner: "x", data: new Uint8Array() }
+            : null,
+        ),
+    });
+  });
+
+  it("jsonRpc itself refuses an owner or a token balance mint that is not a public key", async () => {
+    const rpc = solRun({ walletOwnerBefore: "not a public key" });
+    await assert.rejects(rpc.getAccounts([USER]), {
+      reason: "shape",
+      message: "account: owner",
+    });
+    const tokenRpc = jsonRpc(
+      endpoint({
+        accounts: () => [],
+        simulation: () => ({
+          err: null,
+          logs: [],
+          accounts: [null],
+          preBalances: [1],
+          postBalances: [1],
+          preTokenBalances: [
+            {
+              accountIndex: 0,
+              mint: "not a public key",
+              owner: USER,
+              uiTokenAmount: { amount: "1" },
+            },
+          ],
+          postTokenBalances: [],
+        }),
+      }),
+      "x",
+    );
+    await assert.rejects(tokenRpc.simulate("", [USER]), {
+      reason: "shape",
+      message: "simulateTransaction: preTokenBalances: entry",
+    });
+  });
+
+  it("a token balance whose mint or owner is not a public key is refused", async () => {
+    const recorded = recordedRpc({
+      accounts: {
+        [USER]: system(5_000_000_000) as never,
+        [K.userTokenAccount]: tokenState(200, null) as never,
+      },
+      simulation: {
+        err: null,
+        accounts: {
+          [USER]: system(4_999_995_000) as never,
+          [K.userTokenAccount]: tokenState(195, null) as never,
+        },
+      },
+    });
+    const transaction = build([
+      new web3.TransactionInstruction({
+        programId: new web3.PublicKey(TOKEN_PROGRAM),
+        keys: [
+          { pubkey: tokenAccount, isSigner: false, isWritable: true },
+          { pubkey: attacker, isSigner: false, isWritable: true },
+          { pubkey: user, isSigner: true, isWritable: false },
+        ],
+        data: Buffer.from([3, 5, 0, 0, 0, 0, 0, 0, 0]),
+      }),
+    ]);
+    for (const field of ["mint", "owner"] as const) {
+      for (const which of ["preTokenBalances", "postTokenBalances"] as const) {
+        const result = await preflightTransaction(transaction, {
+          rpc: {
+            ...recorded,
+            simulate: async (base64, addresses) => {
+              const simulation = await recorded.simulate(base64, addresses);
+              return {
+                ...simulation,
+                [which]: (simulation[which] ?? []).map((balance) => ({
+                  ...balance,
+                  [field]: "not a public key",
+                })),
+              };
+            },
+          },
+          user: USER,
+        });
+        assert.ok(result.summary.kind === "ready");
+        assert.equal(
+          result.summary.simulation.status,
+          "not-run",
+          `${which} ${field}`,
+        );
+      }
+    }
   });
 });
 

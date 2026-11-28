@@ -35,7 +35,15 @@ import {
   withMarkers,
 } from "./marker.ts";
 import { ADDRESS_LOOKUP_TABLE_PROGRAM } from "./programs.ts";
-import { assertDevnet, isAmount, RpcError, type Rpc } from "./rpc.ts";
+import {
+  assertDevnet,
+  isAmount,
+  isPublicKey,
+  isSlot,
+  RpcError,
+  type AccountState,
+  type Rpc,
+} from "./rpc.ts";
 import {
   balanceChanges,
   ownedTokenAccounts,
@@ -157,6 +165,19 @@ function lookupProblem(
   return new Set(addresses).size === addresses.length ? null : "duplicate-key";
 }
 
+/**
+ * Any Rpc can be passed in, not only jsonRpc, so each account's owner is
+ * checked here as well: an owner that is not a public key is not evidence.
+ */
+function validStates(
+  states: readonly (AccountState | null)[],
+): readonly (AccountState | null)[] {
+  if (!states.every((state) => state === null || isPublicKey(state.owner))) {
+    throw new Error("an account's owner is not a public key");
+  }
+  return states;
+}
+
 async function loadTables(
   rpc: Rpc,
   transaction: ParsedTransaction,
@@ -227,9 +248,13 @@ export async function preflight(
     const unwatched = watchProblem(feePayer, accounts);
     if (unwatched !== null) throw new Error(unwatched);
     const watched = watchedAddresses(feePayer, accounts);
-    const before = await rpc.getAccounts(watched);
+    const before = validStates(await rpc.getAccounts(watched));
     owned = ownedTokenAccounts(feePayer, watched, before, []);
     const result = await rpc.simulate(base64, watched);
+    validStates(result.accounts);
+    if (result.slot !== null && !isSlot(result.slot)) {
+      throw new Error("the simulation's slot is not a slot");
+    }
     if (result.accounts.length !== watched.length) {
       throw new Error(
         `the simulation returned ${result.accounts.length} accounts for the ${watched.length} asked`,
@@ -267,7 +292,7 @@ export async function preflight(
     // (simulate.ts, balanceChanges). The other fields come from the read
     // before it, which a second read must confirm, so a change another
     // transaction made in between is not taken for this one's.
-    const again = await rpc.getAccounts(watched);
+    const again = validStates(await rpc.getAccounts(watched));
     if (!unchangedBetween(before, again)) {
       throw new Error(
         "an account limen watches changed on devnet during the check",
