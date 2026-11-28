@@ -9,6 +9,7 @@ import {
   API_VERSION,
   createApiServer,
 } from "../../../services/api/src/server.ts";
+import { stationLink } from "../../../services/api/src/station-link.ts";
 import {
   fetchStationQr,
   fragmentParam,
@@ -235,7 +236,7 @@ test("a display token with +, / and = is read from #token= exactly as written", 
   assert.equal(fragmentParam("#other=1", "token"), null);
 });
 
-test("a +, / and = token reaches the real API intact and gets a QR", async () => {
+test("a station link from the link tool reaches the real API and gets that station's QR, and the secret itself is refused", async () => {
   // RFC 8032 section 7.1, TEST 1: a published Ed25519 test vector, not a real key.
   const signer = {
     publicKey: Buffer.from(
@@ -252,7 +253,8 @@ test("a +, / and = token reaches the real API intact and gets a QR", async () =>
       type: "pkcs8",
     }),
   };
-  const token = "q+Wr/9Kp+Zt0LmN/xYv2+AbC/dEf=GhIjKlMnOpQ==";
+  // The API's secret, as `openssl rand -base64 32` makes one, with "+", "/" and "=".
+  const secret = "q+Wr/9Kp+Zt0LmN/xYv2+AbC/dEf=GhIjKlMnOpQ==";
   const db = openDatabase(":memory:");
   db.exec(`
     INSERT INTO stations (id, name, created_at) VALUES ('st-front', 'Front desk', 1);
@@ -262,24 +264,20 @@ test("a +, / and = token reaches the real API intact and gets a QR", async () =>
     db,
     version: API_VERSION,
     stationSigner: signer,
-    stationDisplayToken: token,
+    stationDisplayToken: secret,
     now: () => 1795000100,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const config = readStationConfig(
-      `http://localhost:5173/?station=st-front#token=${token}`,
-    );
+    const config = readStationConfig(stationLink(secret, "st-front"));
     assert.ok(!("error" in config));
     const qr = await fetchStationQr(fetch, base, config);
     assert.equal(qr.station, "st-front");
     assert.ok(qr.qr.startsWith("limen:station:v1."));
-    // The old reader turned "+" into a space, and the API refused the token.
-    const formDecoded =
-      new URLSearchParams(`token=${token}`).get("token") ?? "";
+    // A page given the secret itself, rather than its station's token, is refused.
     await assert.rejects(
-      fetchStationQr(fetch, base, { station: "st-front", token: formDecoded }),
+      fetchStationQr(fetch, base, { station: "st-front", token: secret }),
       {
         message: "The API refused the display token.",
       },
