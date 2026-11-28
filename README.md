@@ -39,7 +39,7 @@ npm ci
 npm run check
 ```
 
-Local secrets go in `.env`, copied from `.env.example`. Git ignores `.env`. Git also ignores `.der`, `.pem`, `.key` and `.p12` files. CI scans every tracked file, symlinks excepted, for private-key material by content: PEM private-key headers, the PKCS#8 DER prefixes of Ed25519 (versions 1 and 2), RSA and EC keys in raw bytes, and Solana keypairs: 64 bytes, as an array of numbers, a trailing comma allowed, or in base58, whose last 32 bytes are the Ed25519 public key of the first 32. A signature or any other 64-byte value is not a hit. Any hit fails the run (`services/api/src/key-scan.test.ts`). The scan does not find a key in any other form, such as hex, bare base64, or base58 split across lines.
+Local secrets go in `.env`, copied from `.env.example`. Git ignores `.env`. Git also ignores `.der`, `.pem`, `.key` and `.p12` files. CI scans every tracked file for private-key material by content, and a tracked file it cannot read, or that is not a regular file, fails the run. It flags PEM private-key headers; Ed25519 PKCS#8 DER, versions 1 and 2, in raw bytes; and anything the organizer-key loader accepts as a keypair, tried on every bracketed array, as written or with a trailing comma before its closing bracket, and on every base58 run decoded to bytes. The loader accepts 64 integers from 0 to 255 whose last 32 bytes are the Ed25519 public key of the first 32, so a signature or any other 64-byte value is not a hit. Any hit fails the run (`services/api/src/key-scan.test.ts`). The scan does not find a key in any other form, such as hex, bare base64, an RSA or EC key in DER, or base58 split across lines.
 
 ## What each check proves
 

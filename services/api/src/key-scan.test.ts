@@ -3,7 +3,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
-import { readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -108,5 +116,71 @@ test("CI runs the scan, and git ignores .der, .pem, .key and .p12 files anywhere
       cwd: ROOT,
     });
     assert.equal(r.status, 0, `${path} is ignored`);
+  }
+});
+
+test("the scan flags exactly what the organizer-key loader accepts: every number form JSON allows, and base58 of any length", async () => {
+  const { acceptsAsKeypair } = await import("./organizer-key.ts");
+  const pair = solanaKeypair();
+  const forms = [
+    JSON.stringify([...pair]),
+    `[${[...pair].map((n) => `${n}.0`).join(",")}]`,
+    `[${[...pair].map((n) => (n === 0 ? "-0" : `${n}e0`)).join(", ")}]`,
+    `[\n${[...pair].map((n) => `  ${n}`).join(",\n")}\n]`,
+  ];
+  const near = [
+    JSON.stringify([...pair].slice(0, 63)),
+    JSON.stringify([...pair, 0]),
+    JSON.stringify([...pair.subarray(0, 32), ...randomBytes(32)]),
+    JSON.stringify([256, ...pair.subarray(1)]),
+    `[${[...pair].map((n) => `${n}.5`).join(",")}]`,
+  ];
+  for (const text of [...forms, ...near]) {
+    const hit = keyMaterialIn(Buffer.from(`const k = ${text};\n`)).includes(
+      "json-keypair",
+    );
+    assert.equal(hit, acceptsAsKeypair(text), text.slice(0, 40));
+  }
+  for (const text of forms)
+    assert.ok(acceptsAsKeypair(text), "the loader accepts");
+  // A seed starting with 25 zero bytes encodes in fewer than 80 base58 characters.
+  const { createPrivateKey, createPublicKey } = await import("node:crypto");
+  const seed = Buffer.concat([Buffer.alloc(25), randomBytes(7)]);
+  const key = createPrivateKey({
+    key: Buffer.concat([
+      Buffer.from("302e020100300506032b657004220420", "hex"),
+      seed,
+    ]),
+    format: "der",
+    type: "pkcs8",
+  });
+  const pub = createPublicKey(key)
+    .export({ format: "der", type: "spki" })
+    .subarray(-32);
+  const short = base58(Buffer.concat([seed, pub]));
+  assert.ok(short.length < 80, `${short.length} characters`);
+  assert.deepEqual(keyMaterialIn(Buffer.from(`k=${short}\n`)), [
+    "base58-keypair",
+  ]);
+});
+
+test("a tracked symlink, or a tracked file missing from the tree, fails the scan rather than being skipped", () => {
+  const dir = mkdtempSync(join(tmpdir(), "limen-key-scan-"));
+  try {
+    const git = (...args: string[]) =>
+      spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+    git("init", "-q");
+    writeFileSync(join(dir, "kept.txt"), "fine\n");
+    writeFileSync(join(dir, "gone.txt"), "soon gone\n");
+    symlinkSync("kept.txt", join(dir, "link.txt"));
+    git("add", "kept.txt", "gone.txt", "link.txt");
+    rmSync(join(dir, "gone.txt"));
+    const { hits } = scanTrackedFiles(dir);
+    assert.deepEqual(hits.map((h) => [h.file, h.reasons]).sort(), [
+      ["gone.txt", ["unreadable"]],
+      ["link.txt", ["not-a-regular-file"]],
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
