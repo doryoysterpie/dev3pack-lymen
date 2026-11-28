@@ -539,6 +539,16 @@ describe("the owner's audit: what the card claims", () => {
     });
   });
 
+  it("N4: a delegate in a lookup table limen could not read starts the sentence, its table address as written", async () => {
+    const rows = await rowsFor([
+      { ...approve(attacker, "5"), delegate: { table: LOWER, index: 0 } },
+    ]);
+    assert.deepEqual(rows[1], {
+      label: "Approves a delegate",
+      value: `An address in lookup table ${LOWER} (index 0) that limen could not read may move up to 5 base units from your token account ${userTokenAccount}.`,
+    });
+  });
+
   it("1: the largest allowance is not called unlimited", async () => {
     const rows = await rowsFor([approve(attacker, U64)]);
     assert.deepEqual(rows[1], {

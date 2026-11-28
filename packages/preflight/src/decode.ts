@@ -14,9 +14,10 @@
 // The decoder is stricter than the programs: for each instruction it decodes,
 // data of any length other than the exact one is "unexpected-data", never
 // decoded. The base token instructions it only names (TOKEN_NAMED) carry no
-// field the summary reads, and are named at any data length. Anything
-// it cannot decode comes back as "undecoded" with a reason, so the card can
-// say so instead of guessing.
+// field the summary reads, and are named only at their exact data length and
+// with at least their accounts, like the rest. Anything it cannot decode
+// comes back as "undecoded" with a reason, so the card can say so instead of
+// guessing.
 
 import type { Account } from "./accounts.ts";
 import * as programs from "./programs.ts";
@@ -168,7 +169,6 @@ function u32(data: Uint8Array, offset: number): number {
   );
 }
 
-/** A u64 read little-endian, as a decimal string. */
 /**
  * Whether bytes are UTF-8 as Rust's String::from_utf8 accepts it: no
  * overlong form, no surrogate, nothing past U+10FFFF.
@@ -206,6 +206,7 @@ export function isUtf8(bytes: Uint8Array): boolean {
   return true;
 }
 
+/** A u64 read little-endian, as a decimal string. */
 function u64(data: Uint8Array, offset: number): string {
   let value = BigInt(0);
   for (let i = 7; i >= 0; i -= 1) {

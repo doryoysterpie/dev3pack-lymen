@@ -191,7 +191,6 @@ function isUser(account: Account, user: string): boolean {
   return account.address === user;
 }
 
-/** A token instruction is the user's when the wallet signs as an authorizer. */
 /**
  * Whether the user's wallet is the authority a token instruction names, and
  * signs. The token programs check the account at the authority position
