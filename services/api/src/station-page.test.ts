@@ -1,5 +1,6 @@
 // E-03: the station page, one built file the API reads at start-up and serves at /station.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -16,6 +17,7 @@ import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { openDatabase } from "./db.ts";
 import { start } from "./index.ts";
@@ -34,6 +36,9 @@ import {
 } from "./test-station.ts";
 
 const T = TEST_STATION_SETTINGS.now();
+const STATION_BUILD = fileURLToPath(
+  new URL("../../../apps/station/build.ts", import.meta.url),
+);
 const README = readFileSync(
   new URL("../../../apps/station/README.md", import.meta.url),
   "utf8",
@@ -64,35 +69,58 @@ test("the station URL the README gives serves the built page, whatever its query
       README,
     )?.[1];
   assert.ok(documented !== undefined, "the README gives the station URL");
-  const page = Buffer.from(
-    `${STATION_PAGE_DOCTYPE}\n<title>limen station</title>${STATION_PAGE_MARKER}\n`,
+  const outDir = realpathSync(
+    mkdtempSync(join(tmpdir(), "limen-station-build-")),
   );
-  const { base, close } = await serve(page);
   try {
-    const url = new URL(documented);
-    for (const path of [
-      url.pathname + url.search,
-      "/station",
-      "/station?station=st-side&x=1",
-    ]) {
-      const res = await fetch(base + path);
-      assert.equal(res.status, 200, path);
-      assert.equal(res.headers.get("content-type"), "text/html; charset=utf-8");
-      assert.equal(res.headers.get("cache-control"), "no-store");
-      assert.ok(Buffer.from(await res.arrayBuffer()).equals(page), path);
+    const built = spawnSync(
+      process.execPath,
+      [STATION_BUILD, "--outDir", outDir],
+      {
+        encoding: "utf8",
+        env: { PATH: process.env.PATH ?? "" },
+        timeout: 120_000,
+      },
+    );
+    assert.equal(built.status, 0, `build: ${built.stderr.slice(-600)}`);
+    const page = loadStationPage(join(outDir, "index.html"));
+    assert.ok(page !== null, "the station build wrote index.html");
+    const { base, close } = await serve(page);
+    try {
+      const url = new URL(documented);
+      for (const path of [
+        url.pathname + url.search,
+        "/station",
+        "/station?station=st-side&x=1",
+      ]) {
+        const res = await fetch(base + path);
+        assert.equal(res.status, 200, path);
+        assert.equal(
+          res.headers.get("content-type"),
+          "text/html; charset=utf-8",
+        );
+        assert.equal(res.headers.get("cache-control"), "no-store");
+        const body = Buffer.from(await res.arrayBuffer());
+        assert.ok(body.equals(page), path);
+        const html = body.toString("utf8");
+        assert.match(html, /<canvas id="qr" hidden><\/canvas>/, path);
+        assert.match(html, /<script type="module">/, path);
+      }
+      for (const path of [
+        "/station/",
+        "/station/index.html",
+        "/station.html",
+        "/index.html",
+        "/",
+      ])
+        assert.equal((await fetch(base + path)).status, 404, path);
+      const post = await fetch(`${base}/station`, { method: "POST" });
+      assert.equal(post.status, 405);
+    } finally {
+      await close();
     }
-    for (const path of [
-      "/station/",
-      "/station/index.html",
-      "/station.html",
-      "/index.html",
-      "/",
-    ])
-      assert.equal((await fetch(base + path)).status, 404, path);
-    const post = await fetch(`${base}/station`, { method: "POST" });
-    assert.equal(post.status, 405);
   } finally {
-    await close();
+    rmSync(outDir, { recursive: true, force: true });
   }
 });
 

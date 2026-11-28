@@ -577,15 +577,20 @@ test("with a 2 s response delay, a QR that expires in transit is not drawn, and 
     now: () => Math.floor(apiMs() / 1000),
     nowMs: apiMs,
   });
+  const seenUrls: string[] = [];
+  server.on("request", (req) => {
+    seenUrls.push(req.url ?? "");
+  });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const api = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   // The real API answers at once; the page gets each answer 2 s later on its own clock.
   const fetchedAt: number[] = [];
   const delayed = (url: string, init?: RequestInit): Promise<Response> => {
     fetchedAt.push(clock.now);
-    const answer = fetch(`${api}${url.replace(/^\/api/, "")}`, init).then(
-      async (r) => ({ status: r.status, body: await r.text() }),
-    );
+    const answer = fetch(`${api}${url}`, init).then(async (r) => ({
+      status: r.status,
+      body: await r.text(),
+    }));
     return new Promise((resolve) => {
       clock.setTimeout(() => {
         void answer.then((a) =>
@@ -621,6 +626,11 @@ test("with a 2 s response delay, a QR that expires in transit is not drawn, and 
     // day-1's QR arrives stale at 2 s, so the next fetch waits the 5 s retry delay, to 7 s.
     // day-2's refresh comes 30 s after its request left, at 37 s, not 30 s after it arrived.
     assert.deepEqual(fetchedAt, [0, 7000, 37_000]);
+    assert.deepEqual(seenUrls, [
+      "/api/stations/st-front/qr",
+      "/api/stations/st-front/qr",
+      "/api/stations/st-front/qr",
+    ]);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
