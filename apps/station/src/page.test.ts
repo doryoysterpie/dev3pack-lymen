@@ -200,7 +200,7 @@ test("a response carrying another station's genuine QR is refused, not drawn und
   assert.ok(!log.some((l) => l.startsWith("caption: Station")));
 });
 
-test("the caption comes from the signed QR and states the server's interval", async () => {
+test("the caption comes from the signed QR and states the interval as a fact, not a countdown", async () => {
   // The response's own fields disagree with the QR; only the QR's signed payload counts.
   const qr = signedQr("st-front");
   const { elements } = await loadPage(
@@ -216,9 +216,27 @@ test("the caption comes from the signed QR and states the server's interval", as
     }),
   );
   assert.equal(elements.qr.dataset.qr, qr);
+  // Under 30 s means the QR expires at its session's end: the caption says so once, and does
+  // not count down a number it never updates.
   assert.equal(
     elements.caption.textContent,
-    "Station st-front, session day-2. Next QR in 7 s.",
+    "Station st-front, session day-2. This QR lasts until the session ends.",
+  );
+  const full = await loadPage(
+    "http://127.0.0.1:5173/?station=st-front#token=station-token-0123456789",
+    answering({
+      qr,
+      station: "st-front",
+      session: "day-2",
+      issued_at: T,
+      expires_at: T + 60,
+      refresh_after_s: 30,
+      expires_in_ms: 60_000,
+    }),
+  );
+  assert.equal(
+    full.elements.caption.textContent,
+    "Station st-front, session day-2. A new QR every 30 s.",
   );
 });
 
