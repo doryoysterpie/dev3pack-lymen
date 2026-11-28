@@ -35,10 +35,6 @@ const sol = (lamports: string) => `${withDecimals(lamports, 9)} SOL`;
 const shown = (address: string): string =>
   address === USER_MARKER ? "your wallet" : address;
 
-// "your wallet" starts a sentence as "Your wallet".
-const capitalized = (text: string): string =>
-  text.charAt(0).toUpperCase() + text.slice(1);
-
 function where(place: Place): string {
   return "address" in place
     ? shown(place.address)
@@ -80,27 +76,43 @@ function effectRow(effect: Effect): CardRow {
         value: `Assigns your wallet account to program ${effect.newOwner}, which would then control its SOL.`,
       };
     case "pays-for-token-account":
-      return {
-        label: "Creates a token account",
-        value: `Your wallet pays the rent for token account ${where(effect.account)}.`,
-      };
+      // The wallet pays only what the account lacks of its rent, and an
+      // idempotent create does nothing when the account exists.
+      return effect.idempotent
+        ? {
+            label: "May create a token account",
+            value: `If token account ${where(effect.account)} does not exist yet, it is created and your wallet pays up to its rent.`,
+          }
+        : {
+            label: "Creates a token account",
+            value: `Your wallet pays up to the rent for new token account ${where(effect.account)}.`,
+          };
     case "token-out":
       return {
         label: "Sends tokens",
         value: `${tokenAmount(effect.amount, effect.decimals)}${effect.mint === null ? "" : ` of mint ${where(effect.mint)}`} from token account ${where(effect.source)} to ${where(effect.destination)}.`,
       };
-    case "delegate-approved":
+    case "delegate-approved": {
+      // An address is shown exactly as written: base58 is case-sensitive.
+      const who =
+        "address" in effect.delegate && effect.delegate.address === USER_MARKER
+          ? "Your wallet"
+          : where(effect.delegate);
+      // The largest u64 is still an allowance each transfer spends down.
       return {
         label: "Approves a delegate",
         value:
           effect.amount === U64_MAX
-            ? `${capitalized(where(effect.delegate))} may move every token in your token account ${where(effect.account)}, with no limit.`
-            : `${capitalized(where(effect.delegate))} may move up to ${tokenAmount(effect.amount, effect.decimals)} from your token account ${where(effect.account)}.`,
+            ? `${who} may move up to ${U64_MAX} base units, the largest allowance a token account can hold, from your token account ${where(effect.account)}.`
+            : `${who} may move up to ${tokenAmount(effect.amount, effect.decimals)} from your token account ${where(effect.account)}.`,
       };
+    }
     case "delegate-revoked":
       return {
         label: "Removes a delegate",
-        value: `From your token account ${where(effect.account)}.`,
+        // The delegate itself may revoke (Token-2022), so the account is not
+        // said to be the wallet's.
+        value: `From token account ${where(effect.account)}, with your wallet's authority.`,
       };
     case "authority-changed": {
       const what = AUTHORITY[effect.authorityType] ?? effect.authorityType;
@@ -133,7 +145,8 @@ function effectRow(effect: Effect): CardRow {
     case "tokens-burned":
       return {
         label: "Burns tokens",
-        value: `${tokenAmount(effect.amount, effect.decimals)} from your token account ${where(effect.account)}.`,
+        // The wallet may be the account's delegate rather than its owner.
+        value: `${tokenAmount(effect.amount, effect.decimals)} from token account ${where(effect.account)}, with your wallet's authority.`,
       };
   }
 }
@@ -223,7 +236,7 @@ const BLOCK: Readonly<Record<SignBlock, string>> = {
   "cosigner-missing":
     "it needs another signature that is missing. The Solana Pay format has wallets refuse such a transaction.",
   "simulation-not-run":
-    "the simulation did not run, so this card shows only the decoded instructions. Signing waits for a simulation on devnet.",
+    "no simulation result could be used, so this card shows only the decoded instructions. Signing waits for one from devnet.",
   "simulation-failed":
     "the transaction failed when simulated on devnet. Signed now, it would most likely fail the same way.",
 };
@@ -237,10 +250,10 @@ const DRAIN = {
     "As simulated, it would hand control of your wallet or tokens to another address, or leave your wallet or a token account with less than a tenth of what it holds.",
 } as const;
 
-// What the simulation adds to the fallback card, said only as far as it ran.
+// What the simulation adds to a card, said only as far as a result is used.
 function simulated(simulation: SimulationOutcome): string {
   if (simulation.status === "not-run") {
-    return "The simulation did not run, so no balance change is shown.";
+    return "No simulation result is used, so no balance change is shown.";
   }
   return simulation.err === null
     ? "The simulation ran, and the balance changes it found are shown below."
@@ -335,7 +348,7 @@ export function transactionCardText(
   if (simulation.status === "not-run") {
     rows.push({
       label: "Simulation",
-      value: `Did not run: ${simulation.reason}. The decoded instructions above still apply.`,
+      value: `Not used: ${simulation.reason}. The decoded instructions above still apply.`,
     });
   } else {
     rows.push({
@@ -345,7 +358,10 @@ export function transactionCardText(
           ? "Ran on devnet without an error."
           : `Failed on devnet: ${JSON.stringify(simulation.err)}. Signed now, the transaction would most likely fail the same way.`,
     });
-    rows.push(...simulation.changes.map(changeRow));
+    // A failed run's changes are not shown, as the status says.
+    if (simulation.err === null) {
+      rows.push(...simulation.changes.map(changeRow));
+    }
   }
 
   rows.push({
@@ -369,7 +385,9 @@ export function transactionCardText(
         ? `limen flags this transaction: ${DRAIN.decoded.charAt(0).toLowerCase()}${DRAIN.decoded.slice(1)}`
         : drains
           ? `limen flags this transaction: ${DRAIN.simulated.charAt(0).toLowerCase()}${DRAIN.simulated.slice(1)}`
-          : "This card shows what the transaction would do before you sign.",
+          : simulation.status === "ran" && simulation.err === null
+            ? "This card shows what the transaction would do before you sign."
+            : `This card shows what the decoded instructions would do. ${simulated(simulation)}`,
     rows,
   };
 }

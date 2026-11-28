@@ -126,7 +126,7 @@ export function signBlocks(
   simulation: SimulationOutcome,
 ): SignBlock[] {
   const blocks: SignBlock[] = [];
-  if (summary.signers.others.some((other) => !other.signed)) {
+  if (summary.signers.others.some((other) => !other.signatureFilled)) {
     blocks.push("cosigner-missing");
   }
   if (simulation.status === "not-run") blocks.push("simulation-not-run");
