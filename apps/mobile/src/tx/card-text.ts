@@ -51,6 +51,15 @@ function whereFirst(place: Place): string {
   return place.address === USER_MARKER ? "Your wallet" : place.address;
 }
 
+/** Whether two places are the same account, as far as the card can tell. */
+function samePlace(a: Place, b: Place): boolean {
+  if ("address" in a && "address" in b) return a.address === b.address;
+  if ("table" in a && "table" in b) {
+    return a.table === b.table && a.index === b.index;
+  }
+  return false;
+}
+
 function tokenAmount(amount: string, decimals: number | null): string {
   if (amount === U64_MAX) return "the largest possible amount";
   return decimals === null
@@ -98,6 +107,15 @@ function effectRow(effect: Effect): CardRow {
             value: `Your wallet pays up to the rent for new token account ${where(effect.account)}.`,
           };
     case "token-out":
+      // A transfer to the account it comes from returns success before any
+      // amount moves (solana-program/token 38de8d1, program/src/processor.rs
+      // :270 to :311).
+      if (samePlace(effect.source, effect.destination)) {
+        return {
+          label: "Moves no tokens",
+          value: `A transfer of ${tokenAmount(effect.amount, effect.decimals)} from token account ${where(effect.source)} to itself, which ${effect.program === "token" ? "the Token program" : "Token-2022"} accepts without moving any.`,
+        };
+      }
       return {
         label: "Sends tokens",
         value: `${tokenAmount(effect.amount, effect.decimals)}${effect.mint === null ? "" : ` of mint ${where(effect.mint)}`} from token account ${where(effect.source)} to ${where(effect.destination)}.`,
@@ -114,8 +132,10 @@ function effectRow(effect: Effect): CardRow {
       };
     }
     case "delegate-revoked":
+      // Revoke clears the delegate whether or not one is set
+      // (solana-program/token 38de8d1, program/src/processor.rs:395 to 420).
       return {
-        label: "Removes a delegate",
+        label: "Removes any delegate",
         // The delegate itself may revoke (Token-2022), so the account is not
         // said to be the wallet's.
         value: `From token account ${where(effect.account)}, with your wallet's authority.`,
@@ -151,8 +171,11 @@ function effectRow(effect: Effect): CardRow {
     case "tokens-burned":
       return {
         label: "Burns tokens",
-        // The wallet may be the account's delegate rather than its owner.
-        value: `${tokenAmount(effect.amount, effect.decimals)} from token account ${where(effect.account)}, with your wallet's authority.`,
+        // The program checks the authority only when the account's owner is
+        // not the System Program or the incinerator (solana-program/token
+        // 38de8d1, program/src/processor.rs:620; token-2022 efe55b4, :1273),
+        // which the instruction does not show.
+        value: `${tokenAmount(effect.amount, effect.decimals)} from token account ${where(effect.account)}. Your wallet signs as the authority the instruction names.`,
       };
   }
 }
