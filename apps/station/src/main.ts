@@ -33,17 +33,21 @@ function showProblem(message: string): void {
   problem.hidden = false;
 }
 
+function showRefreshing(): void {
+  canvas.hidden = true;
+  delete canvas.dataset.qr;
+  problem.hidden = true;
+  caption.textContent = "Refreshing the QR. Please wait.";
+}
+
 function render(view: StationView): void {
   if (view.kind === "error") {
     showProblem(view.message);
     return;
   }
   if (view.kind === "refreshing") {
-    // The last QR has outlived its lifetime and no new one has arrived yet.
-    canvas.hidden = true;
-    delete canvas.dataset.qr;
-    problem.hidden = true;
-    caption.textContent = "Refreshing the QR. Please wait.";
+    // The last QR has passed its deadline and no new one has arrived yet.
+    showRefreshing();
     return;
   }
   QRCode.toCanvas(canvas, view.qr, {
@@ -52,6 +56,11 @@ function render(view: StationView): void {
     errorCorrectionLevel: "M",
   }).then(
     () => {
+      // Drawing takes time, so the deadline is checked again just before the QR is shown.
+      if (window.performance.now() >= view.deadline) {
+        showRefreshing();
+        return;
+      }
       canvas.dataset.qr = view.qr;
       canvas.hidden = false;
       caption.textContent = captionFor(view);

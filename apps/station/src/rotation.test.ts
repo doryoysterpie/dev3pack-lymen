@@ -63,14 +63,19 @@ function response(n: number): StationQr {
     session: "day-2",
     issuedAt: 1000 + 30 * n,
     expiresAt: 1060 + 30 * n,
-    refreshAfterS: 30,
-    expiresInMs: 60_000,
   };
 }
 
-/** The API's answer for response(n): its QR text carries the payload the page reads. */
-function wireBody(n: number, station = "st-front") {
-  const r = response(n);
+/**
+ * The API's answer for response(n): its QR text carries the payload the page reads. The answer's
+ * own timing fields are filled in as the API sends them; the page does not read them.
+ */
+function wireBody(
+  n: number,
+  station = "st-front",
+  signed: { issuedAt: number; expiresAt: number } = response(n),
+) {
+  const r = { ...response(n), ...signed };
   const payload = Buffer.from(
     JSON.stringify({
       station,
@@ -86,8 +91,8 @@ function wireBody(n: number, station = "st-front") {
     session: r.session,
     issued_at: r.issuedAt,
     expires_at: r.expiresAt,
-    refresh_after_s: r.refreshAfterS,
-    expires_in_ms: r.expiresInMs,
+    refresh_after_s: 30,
+    expires_in_ms: 60_000,
   };
 }
 
@@ -124,8 +129,9 @@ test("the display shows a fresh QR from the API at 0 s, 30 s and 60 s", async ()
     session: "day-2",
     issuedAt: 1090,
     expiresAt: 1150,
-    refreshAfterS: 30,
-    expiresInMs: 60_000,
+    // Fetched at 60 s: 60 s of signed window, less up to 999 ms for when in its second the API
+    // signed it.
+    deadline: 60_000 + 59_001,
   });
 });
 
@@ -376,16 +382,36 @@ test("a fetch that never answers is abandoned after 10 s, shown as a failure, an
   assert.equal(shown.at(-1)?.kind, "qr");
 });
 
-test("a QR that outlives its lifetime on screen is cleared and the page says it is refreshing", async () => {
+/** A fetch that answers after `delayMs` on the fake clock with a QR signed for `window` seconds. */
+function signedAnswer(
+  clock: ReturnType<typeof fakeClock>,
+  delayMs: number,
+  windowS: number,
+) {
+  return (async () => {
+    const body = wireBody(1, "st-front", {
+      issuedAt: 1000,
+      expiresAt: 1000 + windowS,
+    });
+    await new Promise<void>((resolve) => clock.setTimeout(resolve, delayMs));
+    return new Response(JSON.stringify(body), { status: 200 });
+  }) as unknown as typeof fetch;
+}
+
+test("a shown QR is cleared at its deadline from the signed times, and the page says it is refreshing", async () => {
   const clock = fakeClock();
   const shown: StationView[] = [];
   let calls = 0;
   startRotation({
-    // The API asks for a refresh only at 60 s, and that fetch then hangs.
+    // A QR signed for 20 s; the fetch at its deadline then hangs.
     fetchQr: (signal) => {
       calls++;
       if (calls === 1)
-        return Promise.resolve({ ...response(1), refreshAfterS: 60 });
+        return Promise.resolve({
+          ...response(1),
+          issuedAt: 1000,
+          expiresAt: 1020,
+        });
       return new Promise<StationQr>((_, reject) =>
         signal.addEventListener("abort", () => reject(new Error("aborted"))),
       );
@@ -396,7 +422,8 @@ test("a QR that outlives its lifetime on screen is cleared and the page says it 
     clearTimeout: clock.clearTimeout,
   });
   await flush();
-  await clock.advance(59_999);
+  // 20 s of signed window, less 999 ms: the deadline is 19 001 ms after the request left.
+  await clock.advance(19_000);
   assert.deepEqual(
     shown.map((v) => v.kind),
     ["qr"],
@@ -413,18 +440,18 @@ test("a QR that outlives its lifetime on screen is cleared and the page says it 
   );
 });
 
-test("with a 2 s response delay, a shown QR is cleared at its server expiry, not 2 s late", async () => {
+test("with a 2 s response delay, a shown QR is cleared by its signed expiry, counted from when the request left", async () => {
   const clock = fakeClock();
   const shown: { at: number; kind: string }[] = [];
   let calls = 0;
   startRotation({
     fetchQr: (signal) => {
       calls++;
-      // The first answer takes 2 s and has 10 s left as it leaves the API; the next one hangs.
+      // The first answer takes 2 s and is signed for 10 s; the next fetch hangs.
       if (calls === 1)
         return new Promise<StationQr>((resolve) => {
           clock.setTimeout(
-            () => resolve({ ...response(1), expiresInMs: 10_000 }),
+            () => resolve({ ...response(1), issuedAt: 1000, expiresAt: 1010 }),
             2000,
           );
         });
@@ -438,11 +465,73 @@ test("with a 2 s response delay, a shown QR is cleared at its server expiry, not
     clearTimeout: clock.clearTimeout,
   });
   await flush();
-  await clock.advance(9_999);
+  await clock.advance(9_000);
   assert.deepEqual(shown, [{ at: 2000, kind: "qr" }]);
   await clock.advance(1);
   assert.deepEqual(shown, [
     { at: 2000, kind: "qr" },
-    { at: 10_000, kind: "refreshing" },
+    { at: 9_001, kind: "refreshing" },
   ]);
+});
+
+test("the deadline and the next fetch come from the signed times, never from the answer's other fields", async () => {
+  // The answer says 60 s left and a 30 s refresh; the QR itself is signed for 2 s.
+  const clock = fakeClock();
+  const fetchedAt: number[] = [];
+  const shown: { at: number; kind: string }[] = [];
+  const answer = signedAnswer(clock, 0, 2);
+  startRotation({
+    fetchQr: (signal) => {
+      fetchedAt.push(clock.now);
+      return fetchStationQr(
+        answer,
+        "/api",
+        { station: "st-front", token: "tok" },
+        signal,
+      );
+    },
+    render: (view) => shown.push({ at: clock.now, kind: view.kind }),
+    now: () => clock.now,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+  });
+  await flush();
+  await clock.advance(1_000);
+  assert.deepEqual(shown, [{ at: 0, kind: "qr" }]);
+  await clock.advance(1);
+  assert.deepEqual(shown.slice(0, 2), [
+    { at: 0, kind: "qr" },
+    { at: 1_001, kind: "refreshing" },
+  ]);
+  assert.deepEqual(fetchedAt, [0, 1_001]);
+});
+
+test("a QR whose signed window has passed when it arrives is never drawn, whatever the answer says is left", async () => {
+  // Signed for 1 s, arriving 2 s after the request left; the answer claims 60 s left.
+  const clock = fakeClock();
+  const shown: { at: number; kind: string }[] = [];
+  let calls = 0;
+  const late = signedAnswer(clock, 2000, 1);
+  startRotation({
+    fetchQr: (signal) => {
+      calls++;
+      if (calls === 1)
+        return fetchStationQr(
+          late,
+          "/api",
+          { station: "st-front", token: "tok" },
+          signal,
+        );
+      return new Promise<StationQr>((_, reject) =>
+        signal.addEventListener("abort", () => reject(new Error("aborted"))),
+      );
+    },
+    render: (view) => shown.push({ at: clock.now, kind: view.kind }),
+    now: () => clock.now,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+  });
+  await flush();
+  await clock.advance(2_000);
+  assert.deepEqual(shown, [{ at: 2000, kind: "refreshing" }]);
 });
