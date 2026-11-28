@@ -27,6 +27,13 @@
       main {
         padding: 16px;
       }
+      /* The logo (E-19) is a black wordmark. Its descender is a fifth of its height, so it sits
+         that far below the line, and it is inverted to read on the dark page. */
+      .logo {
+        height: 1.1em;
+        vertical-align: -0.2em;
+        filter: invert(1);
+      }
       canvas {
         display: block;
         margin: 0 auto 16px;
@@ -56,7 +63,10 @@
   </head>
   <body>
     <main>
-      <h1>Scan with limen to check in</h1>
+      <h1>
+        Scan with <img class="logo" src="/src/limen-logo.svg" alt="limen" /> to
+        check in
+      </h1>
       <canvas id="qr" hidden></canvas>
       <p id="caption"></p>
       <p id="problem" role="alert" hidden></p>

@@ -24,7 +24,7 @@ The page times each QR on its own clock against the signed `issued_at` and `expi
 
 See `vite.config.ts` and `src/dev-server.test.ts`.
 
-- **Dev:** in this folder, `index.html`, the `.ts` and `.css` files under `src`, and Vite's dependency cache. Any other file here gets 403.
+- **Dev:** in this folder, `index.html`, the `.ts`, `.css` and `.svg` files under `src`, and Vite's dependency cache. Any other file here gets 403.
 - **Preview:** `/` and the files Vite's manifest names. Any other path outside `/api` gets 403.
 - **Both:** 403 by name, outside `/api`, for key and certificate files, keypair files, databases, `.env` files and the `node_modules/@limen` links, and no CORS header.
 - **Build:** no public folder, and a failure when the output holds a file Vite's manifest does not name.

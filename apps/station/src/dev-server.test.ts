@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmdirSync,
   rmSync,
   writeFileSync,
@@ -427,6 +428,66 @@ test("a notes.html left in the output folder fails the build, and one added afte
     assert.ok(script !== undefined, "the built page names its script");
     assert.equal((await get(script)).status, 200);
   } finally {
+    if (previewServer !== null)
+      await new Promise<void>((resolve) =>
+        previewServer!.httpServer.close(() => resolve()),
+      );
+    rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+test("E-19: the heading shows the logo with alt text limen, served by dev and preview", async () => {
+  const expectedLogo = readFileSync(join(APP, "src", "limen-logo.svg"), "utf8");
+  const outDir = mkdtempSync(join(tmpdir(), "limen-station-build-"));
+  const config = {
+    configFile: join(APP, "vite.config.ts"),
+    root: APP,
+    logLevel: "silent" as const,
+  };
+  const dev = await createServer({
+    ...config,
+    server: { port: await freePort(), strictPort: true },
+  });
+  let previewServer: Awaited<ReturnType<typeof preview>> | null = null;
+  try {
+    await dev.listen();
+    const devPort = (dev.httpServer!.address() as AddressInfo).port;
+    const devPage = await fetch(`http://127.0.0.1:${devPort}/`);
+    assert.equal(devPage.status, 200);
+    const devHtml = await devPage.text();
+    const devLogoTag =
+      /<img\b[^>]*\balt="limen"[^>]*>/.exec(devHtml)?.[0] ?? "";
+    const devSrc = /\bsrc="([^"]+)"/.exec(devLogoTag)?.[1];
+    assert.equal(devSrc, "/src/limen-logo.svg");
+    const devLogo = await fetch(`http://127.0.0.1:${devPort}${devSrc}`);
+    assert.equal(devLogo.status, 200);
+    assert.match(devLogo.headers.get("content-type") ?? "", /image\/svg\+xml/);
+    assert.equal(await devLogo.text(), expectedLogo);
+
+    await build({ ...config, build: { outDir, emptyOutDir: true } });
+    previewServer = await preview({
+      ...config,
+      build: { outDir },
+      preview: { port: await freePort(), strictPort: true },
+    });
+    const previewPort = (previewServer.httpServer.address() as AddressInfo)
+      .port;
+    const builtPage = await fetch(`http://127.0.0.1:${previewPort}/`);
+    assert.equal(builtPage.status, 200);
+    const builtHtml = await builtPage.text();
+    const builtLogoTag =
+      /<img\b[^>]*\balt="limen"[^>]*>/.exec(builtHtml)?.[0] ?? "";
+    const builtSrc = /\bsrc="([^"]+)"/.exec(builtLogoTag)?.[1];
+    assert.match(builtSrc ?? "", /^\/assets\/limen-logo-[^"]+\.svg$/);
+    const builtLogo = await fetch(`http://127.0.0.1:${previewPort}${builtSrc}`);
+    assert.equal(builtLogo.status, 200);
+    assert.match(
+      builtLogo.headers.get("content-type") ?? "",
+      /image\/svg\+xml/,
+    );
+    assert.equal(await builtLogo.text(), expectedLogo);
+  } finally {
+    await dev.close();
     if (previewServer !== null)
       await new Promise<void>((resolve) =>
         previewServer!.httpServer.close(() => resolve()),

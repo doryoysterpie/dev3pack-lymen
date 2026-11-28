@@ -1,7 +1,7 @@
 // Vite config for the station display (E-03). The dev and preview servers forward /api to the
 // limen API at STATION_API_URL, or http://127.0.0.1:8787. What they serve (src/dev-server.test.ts):
-// - dev: in apps/station, index.html, the .ts and .css files under src, and Vite's dependency
-//   cache; any other file there gets 403 (onlySourceFiles);
+// - dev: in apps/station, index.html, the .ts, .css and .svg files under src, and Vite's
+//   dependency cache; any other file there gets 403 (onlySourceFiles);
 // - preview: / and the files Vite's manifest names (manifestFiles);
 // - both: 403 by name, outside /api, for keys, keypair files, databases, .env files and the
 //   node_modules/@limen links (refuseSecretPaths), and no CORS header;
@@ -89,8 +89,8 @@ function refuseSecretPaths(): Plugin {
 
 /**
  * In the station folder, the dev server answers for the page's source files alone: index.html,
- * .ts and .css files under src, and Vite's dependency cache. A request that names any other file
- * there, by its path or by /@fs/, gets 403. Vite's own paths (/@vite/, /@id/) pass through.
+ * .ts, .css and .svg files under src, and Vite's dependency cache. A request that names any other
+ * file there, by its path or by /@fs/, gets 403. Vite's own paths (/@vite/, /@id/) pass through.
  */
 function onlySourceFiles(
   req: IncomingMessage,
@@ -118,7 +118,7 @@ function onlySourceFiles(
     !inStation ||
     rel === "" ||
     rel === "index.html" ||
-    /^src\/.+\.(ts|css)$/.test(rel) ||
+    /^src\/.+\.(ts|css|svg)$/.test(rel) ||
     /^node_modules\/\.vite\/deps\/[^/]+\.js$/.test(rel)
   )
     return next();
