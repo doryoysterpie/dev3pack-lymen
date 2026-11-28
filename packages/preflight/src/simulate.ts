@@ -1,12 +1,15 @@
 // Balance changes from a simulation (E-09). Pure module. The amounts, the
 // wallet's SOL and each token account's balance, before and after, come from
 // the simulation's own run (its pre and post balances), so they cannot hold a
-// transaction that landed between a read and the simulation. The rest, the
-// wallet's owner and data length and each token account's delegate,
-// allowance, owner and close authority, compares account state read before
-// the simulation with the state the simulation reports after it; the
-// pre-flight uses that only when a second read, after the simulation, agrees
-// with the first (unchangedBetween).
+// transaction that landed between a read and the simulation. The one
+// exception is a transaction with no token program among its accounts: it
+// cannot change a token account's amount, and the run lists no token
+// balances, so the amount before and after is the one read before
+// (balanceChanges). The rest, the wallet's owner and data length and each
+// token account's delegate, allowance, owner and close authority, compares
+// account state read before the simulation with the state the simulation
+// reports after it; the pre-flight uses that only when a second read, after
+// the simulation, agrees with the first (unchangedBetween).
 
 import type { Account } from "./accounts.ts";
 import { TOKEN_2022_PROGRAM, TOKEN_PROGRAM } from "./programs.ts";
@@ -175,6 +178,17 @@ export function balanceChanges(
     }
     return index;
   };
+  // The simulation lists token balances only when a token program is among
+  // the transaction's accounts (anza-xyz/agave a64fa73,
+  // svm/src/transaction_balances.rs:83 and :96). Without one, no instruction
+  // can reach a token program (program-runtime/src/invoke_context.rs:463 to
+  // 470), and only a token account's owner program can change its data
+  // (transaction-context/src/instruction_accounts.rs:345 to 352), so its
+  // amount is the one read before the run, unchanged. An address behind a
+  // lookup table limen could not read may be a token program.
+  const holdsTokenProgram = balances.keys.some(
+    (key) => key === null || isTokenProgram(key),
+  );
   const changes: BalanceChange[] = [];
   addresses.forEach((address, i) => {
     const pre = before[i] ?? null;
@@ -210,24 +224,30 @@ export function balanceChanges(
         ? parseTokenAccount(post.data)
         : null;
     const index = indexOf(address);
-    const preBalance = balances.preToken.find(
-      (balance) => balance.accountIndex === index,
-    );
-    if (preBalance === undefined || preBalance.owner !== user) {
-      throw new Error(
-        "the simulation's token balances do not match the accounts read",
+    let amountBefore = was.amount;
+    let amountAfter = was.amount;
+    if (holdsTokenProgram) {
+      const preBalance = balances.preToken.find(
+        (balance) => balance.accountIndex === index,
       );
+      if (preBalance === undefined || preBalance.owner !== user) {
+        throw new Error(
+          "the simulation's token balances do not match the accounts read",
+        );
+      }
+      const postBalance = balances.postToken.find(
+        (balance) => balance.accountIndex === index,
+      );
+      amountBefore = preBalance.amount;
+      // A closed account has no balance after.
+      amountAfter = postBalance?.amount ?? "0";
     }
-    const postBalance = balances.postToken.find(
-      (balance) => balance.accountIndex === index,
-    );
     const change: BalanceChange = {
       kind: "token",
       account: address,
       mint: was.mint,
-      before: preBalance.amount,
-      // A closed account has no balance after.
-      after: postBalance?.amount ?? "0",
+      before: amountBefore,
+      after: amountAfter,
       delegateBefore: was.delegate,
       delegateAfter: now?.delegate ?? null,
       delegatedAmountBefore: was.delegatedAmount,
