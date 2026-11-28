@@ -1008,6 +1008,22 @@ test("the README lists the check-in's checks in the order the code runs them", (
   );
 });
 
+test("the root README's design rationale 1 says what a check-in shows, in E-15's words at 1ff31de", () => {
+  // Copied byte for byte from E-15's commit 1ff31de, so the two branches agree.
+  const owed =
+    "1. Issuance binds to a fresh station QR: a pass is minted only for a wallet that presents a QR the API signed for a station within the last 60 seconds, a short-lived signed nonce on the station screen, not a shareable link (E-05). It shows the wallet held that QR, not that the person stood there (limit 4 above).";
+  const readme = readFileSync(
+    new URL("../../../README.md", import.meta.url),
+    "utf8",
+  );
+  const section = readme.slice(readme.indexOf("## Design rationale"));
+  assert.equal(
+    section.split("\n").find((line) => line.startsWith("1. ")),
+    owed,
+  );
+  assert.doesNotMatch(readme, /binds to presence/i);
+});
+
 test("a malformed request is refused by field", async () => {
   const { deps, alice } = setup();
   const good = request(alice, "LMN-0001");
