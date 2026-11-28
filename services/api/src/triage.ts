@@ -117,7 +117,10 @@ export function dedupHash(key: CaseKey): string {
 
 /** The D-05 inputs for one case. */
 export interface ThresholdInputs {
-  /** A re-simulation reproduced a stored summary in this case, and that summary shows a drain pattern. */
+  /**
+   * A re-simulation reproduced the decoded instructions of a stored summary in this case, and the
+   * server's drain pattern on that run is true (owner ruling 7a).
+   */
   readonly drainPattern: boolean;
   /** Distinct device hashes among the case's sightings. */
   readonly independentDevices: number;
