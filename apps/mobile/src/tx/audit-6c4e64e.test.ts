@@ -391,3 +391,25 @@ describe("the audit of 6c4e64e, Major 2: the card shows no address from a lookup
     );
   });
 });
+
+describe("the audit of 1856942", () => {
+  it("bug 2: priority-fee row shows an explicit compute-unit limit even with trailing data", async () => {
+    const limit = web3.ComputeBudgetProgram.setComputeUnitLimit({
+      units: 200_000,
+    });
+    const limitWithTrailing = new web3.TransactionInstruction({
+      programId: limit.programId,
+      keys: limit.keys,
+      data: Buffer.concat([limit.data, Buffer.from([0xff])]),
+    });
+    const price = web3.ComputeBudgetProgram.setComputeUnitPrice({
+      microLamports: 50_000,
+    });
+    const card = await cardFor(offline, tx(limitWithTrailing, price));
+    assert.equal(card.title, "Solana Pay transaction request");
+    assert.equal(
+      rowValue(card, "Pays a priority fee"),
+      "Asks your wallet to pay a priority fee of 0.00001 SOL: 50000 micro-lamports per compute unit for 200000 units.",
+    );
+  });
+});

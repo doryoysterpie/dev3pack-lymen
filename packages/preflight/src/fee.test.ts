@@ -152,4 +152,59 @@ describe("m6: the summary shows the priority fee the wallet pays", () => {
       ["sol-out"],
     );
   });
+
+  it("audit of 1856942, bug 2: reads compute-budget prefixes with trailing data as agave does", () => {
+    const withTrailing = (
+      instruction: web3.TransactionInstruction,
+      extra: number[],
+    ) =>
+      new web3.TransactionInstruction({
+        programId: instruction.programId,
+        keys: instruction.keys,
+        data: Buffer.concat([instruction.data, Buffer.from(extra)]),
+      });
+    const got = summary([
+      withTrailing(budget.setComputeUnitLimit({ units: 200_000 }), [0xff]),
+      budget.setComputeUnitPrice({ microLamports: 50_000 }),
+      transfer,
+    ]);
+    assert.deepEqual(got.undecoded, []);
+    assert.deepEqual(got.effects[0], {
+      kind: "priority-fee",
+      instruction: 1,
+      microLamportsPerUnit: "50000",
+      unitLimit: 200_000,
+      lamports: "10000",
+    });
+
+    const priceTrailing = summary([
+      withTrailing(
+        budget.setComputeUnitPrice({ microLamports: 50_000 }),
+        [1, 2],
+      ),
+      transfer,
+    ]);
+    assert.deepEqual(priceTrailing.undecoded, []);
+    assert.deepEqual(priceTrailing.effects[0], {
+      kind: "priority-fee",
+      instruction: 0,
+      microLamportsPerUnit: "50000",
+      unitLimit: null,
+      lamports: "70000",
+    });
+
+    // Duplicate limit where one carries trailing data gives no fee, matching
+    // agave's DuplicateInstruction refusal.
+    const dup = summary([
+      budget.setComputeUnitLimit({ units: 200_000 }),
+      withTrailing(budget.setComputeUnitLimit({ units: 300_000 }), [0x01]),
+      budget.setComputeUnitPrice({ microLamports: 50_000 }),
+      transfer,
+    ]);
+    assert.deepEqual(dup.undecoded, []);
+    assert.deepEqual(
+      dup.effects.map((effect) => effect.kind),
+      ["sol-out"],
+    );
+  });
 });

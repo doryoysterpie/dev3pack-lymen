@@ -21,7 +21,12 @@
 // 34509e4; anza-xyz/agave a64fa73 for the System program and the fee payer.
 
 import type { Account } from "./accounts.ts";
-import type { Decoded, TokenProgram } from "./decode.ts";
+import {
+  parseComputeBudgetData,
+  type ComputeBudgetData,
+  type Decoded,
+  type TokenProgram,
+} from "./decode.ts";
 import { findProgramAddress } from "./pda.ts";
 import {
   ASSOCIATED_TOKEN_PROGRAM,
@@ -307,53 +312,50 @@ export function mayChangeWallet(decoded: Decoded, user: string): boolean {
   }
 }
 
-// The runtime's compute budget instructions: data length after the tag.
-const COMPUTE_BUDGET_WIDTH: Readonly<Record<number, number>> = {
-  1: 4, // RequestHeapFrame(u32)
-  2: 4, // SetComputeUnitLimit(u32)
-  3: 8, // SetComputeUnitPrice(u64)
-  4: 4, // SetLoadedAccountsDataSizeLimit(u32)
-};
-
 /**
  * The compute budget instructions the runtime refuses from their data
- * alone, by index, read as the runtime reads the message's compute budget
- * instructions before any runs (compute_budget_instruction_details.rs:54 to
- * :98, :101 to :153 and :155 to :186). A refusal fails the whole
- * transaction.
+ * alone, by index, read through decode.ts's parseComputeBudgetData as the
+ * runtime reads the message's compute budget instructions before any runs
+ * (compute_budget_instruction_details.rs:54 to :98, :101 to :153 and :155
+ * to :186). A refusal fails the whole transaction.
  */
 export function computeBudgetRefusals(
   message: ParsedMessage,
 ): Map<number, Refusal> {
   const refusals = new Map<number, Refusal>();
-  const seen = new Set<number>();
+  const seen = new Set<ComputeBudgetData["name"]>();
   message.instructions.forEach((instruction, index) => {
     if (
       message.staticKeys[instruction.programIdIndex] !== COMPUTE_BUDGET_PROGRAM
     ) {
       return;
     }
-    const { data } = instruction;
-    const width = data.length > 0 ? COMPUTE_BUDGET_WIDTH[data[0]] : undefined;
-    if (width === undefined || data.length < 1 + width) {
+    const parsed = parseComputeBudgetData(instruction.data);
+    if (parsed === null) {
       refusals.set(index, "compute-budget-data");
       return;
     }
-    const tag = data[0];
-    if (seen.has(tag)) {
+    if (seen.has(parsed.name)) {
       refusals.set(index, "compute-budget-duplicate");
       return;
     }
-    seen.add(tag);
-    const u32 =
-      (data[1] | (data[2] << 8) | (data[3] << 16) | (data[4] << 24)) >>> 0;
+    seen.add(parsed.name);
     if (
-      tag === 1 &&
-      !(u32 >= 32 * 1024 && u32 <= 256 * 1024 && u32 % 1024 === 0)
+      parsed.name === "RequestHeapFrame" &&
+      !(
+        parsed.value >= 32 * 1024 &&
+        parsed.value <= 256 * 1024 &&
+        parsed.value % 1024 === 0
+      )
     ) {
       refusals.set(index, "heap-frame-size");
     }
-    if (tag === 4 && u32 === 0) refusals.set(index, "data-size-limit-zero");
+    if (
+      parsed.name === "SetLoadedAccountsDataSizeLimit" &&
+      parsed.value === 0
+    ) {
+      refusals.set(index, "data-size-limit-zero");
+    }
   });
   return refusals;
 }

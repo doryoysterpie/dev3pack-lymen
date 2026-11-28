@@ -9,15 +9,20 @@
 // - Associated Token Account: solana-program/associated-token-account 34509e4,
 //   program/src/processor.rs (empty data is Create).
 // - Compute Budget: anza-xyz/solana-sdk 7b382f6,
-//   compute-budget-interface/src/lib.rs (borsh: a u8 tag, then the value).
+//   compute-budget-interface/src/lib.rs (borsh: a u8 tag, then the value),
+//   read as anza-xyz/agave a64fa73 reads it
+//   (compute-budget-instruction/src/compute_budget_instruction_details.rs:160
+//   to :186: try_from_slice_unchecked ignores trailing bytes after a valid
+//   prefix).
 //
-// The decoder is stricter than the programs: for each instruction it decodes,
-// data of any length other than the exact one is "unexpected-data", never
-// decoded. The base token instructions it only names (TOKEN_NAMED) carry no
-// field the summary reads, and are named only at their exact data length and
-// with at least their accounts, like the rest. Anything it cannot decode
-// comes back as "undecoded" with a reason, so the card can say so instead of
-// guessing.
+// The decoder is stricter than the other programs: except for Compute Budget
+// (which shares one decoder with effect.ts's runtime refusal checks so the
+// priority fee and refusal checks agree with agave), data of any length
+// other than the exact one is "unexpected-data", never decoded. The base
+// token instructions it only names (TOKEN_NAMED) carry no field the summary
+// reads, and are named only at their exact data length and with at least
+// their accounts, like the rest. Anything it cannot decode comes back as
+// "undecoded" with a reason, so the card can say so instead of guessing.
 
 import type { Account } from "./accounts.ts";
 import * as programs from "./programs.ts";
@@ -527,23 +532,60 @@ function decodeAssociatedToken(
   };
 }
 
-const COMPUTE_BUDGET: Readonly<Record<number, readonly [string, number]>> = {
-  1: ["RequestHeapFrame", 4],
-  2: ["SetComputeUnitLimit", 4],
-  3: ["SetComputeUnitPrice", 8],
-  4: ["SetLoadedAccountsDataSizeLimit", 4],
-};
+export type ComputeBudgetData =
+  | { readonly name: "RequestHeapFrame"; readonly value: number }
+  | { readonly name: "SetComputeUnitLimit"; readonly value: number }
+  | { readonly name: "SetComputeUnitPrice"; readonly value: string }
+  | { readonly name: "SetLoadedAccountsDataSizeLimit"; readonly value: number };
+
+/**
+ * Decodes a Compute Budget instruction prefix as agave's
+ * try_from_slice_unchecked does (anza-xyz/agave a64fa73,
+ * compute-budget-instruction/src/compute_budget_instruction_details.rs:160
+ * to :186): tags 1 to 4 with their u32 or u64 value, ignoring trailing
+ * bytes. Used by both decodeInstruction and effect.ts's
+ * computeBudgetRefusals so the priority fee and refusal checks agree.
+ */
+export function parseComputeBudgetData(
+  data: Uint8Array,
+): ComputeBudgetData | null {
+  if (data.length === 0) return null;
+  switch (data[0]) {
+    case 1:
+      return data.length < 5
+        ? null
+        : { name: "RequestHeapFrame", value: u32(data, 1) };
+    case 2:
+      return data.length < 5
+        ? null
+        : { name: "SetComputeUnitLimit", value: u32(data, 1) };
+    case 3:
+      return data.length < 9
+        ? null
+        : { name: "SetComputeUnitPrice", value: u64(data, 1) };
+    case 4:
+      return data.length < 5
+        ? null
+        : { name: "SetLoadedAccountsDataSizeLimit", value: u32(data, 1) };
+    default:
+      return null;
+  }
+}
 
 function decodeComputeBudget(data: Uint8Array): Decoded {
   const id = programs.COMPUTE_BUDGET_PROGRAM;
-  const entry = data.length > 0 ? COMPUTE_BUDGET[data[0]] : undefined;
-  if (entry === undefined) return undecoded(id, "instruction-not-decoded");
-  const [name, width] = entry;
-  if (data.length !== 1 + width) return undecoded(id, "unexpected-data");
+  const parsed = parseComputeBudgetData(data);
+  if (parsed === null) {
+    const knownTag = data.length > 0 && data[0] >= 1 && data[0] <= 4;
+    return undecoded(
+      id,
+      knownTag ? "unexpected-data" : "instruction-not-decoded",
+    );
+  }
   return {
     kind: "compute-budget",
-    name,
-    value: width === 8 ? u64(data, 1) : String(u32(data, 1)),
+    name: parsed.name,
+    value: String(parsed.value),
   };
 }
 
