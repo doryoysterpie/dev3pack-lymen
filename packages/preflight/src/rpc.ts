@@ -157,7 +157,13 @@ export function readAnswer(answer: unknown): FetchResponse {
   }
   return {
     ok: ok === true,
-    status: typeof status === "number" ? status : 0,
+    status:
+      typeof status === "number" &&
+      Number.isInteger(status) &&
+      status >= 100 &&
+      status <= 599
+        ? status
+        : 0,
     url: typeof url === "string" ? url : "",
     text,
   };
@@ -211,14 +217,33 @@ async function call(
       : new RpcError("http", `${method}: the endpoint could not be reached`);
   }
   const answer = readAnswer(received);
-  // Provenance (the owner's ruling 20a): only a 200 answer from the
-  // endpoint itself is evidence. A fetch follows redirects, and its answer's
-  // url is the final one, so an answer from any other address is refused,
-  // as is one marked ok with another status.
-  if (!answer.ok || answer.status !== 200) {
+  // Provenance (the owner's ruling 20a; the audit of ac1ce67, Major 2): only
+  // a 200 answer from the endpoint itself is evidence. A fetch follows
+  // redirects, and its answer's url is the final one, so an answer from
+  // another address is refused, while one with no final URL or HTTP status
+  // says limen could not confirm or tell.
+  if (answer.status === 0) {
+    throw new RpcError(
+      "http",
+      `${method}: the answer gave no HTTP status, so limen could not tell whether it succeeded`,
+    );
+  }
+  if (answer.status !== 200) {
     throw new RpcError("http", `${method}: HTTP ${answer.status}`);
   }
-  if (answer.url === "" || asFetched(answer.url) !== asFetched(endpoint.url)) {
+  if (!answer.ok) {
+    throw new RpcError(
+      "http",
+      `${method}: the answer was not marked ok, so limen could not tell whether it succeeded`,
+    );
+  }
+  if (answer.url === "") {
+    throw new RpcError(
+      "http",
+      `${method}: the answer gave no final URL, so limen could not confirm where the answer came from`,
+    );
+  }
+  if (asFetched(answer.url) !== asFetched(endpoint.url)) {
     throw new RpcError(
       "http",
       `${method}: the answer came from another address`,
@@ -245,9 +270,16 @@ async function call(
     throw new RpcError("shape", `${method}: not a JSON-RPC 2.0 answer`);
   }
   // An answer to another request is not evidence for this one. The id is
-  // compared as written, since JSON.parse rounds 1.0000000000000001 to 1.
+  // compared as written, since JSON.parse rounds 1.0000000000000001 to 1; an
+  // absent or non-numeric id says limen could not tell which request it is for.
   const answered = body.get("id");
-  if (!(answered instanceof JsonNumber) || answered.text !== String(id)) {
+  if (!(answered instanceof JsonNumber)) {
+    throw new RpcError(
+      "shape",
+      `${method}: the answer gave no request id limen can read, so limen could not tell which request it is for`,
+    );
+  }
+  if (answered.text !== String(id)) {
     throw new RpcError("shape", `${method}: the answer is for another request`);
   }
   const error = body.get("error");
@@ -630,6 +662,7 @@ function checkedEndpoint(endpoint: unknown): Required<RpcEndpoint> {
   const { url, fetch, timeoutMs } = endpoint as Record<string, unknown>;
   if (
     typeof url !== "string" ||
+    url.length === 0 ||
     typeof fetch !== "function" ||
     (timeoutMs !== undefined &&
       (typeof timeoutMs !== "number" || !(timeoutMs > 0)))

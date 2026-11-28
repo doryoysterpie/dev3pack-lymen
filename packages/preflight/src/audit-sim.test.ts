@@ -992,7 +992,6 @@ describe("ruling 20a, item 4: every answer comes from the endpoint, with status 
       "https://elsewhere.example/",
       "https://rpc.example/other",
       "https://rpc.example/?key=1",
-      "",
     ]) {
       assert.deepEqual(
         await run(answered("https://rpc.example/", () => ({ url: other }))),
@@ -1003,6 +1002,58 @@ describe("ruling 20a, item 4: every answer comes from the endpoint, with status 
         },
       );
     }
+  });
+
+  it("says limen could not confirm where the answer came from when the answer gives no final URL, or no HTTP status", async () => {
+    for (const change of [
+      () => ({ url: "" }),
+      () => ({ url: undefined as unknown as string }),
+    ]) {
+      assert.deepEqual(await run(answered("https://rpc.example/", change)), {
+        status: "not-run",
+        reason:
+          "limen could not confirm devnet: getGenesisHash: the answer gave no final URL, so limen could not confirm where the answer came from",
+      });
+    }
+    const base = recordedEndpoint({
+      accounts: { [USER]: system(10_000_000_000) as never },
+      simulation: { err: null, accounts: {} },
+    });
+    const simWithoutUrl: RpcEndpoint = {
+      url: "https://rpc.example/",
+      fetch: async (url, init) => ({
+        ...(await base.fetch(url, init)),
+        url: init.body.includes("simulateTransaction") ? "" : url,
+      }),
+    };
+    const reportResult = await preflightTransaction(build([transfer()]), {
+      endpoint: simWithoutUrl,
+      user: USER,
+    });
+    assert.ok(reportResult.summary.kind === "ready");
+    assert.deepEqual(reportResult.summary.simulation, {
+      status: "not-run",
+      reason:
+        "simulateTransaction: the answer gave no final URL, so limen could not confirm where the answer came from",
+    });
+    for (const status of [0, Number.NaN, undefined as unknown as number]) {
+      assert.deepEqual(
+        await run(answered("https://rpc.example/", () => ({ status }))),
+        {
+          status: "not-run",
+          reason:
+            "limen could not confirm devnet: getGenesisHash: the answer gave no HTTP status, so limen could not tell whether it succeeded",
+        },
+      );
+    }
+    const emptyEndpoint = await run({
+      url: "",
+      fetch: async (url, init) => base.fetch(url, init),
+    });
+    assert.deepEqual(emptyEndpoint, {
+      status: "not-run",
+      reason: "not an RPC endpoint",
+    });
   });
 
   it("reads an answer from the endpoint, an empty path written as /", async () => {

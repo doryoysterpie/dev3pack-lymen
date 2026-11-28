@@ -58,6 +58,20 @@ describe("the audit of 21e1f9f, item 6: the JSON-RPC envelope", () => {
     );
   });
 
+  it("says limen could not tell which request the answer is for when id is absent or not a number", async () => {
+    for (const envelope of [
+      () => `{"jsonrpc":"2.0","result":${HASH}}`,
+      () => `{"jsonrpc":"2.0","id":null,"result":${HASH}}`,
+      () => `{"jsonrpc":"2.0","id":"","result":${HASH}}`,
+      (id: number) => `{"jsonrpc":"2.0","id":"${id}","result":${HASH}}`,
+    ]) {
+      assert.equal(
+        await reasonFor(envelope),
+        "limen could not confirm devnet: getGenesisHash: the answer gave no request id limen can read, so limen could not tell which request it is for",
+      );
+    }
+  });
+
   it("requires jsonrpc 2.0", async () => {
     for (const version of ['"1.0"', "2", "null"]) {
       assert.equal(

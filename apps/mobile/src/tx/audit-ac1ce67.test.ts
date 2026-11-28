@@ -227,3 +227,48 @@ describe("the audit of ac1ce67, Major 1: an unresolved delegate or close destina
     }
   });
 });
+
+describe("the audit of ac1ce67, Major 2: an RPC answer with no final URL on the card", () => {
+  it("says limen could not confirm where the answer came from, never that it came from another address", async () => {
+    const base = cleanWithTable();
+    const noGenesisUrl: RpcEndpoint = {
+      url: "https://rpc.example/",
+      fetch: async (url, init) => ({
+        ...(await base.fetch(url, init)),
+        url: "",
+      }),
+    };
+    const genesisCard = transactionCardText(
+      LINK,
+      null,
+      await preflight(noGenesisUrl, loadedV0.transaction, USER),
+    );
+    const genesisSim = genesisCard.rows.find(
+      (row) => row.label === "Simulation",
+    );
+    assert.deepEqual(genesisSim, {
+      label: "Simulation",
+      value:
+        "Not used: limen could not confirm devnet: getGenesisHash: the answer gave no final URL, so limen could not confirm where the answer came from. The decoded instructions above still apply.",
+    });
+
+    const noSimUrl: RpcEndpoint = {
+      url: "https://rpc.example/",
+      fetch: async (url, init) => ({
+        ...(await base.fetch(url, init)),
+        url: init.body.includes("simulateTransaction") ? "" : url,
+      }),
+    };
+    const simCard = transactionCardText(
+      LINK,
+      null,
+      await preflight(noSimUrl, loadedV0.transaction, USER),
+    );
+    const simRow = simCard.rows.find((row) => row.label === "Simulation");
+    assert.deepEqual(simRow, {
+      label: "Simulation",
+      value:
+        "Not used: simulateTransaction: the answer gave no final URL, so limen could not confirm where the answer came from. The decoded instructions above still apply.",
+    });
+  });
+});

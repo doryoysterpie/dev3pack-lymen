@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import type { Fetch } from "@limen/preflight";
 
-import { requestTransaction, RequestError } from "./request.ts";
+import { requestTransaction, RequestError, stoppedReason } from "./request.ts";
 
 const LINK = "https://pay.example/solana-pay?order=7";
 const ACCOUNT = "3vMQ3uubVTa1BQf9cQE5FETCDhSP5ZbLjfv87zvvMe7p";
@@ -119,5 +119,33 @@ describe("re-audit 2, item 7: a redirected request is refused", () => {
       50,
     );
     assert.deepEqual(answer, { transaction: "AQ==", message: null });
+  });
+
+  it("swept: says limen could not tell when HTTP status, link or stop reason is absent", async () => {
+    assert.equal(
+      await reasonOf(
+        async (url) =>
+          ({
+            ok: false,
+            url,
+            text: "{}",
+          }) as never,
+      ),
+      "http: the answer gave no HTTP status, so limen could not tell whether the request succeeded",
+    );
+    await assert.rejects(
+      requestTransaction(from("https://pay.example/"), "", ACCOUNT, 50),
+      {
+        reason: "http",
+        message:
+          "limen was given no request link, so limen could not tell where to ask",
+      },
+    );
+    for (const blank of [new Error(""), "", null, undefined, {}]) {
+      assert.equal(
+        stoppedReason(blank),
+        "limen could not tell why the request stopped",
+      );
+    }
   });
 });

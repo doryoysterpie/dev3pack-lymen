@@ -402,6 +402,8 @@ describe("ruling 20a, item 6: the run's keys are the message's", () => {
   };
   const LOADED =
     "the simulation's loaded addresses do not match the lookup tables read";
+  const NO_LOADED =
+    "the simulation gave no loaded addresses, so limen could not tell which addresses it loaded";
   const notUsed = async (
     endpoint: RpcEndpoint,
     transaction: string,
@@ -440,12 +442,16 @@ describe("ruling 20a, item 6: the run's keys are the message's", () => {
           readonly: [],
         };
       },
-      (value: Record<string, unknown>) => {
-        delete value.loadedAddresses;
-      },
     ]) {
       await notUsed(changed(change), drainerV0.transaction, LOADED);
     }
+    await notUsed(
+      changed((value) => {
+        delete value.loadedAddresses;
+      }),
+      drainerV0.transaction,
+      NO_LOADED,
+    );
   });
 
   it("the audit of 21e1f9f, item 4: a disputed table feeds neither the decode nor the bundle", async () => {
@@ -549,7 +555,7 @@ describe("ruling 20a, item 6: the run's keys are the message's", () => {
         value.loadedAddresses = null;
       }),
       drainer.transaction,
-      LOADED,
+      NO_LOADED,
     );
   });
 

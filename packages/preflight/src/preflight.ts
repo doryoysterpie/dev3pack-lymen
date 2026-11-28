@@ -208,7 +208,10 @@ function lookupProblem(
  */
 function errorText(error: unknown): string {
   try {
-    return String(error instanceof Error ? error.message : error);
+    const text = String(error instanceof Error ? error.message : error);
+    return text.length > 0
+      ? text
+      : "the RPC failed with an error limen could not tell";
   } catch {
     return "the RPC failed with an error limen cannot read";
   }
@@ -354,8 +357,12 @@ export async function preflight(
       const loaded = accounts.filter((account) => account.lookup !== null);
       const same = (a: readonly (string | null)[], b: readonly string[]) =>
         a.length === b.length && a.every((address, i) => address === b[i]);
+      if (result.loadedAddresses === null) {
+        throw new Error(
+          "the simulation gave no loaded addresses, so limen could not tell which addresses it loaded",
+        );
+      }
       if (
-        result.loadedAddresses === null ||
         !same(
           loaded.filter((a) => a.writable).map((a) => a.address),
           result.loadedAddresses.writable,

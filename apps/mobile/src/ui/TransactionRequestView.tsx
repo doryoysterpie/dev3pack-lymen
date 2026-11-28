@@ -19,7 +19,7 @@ import {
 import { SOLANA_RPC_URL } from "../config.ts";
 import type { CardText } from "../pay/card-text.ts";
 import { linkHost, transactionCardText } from "../tx/card-text.ts";
-import { requestTransaction } from "../tx/request.ts";
+import { requestTransaction, stoppedReason } from "../tx/request.ts";
 import {
   connectWallet,
   signAndSend,
@@ -51,9 +51,6 @@ const appFetch: Fetch = async (url, init) => {
   };
 };
 const endpoint: RpcEndpoint = { url: SOLANA_RPC_URL, fetch: appFetch };
-
-const reason = (error: unknown) =>
-  error instanceof Error ? error.message : String(error);
 
 /**
  * The Solana Pay transaction request flow. The sign button exists only on the
@@ -90,7 +87,7 @@ export function TransactionRequestView({
       setShownFor(null);
       setStep({ kind: "card", session, result, message: response.message });
     } catch (error) {
-      setStep({ kind: "error", message: reason(error) });
+      setStep({ kind: "error", message: stoppedReason(error) });
     }
   };
 
@@ -102,7 +99,7 @@ export function TransactionRequestView({
       const signature = await signAndSend(session, forSigning(result, hash));
       setStep({ kind: "sent", signature });
     } catch (error) {
-      setStep({ kind: "error", message: reason(error) });
+      setStep({ kind: "error", message: stoppedReason(error) });
     }
   };
 

@@ -51,20 +51,35 @@ export async function requestTransaction(
   account: string,
   timeoutMs: number = RPC_TIMEOUT_MS,
 ): Promise<TransactionResponse> {
-  const late = () =>
-    new RequestError(
-      "timeout",
-      `the link did not answer within ${timeoutMs / 1000} seconds`,
+  if (link === "") {
+    throw new RequestError(
+      "http",
+      "limen was given no request link, so limen could not tell where to ask",
     );
-  const sent = fetch(link, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ account }),
-  });
-  const raw = await withTimeout(sent, timeoutMs, late);
+  }
+  const late = new RequestError(
+    "timeout",
+    `the link did not answer within ${timeoutMs / 1000} seconds`,
+  );
+  let raw: unknown;
+  try {
+    raw = await withTimeout(
+      fetch(link, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ account }),
+      }),
+      timeoutMs,
+      () => late,
+    );
+  } catch (error) {
+    throw error === late
+      ? late
+      : new RequestError("http", "the link could not be reached");
+  }
   let response: FetchResponse;
   try {
     response = readAnswer(raw);
@@ -90,8 +105,19 @@ export async function requestTransaction(
       "the request was redirected to another address, so limen will not show what it answered",
     );
   }
+  if (response.status === 0) {
+    throw new RequestError(
+      "http",
+      "the answer gave no HTTP status, so limen could not tell whether the request succeeded",
+    );
+  }
   if (!response.ok) {
-    throw new RequestError("http", `the link answered HTTP ${response.status}`);
+    throw new RequestError(
+      "http",
+      response.status === 200
+        ? "the answer was not marked ok, so limen could not tell whether the request succeeded"
+        : `the link answered HTTP ${response.status}`,
+    );
   }
   // Read by the package's one JSON reader, as every RPC answer is, so an
   // answer that names a member twice holds no transaction limen reads (the
@@ -121,4 +147,24 @@ export async function requestTransaction(
     transaction,
     message: typeof message === "string" && message.length > 0 ? message : null,
   };
+}
+
+/**
+ * The text shown on the Stopped step when a request, wallet or signing step
+ * fails; an absent or empty message yields "limen could not tell".
+ */
+export function stoppedReason(error: unknown): string {
+  try {
+    const text =
+      error instanceof Error
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : "";
+    return text.length > 0
+      ? text
+      : "limen could not tell why the request stopped";
+  } catch {
+    return "limen could not tell why the request stopped";
+  }
 }
