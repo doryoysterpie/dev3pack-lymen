@@ -132,6 +132,15 @@ function isTokenProgram(owner: string): boolean {
   return owner === TOKEN_PROGRAM || owner === TOKEN_2022_PROGRAM;
 }
 
+/**
+ * Whether a token program may be among the message's keys: one is, or a key
+ * sits behind a lookup table limen could not read (no result is used then,
+ * simulate.ts watchProblem, but both checks read the keys the same way).
+ */
+function mayReachTokenProgram(keys: readonly (string | null)[]): boolean {
+  return keys.some((key) => key === null || isTokenProgram(key));
+}
+
 /** Why a run's token balances are not used: they disagree with the read. */
 const READ_STATE =
   "the simulation's token balances do not match the accounts read";
@@ -158,9 +167,7 @@ export function runEvidenceProblem(
   after: readonly (AccountState | null)[],
   balances: SimulatedBalances,
 ): string | null {
-  const holdsTokenProgram = balances.keys.some(
-    (key) => key !== null && isTokenProgram(key),
-  );
+  const holdsTokenProgram = mayReachTokenProgram(balances.keys);
   if (
     !holdsTokenProgram &&
     (balances.preToken.length > 0 || balances.postToken.length > 0)
@@ -282,9 +289,7 @@ export function balanceChanges(
   // (transaction-context/src/instruction_accounts.rs:345 to 352), so the
   // account is as the read found it. An address behind a lookup table limen
   // could not read may be a token program.
-  const holdsTokenProgram = balances.keys.some(
-    (key) => key === null || isTokenProgram(key),
-  );
+  const holdsTokenProgram = mayReachTokenProgram(balances.keys);
   const changes: BalanceChange[] = [];
   addresses.forEach((address, i) => {
     const pre = before[i] ?? null;
@@ -325,10 +330,20 @@ export function balanceChanges(
     const closed =
       post === null || (post.lamports === "0" && post.data.length === 0);
     if (!holdsTokenProgram) {
-      if (!readOwned) return;
-      // Nothing in the transaction can change the account (see above), so a
-      // run that shows it changed is not evidence about this transaction.
-      if (now === null || !sameState(was, now)) throw new Error(OWN_STATE);
+      // Nothing in the transaction can change a token account's data (see
+      // above), so the run must return each watched token account as the
+      // read found it, amount and owner included, whoever owns it; a run
+      // that shows one changed, closed or new is not evidence about this
+      // transaction. Its lamports may change: SOL can be sent to it.
+      if (was === null && now === null) return;
+      if (
+        was === null ||
+        now === null ||
+        !sameState(was, now) ||
+        was.amount !== now.amount
+      ) {
+        throw new Error(OWN_STATE);
+      }
       return;
     }
     const index = indexOf(address);

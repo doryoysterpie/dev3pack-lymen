@@ -1958,6 +1958,82 @@ describe("re-audit 2, item 2: every watched account's run evidence agrees", () =
     [K.userToken2022Account]: tokenOf(0, K.attacker),
   };
 
+  // With no token program among the keys, nothing can change a token
+  // account's data, so the run must return every watched token account as
+  // the read found it, amount and owner included.
+  const solTo = (to: string) =>
+    build([
+      web3.SystemProgram.transfer({
+        fromPubkey: user,
+        toPubkey: key(to),
+        lamports: 9_500_000_000,
+      }),
+    ]);
+  const solToBalances = {
+    preBalances: [10_000_000_000, 2_039_280, 1],
+    postBalances: [500_000_000, 9_502_039_280, 1],
+    preTokenBalances: [],
+    postTokenBalances: [],
+  };
+  const credited = (state: ReturnType<typeof tokenOf>) => ({
+    ...state,
+    lamports: 9_502_039_280,
+  });
+
+  it("with no token program, the wallet's token account keeps its amount", async () =>
+    notUsed(
+      await run(
+        solTo(K.userTokenAccount),
+        {
+          [USER]: system(10_000_000_000),
+          [K.userTokenAccount]: tokenOf(200, USER),
+        },
+        {
+          [USER]: system(500_000_000),
+          [K.userTokenAccount]: credited(tokenOf(150, USER)),
+        },
+        solToBalances,
+      ),
+      TOKENS,
+    ));
+
+  it("with no token program, another owner's token account does not become the wallet's", async () =>
+    notUsed(
+      await run(
+        solTo(K.userToken2022Account),
+        {
+          [USER]: system(10_000_000_000),
+          [K.userToken2022Account]: tokenOf(0, K.attacker),
+        },
+        {
+          [USER]: system(500_000_000),
+          [K.userToken2022Account]: credited(tokenOf(0, USER)),
+        },
+        solToBalances,
+      ),
+      TOKENS,
+    ));
+
+  it("with no token program, SOL sent to a token account is used, with no token change", async () => {
+    const summary = await run(
+      solTo(K.userTokenAccount),
+      {
+        [USER]: system(10_000_000_000),
+        [K.userTokenAccount]: tokenOf(200, USER),
+      },
+      {
+        [USER]: system(500_000_000),
+        [K.userTokenAccount]: credited(tokenOf(200, USER)),
+      },
+      solToBalances,
+    );
+    assert.ok(summary.simulation.status === "ran");
+    assert.deepEqual(
+      summary.simulation.changes.map((change) => change.kind),
+      ["sol"],
+    );
+  });
+
   it("another owner's token account must have a post entry that agrees", async () =>
     notUsed(
       await run(
