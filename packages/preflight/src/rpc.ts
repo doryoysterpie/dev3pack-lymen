@@ -187,6 +187,19 @@ export async function assertDevnet(rpc: Rpc): Promise<void> {
 const U64_MAX = BigInt("18446744073709551615");
 
 /**
+ * Whether a value is a lamport or token amount as the Rpc interface carries
+ * it: a whole number from 0 to the largest u64, as a decimal string with no
+ * sign, point, exponent or leading zero.
+ */
+export function isAmount(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^(0|[1-9][0-9]*)$/.test(value) &&
+    BigInt(value) <= U64_MAX
+  );
+}
+
+/**
  * A lamport or token amount: a whole number from 0 to the largest u64, as a
  * JSON number no larger than 2^53 (past it, precision is already lost) or as
  * a decimal string. Anything else is refused.
@@ -195,13 +208,7 @@ function amountOf(value: unknown, what: string): string {
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
     return String(value);
   }
-  if (
-    typeof value === "string" &&
-    /^(0|[1-9][0-9]*)$/.test(value) &&
-    BigInt(value) <= U64_MAX
-  ) {
-    return value;
-  }
+  if (isAmount(value)) return value;
   throw new RpcError("shape", `${what}: not a whole amount`);
 }
 
