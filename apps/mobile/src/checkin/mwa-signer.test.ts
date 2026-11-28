@@ -1,0 +1,287 @@
+// The MWA signer, driven by a fake wallet that signs as the MWA fake wallet does: the signed
+// message is the message followed by the 64-byte signature. connect and sign each run in their own
+// session, as the app shows the message between them.
+import assert from "node:assert/strict";
+import { generateKeyPairSync, sign } from "node:crypto";
+import { test } from "node:test";
+
+import { ed25519Verify } from "./ed25519.ts";
+import {
+  mwaSigner,
+  signatureFromSignedPayload,
+  type MwaWallet,
+  type Transact,
+} from "./mwa-signer.ts";
+import { encodeBase58 } from "./wallet-address.ts";
+
+function fakeWallet(
+  opts: {
+    tamper?: "signature" | "message";
+    accounts?: number;
+    base58?: boolean;
+    /** The account the wallet authorizes when asked again with its token: by default, the same. */
+    laterAccount?: "same" | "none" | "other";
+    /** An answer not in the owed form. */
+    shape?: "no-token" | "accounts-not-a-list" | "two-signed" | "none-signed";
+  } = {},
+) {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const key = Buffer.from(
+    publicKey.export({ format: "jwk" }).x ?? "",
+    "base64url",
+  );
+  const calls: { method: string; params: unknown }[] = [];
+  let sessions = 0;
+  const address = opts.base58 ? encodeBase58(key) : key.toString("base64");
+  const other = Buffer.alloc(32, 9).toString("base64");
+  const wallet: MwaWallet = {
+    async authorize(params) {
+      calls.push({ method: "authorize", params });
+      if (params.auth_token !== undefined && params.auth_token !== "token-1")
+        throw new Error("unknown auth token");
+      const later = params.auth_token !== undefined;
+      const which = later ? (opts.laterAccount ?? "same") : "same";
+      const count = which === "none" ? 0 : (opts.accounts ?? 1);
+      const accounts = Array.from({ length: count }, () => ({
+        address: which === "other" ? other : address,
+      }));
+      if (opts.shape === "no-token")
+        return { accounts } as unknown as Awaited<
+          ReturnType<MwaWallet["authorize"]>
+        >;
+      if (opts.shape === "accounts-not-a-list")
+        return {
+          accounts: address,
+          auth_token: "token-1",
+        } as unknown as Awaited<ReturnType<MwaWallet["authorize"]>>;
+      return { accounts, auth_token: "token-1" };
+    },
+    async signMessages(params) {
+      calls.push({ method: "signMessages", params });
+      // MWA declares each address base64 (Base64EncodedAddress, in the protocol's lib/types).
+      if (params.addresses.some((a) => a !== key.toString("base64")))
+        throw new Error("an address that is not the key in base64");
+      const message = Buffer.from(params.payloads[0] ?? "", "base64");
+      let signature = sign(null, message, privateKey);
+      if (opts.tamper === "signature")
+        signature = Buffer.from(signature.map((b, i) => (i === 0 ? b ^ 1 : b)));
+      const body =
+        opts.tamper === "message"
+          ? Buffer.concat([message, Buffer.from("x")]).subarray(1)
+          : message;
+      const one = Buffer.concat([body, signature]).toString("base64");
+      if (opts.shape === "two-signed") return { signed_payloads: [one, one] };
+      if (opts.shape === "none-signed") return { signed_payloads: [] };
+      return { signed_payloads: [one] };
+    },
+  };
+  const transact: Transact = (callback) => {
+    sessions += 1;
+    return callback(wallet);
+  };
+  return { key, address, calls, transact, sessions: () => sessions };
+}
+
+const MESSAGE = new Uint8Array(
+  Buffer.from("limen check-in v2\nstation: st-front", "ascii"),
+);
+
+const signerFor = (w: ReturnType<typeof fakeWallet>) =>
+  mwaSigner(w.transact, {
+    appName: "limen",
+    chain: "solana:devnet",
+    verify: ed25519Verify,
+  });
+
+test("connect authorizes on devnet in one session and signs nothing", async () => {
+  const w = fakeWallet();
+  const account = await signerFor(w).connect();
+  assert.deepEqual(account, {
+    wallet: encodeBase58(w.key),
+    key: new Uint8Array(w.key),
+    address: w.key.toString("base64"),
+    authToken: "token-1",
+  });
+  assert.deepEqual(w.calls, [
+    {
+      method: "authorize",
+      params: { identity: { name: "limen" }, chain: "solana:devnet" },
+    },
+  ]);
+  assert.equal(w.sessions(), 1);
+});
+
+test("sign authorizes again with the account's token in a second session and signs exactly the message", async () => {
+  const w = fakeWallet();
+  const signer = signerFor(w);
+  const account = await signer.connect();
+  const signature = await signer.sign(account, MESSAGE);
+  assert.equal(ed25519Verify(w.key, MESSAGE, signature), true);
+  assert.deepEqual(w.calls.slice(1), [
+    {
+      method: "authorize",
+      params: {
+        identity: { name: "limen" },
+        chain: "solana:devnet",
+        auth_token: "token-1",
+      },
+    },
+    {
+      method: "signMessages",
+      params: {
+        addresses: [w.key.toString("base64")],
+        payloads: [Buffer.from(MESSAGE).toString("base64")],
+      },
+    },
+  ]);
+  assert.equal(w.sessions(), 2);
+});
+
+test("a wallet-standard account given in base58 works the same, and is asked to sign by its base64 address", async () => {
+  const w = fakeWallet({ base58: true });
+  const signer = signerFor(w);
+  const account = await signer.connect();
+  assert.equal(account.wallet, encodeBase58(w.key));
+  assert.equal(account.address, w.key.toString("base64"));
+  assert.equal(
+    ed25519Verify(w.key, MESSAGE, await signer.sign(account, MESSAGE)),
+    true,
+  );
+});
+
+test("a bad signature, a changed message, no account, or an account no longer authorized is refused before anything is sent", async () => {
+  for (const [opts, message] of [
+    [
+      { tamper: "signature" },
+      "The wallet's signature does not verify for its own key.",
+    ],
+    [
+      { tamper: "message" },
+      "The wallet's signature does not verify for its own key.",
+    ],
+    [
+      { laterAccount: "none" },
+      "The wallet no longer authorizes the account the message names.",
+    ],
+    [
+      { laterAccount: "other" },
+      "The wallet no longer authorizes the account the message names.",
+    ],
+  ] as const) {
+    const w = fakeWallet(opts);
+    const signer = signerFor(w);
+    const account = await signer.connect();
+    await assert.rejects(signer.sign(account, MESSAGE), { message });
+  }
+  await assert.rejects(signerFor(fakeWallet({ accounts: 0 })).connect(), {
+    message: "The wallet authorized no account.",
+  });
+});
+
+test("an authorization or a signed answer not in the owed form is refused, not read as far as it goes", async () => {
+  for (const shape of ["no-token", "accounts-not-a-list"] as const) {
+    await assert.rejects(signerFor(fakeWallet({ shape })).connect(), {
+      message: "The wallet's authorization is not in the owed form.",
+    });
+  }
+  for (const shape of ["two-signed", "none-signed"] as const) {
+    const w = fakeWallet({ shape });
+    const signer = signerFor(w);
+    const account = await signer.connect();
+    await assert.rejects(signer.sign(account, MESSAGE), {
+      message: "The wallet's signed message is not in the owed form.",
+    });
+  }
+});
+
+test("only a signed message that is exactly the message plus 64 bytes yields a signature", () => {
+  const sig = new Uint8Array(64).fill(7);
+  assert.deepEqual(
+    signatureFromSignedPayload(new Uint8Array([...MESSAGE, ...sig]), MESSAGE),
+    sig,
+  );
+  assert.equal(
+    signatureFromSignedPayload(new Uint8Array([...sig, ...MESSAGE]), MESSAGE),
+    null,
+  );
+  assert.equal(signatureFromSignedPayload(sig, MESSAGE), null);
+});
+
+test("every account address in a wallet authorization answer must decode to a 32-byte key, in connect and in sign", async () => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const key = Buffer.from(
+    publicKey.export({ format: "jwk" }).x ?? "",
+    "base64url",
+  );
+  const validAddress = key.toString("base64");
+  const secondValid = encodeBase58(Buffer.alloc(32, 5));
+
+  const makeSigner = (
+    connectAccounts: { address: string }[],
+    signAccounts: { address: string }[],
+  ) => {
+    let signMessagesCalls = 0;
+    const wallet: MwaWallet = {
+      async authorize(params) {
+        return {
+          accounts:
+            params.auth_token === undefined ? connectAccounts : signAccounts,
+          auth_token: "token-1",
+        };
+      },
+      async signMessages(params) {
+        signMessagesCalls += 1;
+        const msg = Buffer.from(params.payloads[0] ?? "", "base64");
+        const sig = sign(null, msg, privateKey);
+        return {
+          signed_payloads: [Buffer.concat([msg, sig]).toString("base64")],
+        };
+      },
+    };
+    const transact: Transact = (cb) => cb(wallet);
+    return {
+      signer: mwaSigner(transact, {
+        appName: "limen",
+        chain: "solana:devnet",
+        verify: ed25519Verify,
+      }),
+      signMessagesCalls: () => signMessagesCalls,
+    };
+  };
+
+  // A malformed second account is refused in connect even though accounts[0] is valid.
+  await assert.rejects(
+    makeSigner(
+      [{ address: validAddress }, { address: "not-a-key" }],
+      [{ address: validAddress }],
+    ).signer.connect(),
+    { message: "The wallet's account is not a 32-byte key." },
+  );
+
+  // A malformed second account is refused in sign before signMessages is called.
+  const badSign = makeSigner(
+    [{ address: validAddress }],
+    [{ address: validAddress }, { address: "not-a-key" }],
+  );
+  const account = await badSign.signer.connect();
+  await assert.rejects(badSign.signer.sign(account, MESSAGE), {
+    message: "The wallet's account is not a 32-byte key.",
+  });
+  assert.equal(badSign.signMessagesCalls(), 0);
+
+  // Multiple accounts that all decode to 32-byte keys still work.
+  const bothValid = makeSigner(
+    [{ address: validAddress }, { address: secondValid }],
+    [{ address: secondValid }, { address: validAddress }],
+  );
+  const connected = await bothValid.signer.connect();
+  assert.equal(
+    ed25519Verify(
+      key,
+      MESSAGE,
+      await bothValid.signer.sign(connected, MESSAGE),
+    ),
+    true,
+  );
+  assert.equal(bothValid.signMessagesCalls(), 1);
+});

@@ -13,6 +13,11 @@ coverage/
 keys/
 *.keypair.json
 id.json
+# Station display links hold a station's display token (E-03). The link tool refuses to write
+# inside the repository, so none should be here; these patterns are a second guard, for link
+# files by their .url name and for the .station-links/ folder where they used to go.
+*.url
+.station-links/
 
 # Local databases
 *.db

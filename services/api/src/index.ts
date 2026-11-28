@@ -8,6 +8,7 @@ import { openDatabase } from "./db.ts";
 import { isMainModule } from "./main-module.ts";
 import { loadOrganizerKey } from "./organizer-key.ts";
 import { API_VERSION, createApiServer } from "./server.ts";
+import { parseStationDisplaySecret } from "./station-token.ts";
 import { bundledLists, type DomainLists } from "./triage.ts";
 
 export interface StartedApi {
@@ -39,8 +40,10 @@ export async function start(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<StartedApi> {
   // Loaded first so a bad key file stops start-up before anything else happens.
-  // E-03 hands the key to the station QR signer.
-  loadOrganizerKey(env.ORGANIZER_KEYPAIR_PATH);
+  const organizerKey = loadOrganizerKey(env.ORGANIZER_KEYPAIR_PATH);
+  const stationDisplayToken = parseStationDisplaySecret(
+    env.STATION_DISPLAY_TOKEN,
+  );
   const chainabuse = parseChainabuseMode(env.CHAINABUSE_POST);
   const port = parsePort(env.API_PORT);
   const host = env.API_HOST || "127.0.0.1";
@@ -60,6 +63,10 @@ export async function start(
   const server = createApiServer({
     db,
     version: API_VERSION,
+    stationSigner: organizerKey,
+    stationDisplayToken,
+    now: () => Math.floor(Date.now() / 1000),
+    nowMs: () => Date.now(),
     reports: {
       triageToken: env.TRIAGE_TOKEN || undefined,
       lists,

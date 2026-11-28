@@ -34,6 +34,8 @@ const RFC_KEYPAIR = [
   ),
 ];
 
+const DISPLAY_TOKEN = "test-display-token-0123456789abcdef";
+
 const UNSET_LINE =
   "limen api: ORGANIZER_KEYPAIR_PATH is not set. Point it at the organizer keypair file (see .env.example).\n";
 
@@ -166,7 +168,11 @@ test("start-up with an API_PORT of only spaces exits 1 with one line, rather tha
     const keyPath = join(dir, "organizer.json");
     writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
     assert.deepEqual(
-      runEntry({ ORGANIZER_KEYPAIR_PATH: keyPath, API_PORT: " " }),
+      runEntry({
+        ORGANIZER_KEYPAIR_PATH: keyPath,
+        STATION_DISPLAY_TOKEN: DISPLAY_TOKEN,
+        API_PORT: " ",
+      }),
       {
         status: 1,
         stdout: "",
@@ -181,6 +187,31 @@ test("the printed address brackets an IPv6 host, so it parses as a URL", () => {
   assert.equal(new URL(listenUrl("::1", 8787)).hostname, "[::1]");
   assert.equal(listenUrl("127.0.0.1", 8787), "http://127.0.0.1:8787");
   assert.equal(listenUrl("localhost", 80), "http://localhost:80");
+});
+
+test("start-up with a good key file but no usable display token exits 1 without echoing the token", () => {
+  const dir = mkdtempSync(join(tmpdir(), "limen-key-"));
+  const keyPath = join(dir, "organizer.json");
+  writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
+  try {
+    const unset = runEntry({ ORGANIZER_KEYPAIR_PATH: keyPath });
+    assert.equal(unset.status, 1);
+    assert.equal(
+      unset.stderr,
+      "limen api: STATION_DISPLAY_TOKEN must be set to at least 32 characters (it is not set). To add one to .env without printing it, run from the repository root: printf '\\nSTATION_DISPLAY_TOKEN=%s\\n' \"$(openssl rand -base64 32)\" >> .env\n",
+    );
+    const short = runEntry({
+      ORGANIZER_KEYPAIR_PATH: keyPath,
+      STATION_DISPLAY_TOKEN: "short-token-marker",
+    });
+    assert.equal(short.status, 1);
+    assert.equal(
+      short.stderr,
+      "limen api: STATION_DISPLAY_TOKEN must be set to at least 32 characters (it is too short). To add one to .env without printing it, run from the repository root: printf '\\nSTATION_DISPLAY_TOKEN=%s\\n' \"$(openssl rand -base64 32)\" >> .env\n",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 /** What Node hands a program for API_PORT and API_HOST when it loads `text` as a .env file. */
@@ -271,6 +302,7 @@ test("start-up from a .env line that Node hands over as spaces or as the next li
           env: {
             PATH: process.env.PATH ?? "",
             ORGANIZER_KEYPAIR_PATH: keyPath,
+            STATION_DISPLAY_TOKEN: DISPLAY_TOKEN,
           },
           encoding: "utf8",
           timeout: 10_000,
@@ -362,6 +394,7 @@ test("start-up with a good key file serves health with the API version", async (
   writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
   const { child, url, port } = await startOnFreePort({
     ORGANIZER_KEYPAIR_PATH: keyPath,
+    STATION_DISPLAY_TOKEN: DISPLAY_TOKEN,
     DATABASE_PATH: join(dir, "limen.db"),
   });
   try {
@@ -390,7 +423,11 @@ test("a port taken between the probe and the start is retried rather than failin
   const ports = [held];
   try {
     const { child, port, attempts } = await startOnFreePort(
-      { ORGANIZER_KEYPAIR_PATH: keyPath, DATABASE_PATH: join(dir, "limen.db") },
+      {
+        ORGANIZER_KEYPAIR_PATH: keyPath,
+        STATION_DISPLAY_TOKEN: DISPLAY_TOKEN,
+        DATABASE_PATH: join(dir, "limen.db"),
+      },
       async () => ports.shift() ?? freePort(),
     );
     child.kill();
