@@ -642,6 +642,55 @@ describe("the owner's audit: what the card claims", () => {
     );
   });
 
+  it("A7: a transfer from a token account to itself moves no tokens", async () => {
+    const rows = await rowsFor([
+      {
+        kind: "token-out" as const,
+        instruction: 0,
+        program: "token" as const,
+        source: { address: userTokenAccount },
+        destination: { address: userTokenAccount },
+        mint: null,
+        amount: "5",
+        decimals: null,
+      },
+    ]);
+    assert.deepEqual(rows[1], {
+      label: "Moves no tokens",
+      value: `A transfer of 5 base units from token account ${userTokenAccount} to itself, which the Token program accepts without moving any.`,
+    });
+  });
+
+  it("A7: Revoke removes any delegate, and a burn claims only what the instruction names", async () => {
+    const rows = await rowsFor([
+      {
+        kind: "delegate-revoked" as const,
+        instruction: 0,
+        program: "token" as const,
+        account: { address: userTokenAccount },
+      },
+      {
+        kind: "tokens-burned" as const,
+        instruction: 1,
+        program: "token" as const,
+        account: { address: userTokenAccount },
+        mint: { address: fixture.keys.mint },
+        amount: "5",
+        decimals: null,
+      },
+    ]);
+    assert.deepEqual(rows.slice(1, 3), [
+      {
+        label: "Removes any delegate",
+        value: `From token account ${userTokenAccount}, with your wallet's authority.`,
+      },
+      {
+        label: "Burns tokens",
+        value: `5 base units from token account ${userTokenAccount}. Your wallet signs as the authority the instruction names.`,
+      },
+    ]);
+  });
+
   it("13: the burn, revoke and create rows claim only what the instruction proves", async () => {
     const rows = await rowsFor([
       {
@@ -675,10 +724,10 @@ describe("the owner's audit: what the card claims", () => {
     assert.deepEqual(rows.slice(1, 5), [
       {
         label: "Burns tokens",
-        value: `5 base units from token account ${userTokenAccount}, with your wallet's authority.`,
+        value: `5 base units from token account ${userTokenAccount}. Your wallet signs as the authority the instruction names.`,
       },
       {
-        label: "Removes a delegate",
+        label: "Removes any delegate",
         value: `From token account ${userTokenAccount}, with your wallet's authority.`,
       },
       {
