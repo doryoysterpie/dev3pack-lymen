@@ -72,7 +72,9 @@ export type StationQrRejection =
   | "invalid_payload"
   | "not_yet_valid"
   | "expired"
-  | "invalid_clock";
+  | "invalid_clock"
+  | "wrong_station"
+  | "wrong_session";
 
 export type StationQrResult =
   | {
@@ -216,7 +218,14 @@ export function issueStationQr(input: {
  */
 export function verifyStationQr(
   text: string,
-  options: { allowlist: ReadonlySet<string>; nowMs: number },
+  options: {
+    allowlist: ReadonlySet<string>;
+    nowMs: number;
+    /** The station the caller is at. Required: a QR for any other station is refused. */
+    expectedStation: string;
+    /** When given, a QR for any other session is refused. */
+    expectedSession?: string;
+  },
 ): StationQrResult {
   const reject = (reason: StationQrRejection): StationQrResult => ({
     ok: false,
@@ -264,6 +273,19 @@ export function verifyStationQr(
 
   const parsed = parsePayload(payload);
   if (parsed === null) return reject("invalid_payload");
+  // A missing or malformed expectedStation matches no station, so every QR is refused.
+  const expectedStation: unknown = options.expectedStation;
+  if (
+    typeof expectedStation !== "string" ||
+    !ID.test(expectedStation) ||
+    parsed.station !== expectedStation
+  )
+    return reject("wrong_station");
+  if (
+    options.expectedSession !== undefined &&
+    parsed.session !== options.expectedSession
+  )
+    return reject("wrong_session");
   const issuedMs = parsed.issued_at * 1000;
   if (options.nowMs < issuedMs - STATION_QR_CLOCK_SKEW_S * 1000)
     return reject("not_yet_valid");

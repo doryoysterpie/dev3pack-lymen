@@ -67,6 +67,7 @@ function reasonOf(text: string, now = T): string {
   const result = verifyStationQr(text, {
     allowlist: ALLOWLIST,
     nowMs: Math.round(now * 1000),
+    expectedStation: "st-front",
   });
   return result.ok ? "ok" : result.reason;
 }
@@ -99,7 +100,11 @@ test("an issued QR has the documented format and verifies to exactly the payload
   );
 
   assert.deepEqual(
-    verifyStationQr(text, { allowlist: ALLOWLIST, nowMs: T * 1000 }),
+    verifyStationQr(text, {
+      allowlist: ALLOWLIST,
+      nowMs: T * 1000,
+      expectedStation: "st-front",
+    }),
     {
       ok: true,
       payload: {
@@ -134,10 +139,14 @@ test("done test 1: the 60 s limit is measured in milliseconds, so 60.001 s and 6
 test("with no usable clock the verifier fails closed: missing, NaN or infinite nowMs is invalid_clock", () => {
   const text = issue();
   const verdict = (options: unknown) => {
-    const r = verifyStationQr(
-      text,
-      options as { allowlist: ReadonlySet<string>; nowMs: number },
-    );
+    const r = verifyStationQr(text, {
+      expectedStation: "st-front",
+      ...(options as object),
+    } as {
+      allowlist: ReadonlySet<string>;
+      nowMs: number;
+      expectedStation: string;
+    });
     return r.ok ? "ok" : r.reason;
   };
   // The control: the same QR with a good clock is accepted.
@@ -288,6 +297,7 @@ test("done test 3: a payload signed by a non-allowlisted key is rejected", () =>
     verifyStationQr(issue(STRANGER), {
       allowlist: stationAllowlist([STRANGER.publicKey]),
       nowMs: T * 1000,
+      expectedStation: "st-front",
     }).ok,
     true,
   );
@@ -295,6 +305,7 @@ test("done test 3: a payload signed by a non-allowlisted key is rejected", () =>
     verifyStationQr(issue(), {
       allowlist: stationAllowlist([]),
       nowMs: T * 1000,
+      expectedStation: "st-front",
     }).ok,
     false,
   );
@@ -458,4 +469,48 @@ test("the issuer refuses IDs and times outside the format", () => {
       }),
     /Unix time/,
   );
+});
+
+test("a QR for another station, or for another session when one is expected, is refused as wrong_station or wrong_session", () => {
+  const text = issue(); // st-front, day-2
+  const verdict = (expectedStation: string, expectedSession?: string) => {
+    const r = verifyStationQr(text, {
+      allowlist: ALLOWLIST,
+      nowMs: T * 1000,
+      expectedStation,
+      ...(expectedSession === undefined ? {} : { expectedSession }),
+    });
+    return r.ok ? "ok" : r.reason;
+  };
+  assert.equal(verdict("st-front"), "ok");
+  assert.equal(verdict("st-side"), "wrong_station");
+  assert.equal(verdict("st-front", "day-2"), "ok");
+  assert.equal(verdict("st-front", "day-3"), "wrong_session");
+  assert.equal(verdict("st-side", "day-3"), "wrong_station");
+});
+
+test("an expectedStation that is missing or not a station ID refuses every QR as wrong_station", () => {
+  const text = issue();
+  for (const expectedStation of [
+    undefined,
+    "",
+    "st front",
+    "x".repeat(65),
+    7,
+  ]) {
+    const r = verifyStationQr(text, {
+      allowlist: ALLOWLIST,
+      nowMs: T * 1000,
+      expectedStation,
+    } as unknown as {
+      allowlist: ReadonlySet<string>;
+      nowMs: number;
+      expectedStation: string;
+    });
+    assert.equal(
+      r.ok ? "ok" : r.reason,
+      "wrong_station",
+      String(expectedStation),
+    );
+  }
 });
