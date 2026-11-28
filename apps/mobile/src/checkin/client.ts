@@ -2,6 +2,7 @@
 // a sentence for the participant. Pure module: the fetch function is passed in.
 
 import { encodeBase64 } from "./base64.ts";
+import { parseApiUrl } from "./config.ts";
 import { appFetch, type HttpFetch } from "./http.ts";
 import { parseJsonWithoutRepeatedKeys } from "./json-keys.ts";
 
@@ -71,16 +72,28 @@ export function checkinBody(req: CheckinRequest): string {
   });
 }
 
-/** Posts one check-in to `<apiBase>/checkins` and reads the answer. Never throws. */
+/**
+ * Posts one check-in to `<apiBase>/checkins` and reads the answer. Refuses any `http://` base
+ * other than `localhost`, `127.0.0.1` and `10.0.2.2` before sending a request. Never throws.
+ */
 export async function postCheckin(
   fetchFn: HttpFetch,
   apiBase: string,
   req: CheckinRequest,
 ): Promise<CheckinResult> {
+  const base = parseApiUrl(apiBase);
+  if (base === null) {
+    return {
+      ok: false,
+      error: "invalid_api_url",
+      message:
+        "The check-in server URL must use https://, or http:// on localhost, 127.0.0.1 or 10.0.2.2.",
+    };
+  }
   let res: Response;
   try {
     res = await appFetch(
-      `${apiBase.replace(/\/+$/, "")}/checkins`,
+      `${base}/checkins`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },

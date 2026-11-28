@@ -11,6 +11,7 @@ import {
 } from "./client.ts";
 import { appFetch } from "./http.ts";
 
+const API = "https://api.example.test";
 const SIGNATURE = new Uint8Array(64).map((_, i) => i);
 const REQ: CheckinRequest = {
   qr: "limen:station:v1.payload.signer.signature",
@@ -59,6 +60,60 @@ test("the check-in is POSTed as JSON to <API>/checkins with a standard base64 si
   });
 });
 
+test("postCheckin refuses any http:// base other than localhost, 127.0.0.1 and 10.0.2.2 before sending any request", async () => {
+  for (const good of [
+    "https://api.example.test/",
+    "http://localhost:8787/",
+    "http://127.0.0.1:8787/",
+    "http://10.0.2.2:8787/",
+  ]) {
+    const { fn, seen } = answering(201, {
+      status: "checked_in",
+      station: "st-front",
+      session: "day-2",
+      mint: "Mint1111",
+      signature: "Sig1111",
+    });
+    assert.equal((await postCheckin(fn, good, REQ)).ok, true, good);
+    assert.equal(seen.length, 1, good);
+  }
+  for (const bad of [
+    "http://api",
+    "http://api.example.test",
+    "http://api.example.test:8787",
+    "http://192.168.1.10:8787",
+    "http://127.0.0.2:8787",
+    "http://10.0.2.3:8787",
+    "http://0.0.0.0:8787",
+    "http://[::1]:8787",
+    "http://localhost.evil.test:8787",
+    "http://localhost@evil.test:8787",
+    "https://api.example.test?next=1",
+    "https://api.example.test#frag",
+    "ftp://api.example.test",
+    "",
+  ]) {
+    const { fn, seen } = answering(201, {
+      status: "checked_in",
+      station: "st-front",
+      session: "day-2",
+      mint: "Mint1111",
+      signature: "Sig1111",
+    });
+    assert.deepEqual(
+      await postCheckin(fn, bad, REQ),
+      {
+        ok: false,
+        error: "invalid_api_url",
+        message:
+          "The check-in server URL must use https://, or http:// on localhost, 127.0.0.1 or 10.0.2.2.",
+      },
+      bad,
+    );
+    assert.equal(seen.length, 0, `${bad}: no request sent`);
+  }
+});
+
 test("a check-in the backend completes from the chain, with no transaction signature, is a check-in", async () => {
   // E-05's backend answers 201 with a null signature when a retry finds the pass already held by
   // the wallet at its mint address, so nothing new was sent (services/api/README.md, Minting).
@@ -71,7 +126,7 @@ test("a check-in the backend completes from the chain, with no transaction signa
   assert.deepEqual(
     await postCheckin(
       answering(201, { ...checkedIn, signature: null }).fn,
-      "http://api",
+      API,
       REQ,
     ),
     {
@@ -85,7 +140,7 @@ test("a check-in the backend completes from the chain, with no transaction signa
   // A signature that is neither text nor null, or none at all, is still not a check-in.
   for (const body of [{ ...checkedIn, signature: 7 }, checkedIn])
     assert.equal(
-      (await postCheckin(answering(201, body).fn, "http://api", REQ)).ok,
+      (await postCheckin(answering(201, body).fn, API, REQ)).ok,
       false,
     );
 });
@@ -93,11 +148,7 @@ test("a check-in the backend completes from the chain, with no transaction signa
 test("after mint_failed the participant reads that the pass may already be in the wallet, and how to finish", async () => {
   // A 502 mint_failed leaves the check-in pending; the pass may have landed (services/api/README.md).
   assert.deepEqual(
-    await postCheckin(
-      answering(502, { error: "mint_failed" }).fn,
-      "http://api",
-      REQ,
-    ),
+    await postCheckin(answering(502, { error: "mint_failed" }).fn, API, REQ),
     {
       ok: false,
       error: "mint_failed",
@@ -110,11 +161,7 @@ test("after mint_failed the participant reads that the pass may already be in th
 test("a check-in whose pass was revoked reads as revoked, not as a server failure", async () => {
   // E-05's backend answers 409 pass_revoked once a pass issued for the check-in has been burned.
   assert.deepEqual(
-    await postCheckin(
-      answering(409, { error: "pass_revoked" }).fn,
-      "http://api",
-      REQ,
-    ),
+    await postCheckin(answering(409, { error: "pass_revoked" }).fn, API, REQ),
     {
       ok: false,
       error: "pass_revoked",
@@ -130,11 +177,7 @@ test("each refusal the backend gives becomes its sentence", async () => {
     ["no_registration_binding", 403],
     ["check_in_unavailable", 503],
   ] as const) {
-    const result = await postCheckin(
-      answering(status, { error }).fn,
-      "http://api",
-      REQ,
-    );
+    const result = await postCheckin(answering(status, { error }).fn, API, REQ);
     assert.deepEqual(result, {
       ok: false,
       error,
@@ -147,17 +190,13 @@ test("an unreachable server, an unknown error and a body that is not JSON each g
   const down = (async () => {
     throw new TypeError("fetch failed");
   }) as unknown as typeof fetch;
-  assert.deepEqual(await postCheckin(down, "http://api", REQ), {
+  assert.deepEqual(await postCheckin(down, API, REQ), {
     ok: false,
     error: "unreachable",
     message: "The check-in server cannot be reached.",
   });
   assert.deepEqual(
-    await postCheckin(
-      answering(500, { error: "constructor" }).fn,
-      "http://api",
-      REQ,
-    ),
+    await postCheckin(answering(500, { error: "constructor" }).fn, API, REQ),
     {
       ok: false,
       error: "constructor",
@@ -166,20 +205,15 @@ test("an unreachable server, an unknown error and a body that is not JSON each g
   );
   const notJson = (async () =>
     new Response("<html>", { status: 502 })) as unknown as typeof fetch;
-  assert.deepEqual(await postCheckin(notJson, "http://api", REQ), {
+  assert.deepEqual(await postCheckin(notJson, API, REQ), {
     ok: false,
     error: "status_502",
     message: "The server answered with status 502.",
   });
   // A 201 without the owed fields is not taken as a check-in.
   assert.equal(
-    (
-      await postCheckin(
-        answering(201, { status: "checked_in" }).fn,
-        "http://api",
-        REQ,
-      )
-    ).ok,
+    (await postCheckin(answering(201, { status: "checked_in" }).fn, API, REQ))
+      .ok,
     false,
   );
 });
@@ -288,7 +322,7 @@ test("a response JSON body that repeats a key is refused instead of collapsing t
     '{"status":"checked_in","station":"st-front","session":"day-2","mint":"Mint1","signature":"Sig1","extra":{"a":1,"a":2}}',
   ]) {
     assert.deepEqual(
-      await postCheckin(raw(201, body), "http://api", REQ),
+      await postCheckin(raw(201, body), API, REQ),
       {
         ok: false,
         error: "status_201",
@@ -304,7 +338,7 @@ test("a response JSON body that repeats a key is refused instead of collapsing t
     '{"error":"pass_revoked","err\\u006fr":"already_checked_in"}',
   ]) {
     assert.deepEqual(
-      await postCheckin(raw(409, body), "http://api", REQ),
+      await postCheckin(raw(409, body), API, REQ),
       {
         ok: false,
         error: "status_409",

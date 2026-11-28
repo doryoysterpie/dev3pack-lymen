@@ -12,6 +12,7 @@
 // Adapter signer plugs in as a WalletSigner.
 
 import { CHECKIN_MESSAGES, postCheckin, type CheckinResult } from "./client.ts";
+import { parseApiUrl } from "./config.ts";
 import type { HttpFetch } from "./http.ts";
 import { checkinMessageBytes, registrationIdInput } from "./message.ts";
 import { verifyStationQrOnDevice, type Ed25519Verify } from "./station-qr.ts";
@@ -108,9 +109,8 @@ export async function prepareCheckin(
   deps: CheckinFlowDeps,
   input: { readonly qr: string; readonly registrationText: string },
 ): Promise<PreparedCheckin> {
-  if (deps.apiBase === null)
-    return refuse("no_server", FLOW_MESSAGES.no_server);
-  const apiBase = deps.apiBase;
+  const apiBase = deps.apiBase === null ? null : parseApiUrl(deps.apiBase);
+  if (apiBase === null) return refuse("no_server", FLOW_MESSAGES.no_server);
 
   const qr = checkQr(deps, input.qr);
   if (!qr.ok) return qr;

@@ -424,15 +424,56 @@ test("nothing passed to MWA contains the registration ID, which travels only in 
   assert.equal(server.posted[0]!.registration_id, registrationId);
 });
 
-test("the API URL and the signer allowlist come from the EXPO_PUBLIC_ settings, checked", () => {
-  assert.equal(parseApiUrl("http://10.0.2.2:8787/"), "http://10.0.2.2:8787");
-  assert.equal(
-    parseApiUrl(" https://api.example.test "),
-    "https://api.example.test",
-  );
-  for (const bad of [undefined, "", "10.0.2.2:8787", "ftp://x", "http://a b"]) {
+test("the API URL must be https://, except http:// on localhost, 127.0.0.1 and 10.0.2.2, and any other http:// base stops before the wallet or the server", async () => {
+  for (const [good, expected] of [
+    ["https://api.example.test", "https://api.example.test"],
+    [" https://api.example.test/ ", "https://api.example.test"],
+    ["https://api.example.test:8443/v1///", "https://api.example.test:8443/v1"],
+    ["http://localhost:8787/", "http://localhost:8787"],
+    ["http://LOCALHOST:8787/", "http://localhost:8787"],
+    ["http://127.0.0.1:8787/", "http://127.0.0.1:8787"],
+    ["http://10.0.2.2:8787/", "http://10.0.2.2:8787"],
+  ] as const) {
+    assert.equal(parseApiUrl(good), expected, good);
+  }
+  for (const bad of [
+    undefined,
+    "",
+    "10.0.2.2:8787",
+    "ftp://x",
+    "http://a b",
+    "http://api",
+    "http://api.example.test",
+    "http://api.example.test:8787",
+    "http://192.168.1.10:8787",
+    "http://127.0.0.2:8787",
+    "http://10.0.2.3:8787",
+    "http://0.0.0.0:8787",
+    "http://[::1]:8787",
+    "http://localhost.evil.test:8787",
+    "http://localhost@evil.test:8787",
+    "https://user:pass@api.example.test",
+    "https://api.example.test?next=1",
+    "https://api.example.test#frag",
+    "https://api.example.test\\@evil.test",
+  ]) {
     assert.equal(parseApiUrl(bad), null, String(bad));
   }
+
+  // Even if a caller hands prepareCheckin an unparsed non-loopback http:// base directly, it
+  // refuses before connecting the wallet or sending any request.
+  const wallet = fakeWallet();
+  const server = fakeServer(wallet.key);
+  assert.deepEqual(
+    await prepareCheckin(
+      { ...deps(wallet, server), apiBase: "http://api.example.test:8787" },
+      { qr: FIXTURE.valid, registrationText: "LMN-0001" },
+    ),
+    { ok: false, error: "no_server", message: FLOW_MESSAGES.no_server },
+  );
+  assert.deepEqual(wallet.events, []);
+  assert.equal(server.posted.length, 0);
+
   assert.deepEqual(
     [
       ...parseStationSigners(
