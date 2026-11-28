@@ -121,9 +121,19 @@ test("the station display gets a QR for its station in the active session that v
 
 test("two fetches return QRs with different nonces", async () => {
   clock = T + 100;
-  const a = (await (await getQr("st-front")).json()) as { qr: string };
-  const b = (await (await getQr("st-front")).json()) as { qr: string };
-  assert.notEqual(a.qr, b.qr);
+  const nonces: string[] = [];
+  for (let i = 0; i < 2; i++) {
+    const { qr } = (await (await getQr("st-front")).json()) as { qr: string };
+    const result = verifyStationQr(qr, {
+      allowlist: stationAllowlist([SIGNER.publicKey]),
+      nowMs: clock * 1000,
+    });
+    assert.ok(result.ok);
+    nonces.push(result.payload.nonce);
+  }
+  // The nonces of the two verified payloads, not the whole QR texts, which could differ while
+  // the nonce repeats.
+  assert.notEqual(nonces[0], nonces[1]);
 });
 
 test("the QR endpoint refuses a request without the display token, or with a wrong one", async () => {
