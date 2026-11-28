@@ -235,11 +235,25 @@ async function callKeepingNumbers(
     throw new RpcError("shape", `${method}: not JSON`);
   }
   if (!isRecord(body)) throw new RpcError("shape", `${method}: not an object`);
-  // An answer to another request is not evidence for this one.
-  if (body.id !== id) {
+  // The envelope as the answer wrote it (the audit of 21e1f9f, item 6).
+  if (body.jsonrpc !== "2.0") {
+    throw new RpcError("shape", `${method}: not a JSON-RPC 2.0 answer`);
+  }
+  // An answer to another request is not evidence for this one. The id is
+  // compared as written, since JSON.parse rounds 1.0000000000000001 to 1.
+  if (numbers?.get(pathKey(["id"])) !== String(id)) {
     throw new RpcError("shape", `${method}: the answer is for another request`);
   }
-  if (isRecord(body.error)) {
+  if ("error" in body) {
+    if ("result" in body) {
+      throw new RpcError(
+        "shape",
+        `${method}: an answer with both a result and an error`,
+      );
+    }
+    if (!isRecord(body.error)) {
+      throw new RpcError("shape", `${method}: an error that is not an object`);
+    }
     const message = body.error.message;
     throw new RpcError(
       "rpc",
