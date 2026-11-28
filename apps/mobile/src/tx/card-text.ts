@@ -16,6 +16,8 @@ import {
   USER_MARKER,
 } from "@limen/preflight";
 
+import { URL } from "whatwg-url-minimum";
+
 import { asWritten, type CardRow, type CardText } from "../pay/card-text.ts";
 
 const U64_MAX = "18446744073709551615";
@@ -340,17 +342,28 @@ function simulated(simulation: SimulationOutcome): string {
     : "The simulation failed, so no balance change is shown.";
 }
 
+/**
+ * The host a transaction request link is sent to, with its port, as the
+ * app's URL parser reads it. A user name or password before the host is
+ * not shown: "https://pay.example@evil.example" goes to evil.example. Text
+ * that is not an https URL is shown as it is.
+ */
+export function linkHost(link: string): string {
+  try {
+    const url = new URL(link);
+    return url.protocol === "https:" ? url.host : link;
+  } catch {
+    return link;
+  }
+}
+
 /** The card for a transaction request, from its link and pre-flight. */
 export function transactionCardText(
   link: string,
   message: string | null,
   result: Preflight,
 ): CardText {
-  const host = (() => {
-    const match = /^https:\/\/([^/?#]+)/.exec(link);
-    return match === null ? link : match[1];
-  })();
-  const from: CardRow = { label: "Requested from", value: host };
+  const from: CardRow = { label: "Requested from", value: linkHost(link) };
 
   if (result.kind === "not-devnet") {
     return {
