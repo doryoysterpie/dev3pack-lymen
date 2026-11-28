@@ -7,16 +7,18 @@ import assert from "node:assert/strict";
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { createServer } from "vite";
+import { build, createServer, preview } from "vite";
 
 const APP = fileURLToPath(new URL("..", import.meta.url));
 const REPO = fileURLToPath(new URL("../../..", import.meta.url));
@@ -125,5 +127,90 @@ test("the dev server serves nothing outside the station app and its dependencies
     await server.close();
     for (const file of written) rmSync(file, { force: true });
     if (!hadKeysDir) rmdirSync(keysDir);
+  }
+});
+
+test("the dev and preview servers serve no key or database through a workspace link, the station folder or the build, and send no CORS header", async () => {
+  // Stand-ins, each written only if absent and removed afterwards; no real key is touched.
+  const tag = `dev-server-test-${process.pid}`;
+  const api = join(REPO, "services", "api");
+  const files = {
+    apiDb: join(api, `${tag}.db`),
+    apiKeypair: join(api, `${tag}.keypair.json`),
+    stationKeypair: join(APP, `${tag}-keypair.json`),
+  };
+  const written: string[] = [];
+  const outDir = mkdtempSync(join(tmpdir(), "limen-station-build-"));
+  const config = {
+    configFile: join(APP, "vite.config.ts"),
+    root: APP,
+    logLevel: "silent" as const,
+  };
+  const dev = await createServer({
+    ...config,
+    server: { port: await freePort(), strictPort: true },
+  });
+  let previewServer: Awaited<ReturnType<typeof preview>> | null = null;
+  try {
+    for (const file of Object.values(files)) {
+      writeFileSync(file, `${MARKER}\n`, { flag: "wx" });
+      written.push(file);
+    }
+    await dev.listen();
+    const devPort = (dev.httpServer!.address() as AddressInfo).port;
+    const get = (port: number, path: string) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        headers: { origin: "http://localhost:8081" },
+      });
+    const owesRefusal = async (port: number, path: string) => {
+      const res = await get(port, path);
+      const body = await res.text();
+      assert.ok(
+        res.status === 403 || res.status === 404,
+        `${path} answered ${res.status}`,
+      );
+      assert.ok(!body.includes(MARKER), `${path} served the file`);
+    };
+    const linked = join(REPO, "node_modules", "@limen", "api");
+    for (const path of [
+      `/@fs${join(linked, `${tag}.db`)}`,
+      `/@fs${join(linked, `${tag}.keypair.json`)}`,
+      `/@fs${files.apiDb}`,
+      `/@fs${files.apiKeypair}`,
+      `/@fs${files.stationKeypair}`,
+      `/${tag}-keypair.json`,
+      `/${tag}-keypair.json?raw`,
+    ])
+      await owesRefusal(devPort, path);
+    // No CORS header, so another page on localhost cannot read what the dev server answers.
+    const page = await get(devPort, "/src/main.ts");
+    assert.equal(page.status, 200);
+    assert.equal(page.headers.get("access-control-allow-origin"), null);
+
+    await build({ ...config, build: { outDir, emptyOutDir: true } });
+    previewServer = await preview({
+      ...config,
+      build: { outDir },
+      preview: { port: await freePort(), strictPort: true },
+    });
+    const previewPort = (previewServer.httpServer.address() as AddressInfo)
+      .port;
+    for (const path of [
+      `/${tag}-keypair.json`,
+      `/@fs${files.stationKeypair}`,
+      `/@fs${join(linked, `${tag}.db`)}`,
+    ])
+      await owesRefusal(previewPort, path);
+    const built = await get(previewPort, "/");
+    assert.equal(built.status, 200);
+    assert.equal(built.headers.get("access-control-allow-origin"), null);
+  } finally {
+    await dev.close();
+    if (previewServer !== null)
+      await new Promise<void>((resolve) =>
+        previewServer!.httpServer.close(() => resolve()),
+      );
+    for (const file of written) rmSync(file, { force: true });
+    rmSync(outDir, { recursive: true, force: true });
   }
 });
