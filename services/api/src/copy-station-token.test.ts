@@ -70,7 +70,7 @@ function run(
       ],
       {
         // PATH holds the stub's folder alone, so a missing stub is a missing pbcopy and the
-        // real one, in /usr/bin on macOS, never runs.
+        // real one, in /usr/bin on macOS, does not run.
         env: {
           PATH: bin,
           ...(secret === null ? {} : { STATION_DISPLAY_TOKEN: secret }),

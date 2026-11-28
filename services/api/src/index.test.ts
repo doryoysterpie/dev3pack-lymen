@@ -444,7 +444,7 @@ test("start-up refuses a key file whose real path is inside apps/station, which 
   const station = fileURLToPath(
     new URL("../../../apps/station", import.meta.url),
   );
-  // A uniquely named stand-in folder, with the RFC 8032 test vector, never a real key.
+  // A uniquely named stand-in folder, with the RFC 8032 test vector, not a real key.
   const inside = join(station, `limen-key-test-${process.pid}`);
   mkdirSync(inside);
   try {
