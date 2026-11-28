@@ -143,7 +143,7 @@ test("control for the done test: without the dismissal, the same third sighting 
   );
 });
 
-test("the evidence view shows each bundle as stored, with the wallet left out", async () => {
+test("the evidence view shows each bundle as stored, with no wallet field when the report sent none", async () => {
   const base = await start({ triageToken: TOKEN });
   await report(base, "drainer_device_1");
   const res = await fetch(`${base}/cases/1`, { headers: auth });
