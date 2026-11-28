@@ -87,6 +87,35 @@ export const MIGRATIONS: readonly string[] = [
     CHECK (transaction_b64 IS NOT NULL OR resimulation_failed_at IS NULL)
   ) STRICT;
   `,
+  // E-11: cases gain the dedup hash over (domain, program set, recipient set), the inputs it
+  // covers, and who set the status. 'dismissed' and decided_by 'human' are set only by the
+  // manual actions of E-12. The table is rebuilt to change its CHECK. Nothing before E-11 sets
+  // sightings.case_id, so the drop finds no referencing rows; if one did, the foreign key would
+  // refuse the drop and the migration would roll back rather than orphan a sighting.
+  `
+  CREATE TABLE cases_new (
+    id INTEGER PRIMARY KEY,
+    dedup_hash TEXT NOT NULL UNIQUE,
+    domain TEXT,
+    program_ids_json TEXT NOT NULL,
+    recipients_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('held', 'escalated', 'dismissed')),
+    decided_by TEXT CHECK (decided_by IN ('threshold', 'human')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    CHECK ((status = 'held') = (decided_by IS NULL))
+  ) STRICT;
+
+  INSERT INTO cases_new (id, dedup_hash, program_ids_json, recipients_json, status, decided_by,
+                         created_at, updated_at)
+    SELECT id, 'e02-case:' || id, '[]', '[]', status,
+           CASE status WHEN 'held' THEN NULL ELSE 'threshold' END, created_at, updated_at
+    FROM cases;
+
+  DROP TABLE cases;
+  ALTER TABLE cases_new RENAME TO cases;
+  CREATE INDEX sightings_by_case ON sightings (case_id);
+  `,
 ];
 
 /** The number of migrations the database has applied, read from PRAGMA user_version. */
