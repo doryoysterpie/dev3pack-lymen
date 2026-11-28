@@ -806,8 +806,8 @@ test("a stored full report in E-09's shape gives a body without the fee payer or
   }
 });
 
-// Pending the owner's ruling: a human's escalation on the dashboard (E-12) also builds the
-// dry-run body. This test and the wiring it checks can be dropped together.
+// Owner ruling 6a: manual escalation is part of E-13, so a human's escalation on the dashboard
+// (E-12) also builds the dry-run body.
 const TRIAGE_TOKEN = "test-triage-token-0123456789abcdef";
 
 /**
@@ -862,7 +862,7 @@ async function manualFlow(
   return { logged, outbound: watch.outbound, steps };
 }
 
-test("pending ruling: a human's escalation on the dashboard logs the exact dry-run body once", async () => {
+test("a human's escalation on the dashboard logs the exact dry-run body once", async () => {
   const { logged, outbound, steps } = await manualFlow("dry-run");
   assert.deepEqual(steps, ["held", "decided", "unchanged"]);
   assert.equal(
@@ -888,14 +888,14 @@ test("pending ruling: a human's escalation on the dashboard logs the exact dry-r
   assert.deepEqual(outbound, []);
 });
 
-test("pending ruling: with the flag off, a human's escalation logs and sends nothing", async () => {
+test("with the flag off, a human's escalation logs and sends nothing", async () => {
   const { logged, outbound, steps } = await manualFlow("off");
   assert.deepEqual(steps, ["held", "decided", "unchanged"]);
   assert.deepEqual(logged, []);
   assert.deepEqual(outbound, []);
 });
 
-test("pending ruling: escalate, dismiss, escalate logs one body for the case", async () => {
+test("escalate, dismiss, escalate logs one body for the case", async () => {
   const { logged, outbound, steps } = await manualFlow("dry-run", [
     "escalate",
     "dismiss",
@@ -911,7 +911,7 @@ test("pending ruling: escalate, dismiss, escalate logs one body for the case", a
   assert.deepEqual(outbound, []);
 });
 
-test("pending ruling: a human's escalation without a reproduced drain does not describe one", async () => {
+test("a human's escalation without a reproduced drain does not describe one", async () => {
   // The re-simulation gives a different summary and no drain, so nothing is reproduced.
   const { logged } = await manualFlow("dry-run", ["escalate"], {
     summary: { kind: "transaction", effects: [] },

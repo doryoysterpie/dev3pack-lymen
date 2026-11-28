@@ -31,7 +31,7 @@ export interface ReportOptions {
   readonly triageToken?: string;
   /**
    * Called with the case ID when this report moves its case from held to escalated (E-13), and
-   * when a human escalates a case on the dashboard (E-12's route; pending the owner's ruling).
+   * when a human escalates a case on the dashboard (E-12's route; owner ruling 6a).
    * Unset means nothing is called. A failure inside it never changes the response.
    */
   readonly onEscalated?: (caseId: number) => void;
