@@ -114,7 +114,11 @@ What was checked, on 2026-11-28:
   - For another posted account, the answer has that account as fee payer, and `summarizeTransaction` gives it exactly the drainer case's owed summary.
   - `curl` with the test CA gets HTTP 200, and without it refuses the certificate (exit 60).
 
-The device check itself has not run yet.
+**The device check**, on emulator-5554 on 2026-11-28, with both APKs built at `6188e0c`:
+
+- **The setup.** The emulator was started once with `-camera-back virtualscene -virtualscene-poster wall=<a PNG of the QR>`. The wall poster takes the place of the scene's framed print in the kitchen, which the camera's start position cannot see. So the camera was moved to face it by an emulator automation macro that set the device's position to (-1.8, 0.3, 3.6) and its rotation to (0, -150, 0). After that cold boot, the emulator had not joined its `AndroidWifi` network; `adb shell cmd wifi connect-network AndroidWifi open` joined it.
+- **Release build.** After Authorize in the fake wallet, the fetch failed with "javax.net.ssl.SSLHandshakeException: java.security.cert.CertPathValidatorException: Trust anchor for certification path not found." The server logged the client's TLS alert, certificate unknown, and no request.
+- **Test build.** The server logged `POST /drainer` answered 200 for the fake wallet's account. The app showed the drainer's pre-flight card: flagged, 4.99 SOL out, a delegate approved, the simulation failed on devnet (`InvalidAccountForFee`, since that account holds no SOL), and limen holds the transaction. The card offers no sign button.
 
 ## Tests
 
