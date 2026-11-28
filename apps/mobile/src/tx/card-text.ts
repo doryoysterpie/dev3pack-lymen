@@ -144,6 +144,7 @@ const UNDECODED: Readonly<Record<UndecodedReason, string>> = {
   "instruction-not-decoded": " with an instruction limen does not decode.",
   "unexpected-data":
     " with instruction data of a length limen does not expect.",
+  "invalid-data": " with instruction data limen cannot read.",
   "missing-accounts": " with fewer accounts than the instruction needs.",
 };
 

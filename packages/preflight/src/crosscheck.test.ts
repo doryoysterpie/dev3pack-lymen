@@ -237,27 +237,36 @@ describe("cross-check: instruction decoder against spl-token and web3.js builder
           ),
           payer,
         );
-        assert.ok(d.kind === "token-transfer");
-        assert.deepEqual(
-          [
-            d.program,
-            addressOf(d.source),
-            addressOf(d.destination),
-            d.mint,
-            d.authorizers.map(addressOf),
-            d.amount,
-            d.decimals,
-          ],
-          [
-            name,
-            source.toBase58(),
-            destination.toBase58(),
-            null,
-            authorizers,
-            amount.toString(),
-            null,
-          ],
-        );
+        if (name === "token-2022") {
+          // Not decoded on Token-2022 (decode.ts, TOKEN_2022_NOT_DECODED).
+          assert.deepEqual(d, {
+            kind: "undecoded",
+            programId: spl.TOKEN_2022_PROGRAM_ID.toBase58(),
+            reason: "instruction-not-decoded",
+          });
+        } else {
+          assert.ok(d.kind === "token-transfer");
+          assert.deepEqual(
+            [
+              d.program,
+              addressOf(d.source),
+              addressOf(d.destination),
+              d.mint,
+              d.authorizers.map(addressOf),
+              d.amount,
+              d.decimals,
+            ],
+            [
+              name,
+              source.toBase58(),
+              destination.toBase58(),
+              null,
+              authorizers,
+              amount.toString(),
+              null,
+            ],
+          );
+        }
 
         d = decodeOne(
           spl.createTransferCheckedInstruction(
@@ -272,25 +281,34 @@ describe("cross-check: instruction decoder against spl-token and web3.js builder
           ),
           payer,
         );
-        assert.ok(d.kind === "token-transfer");
-        assert.deepEqual(
-          [
-            addressOf(d.source),
-            addressOf(d.destination),
-            addressOf(d.mint),
-            d.authorizers.map(addressOf),
-            d.amount,
-            d.decimals,
-          ],
-          [
-            source.toBase58(),
-            destination.toBase58(),
-            mint.toBase58(),
-            authorizers,
-            amount.toString(),
-            decimals,
-          ],
-        );
+        if (name === "token-2022") {
+          // Not decoded on Token-2022 (decode.ts, TOKEN_2022_NOT_DECODED).
+          assert.deepEqual(d, {
+            kind: "undecoded",
+            programId: spl.TOKEN_2022_PROGRAM_ID.toBase58(),
+            reason: "instruction-not-decoded",
+          });
+        } else {
+          assert.ok(d.kind === "token-transfer");
+          assert.deepEqual(
+            [
+              addressOf(d.source),
+              addressOf(d.destination),
+              addressOf(d.mint),
+              d.authorizers.map(addressOf),
+              d.amount,
+              d.decimals,
+            ],
+            [
+              source.toBase58(),
+              destination.toBase58(),
+              mint.toBase58(),
+              authorizers,
+              amount.toString(),
+              decimals,
+            ],
+          );
+        }
 
         d = decodeOne(
           spl.createApproveInstruction(
@@ -391,15 +409,24 @@ describe("cross-check: instruction decoder against spl-token and web3.js builder
           ),
           payer,
         );
-        assert.ok(d.kind === "token-close-account");
-        assert.deepEqual(
-          [
-            addressOf(d.account),
-            addressOf(d.destination),
-            d.authorizers.map(addressOf),
-          ],
-          [source.toBase58(), destination.toBase58(), authorizers],
-        );
+        if (name === "token-2022") {
+          // Not decoded on Token-2022 (decode.ts, TOKEN_2022_NOT_DECODED).
+          assert.deepEqual(d, {
+            kind: "undecoded",
+            programId: spl.TOKEN_2022_PROGRAM_ID.toBase58(),
+            reason: "instruction-not-decoded",
+          });
+        } else {
+          assert.ok(d.kind === "token-close-account");
+          assert.deepEqual(
+            [
+              addressOf(d.account),
+              addressOf(d.destination),
+              d.authorizers.map(addressOf),
+            ],
+            [source.toBase58(), destination.toBase58(), authorizers],
+          );
+        }
 
         d = decodeOne(
           spl.createBurnCheckedInstruction(

@@ -29,6 +29,7 @@ export type UndecodedReason =
   | "unknown-program"
   | "instruction-not-decoded"
   | "unexpected-data"
+  | "invalid-data"
   | "missing-accounts";
 
 export type Decoded =
@@ -168,6 +169,43 @@ function u32(data: Uint8Array, offset: number): number {
 }
 
 /** A u64 read little-endian, as a decimal string. */
+/**
+ * Whether bytes are UTF-8 as Rust's String::from_utf8 accepts it: no
+ * overlong form, no surrogate, nothing past U+10FFFF.
+ */
+export function isUtf8(bytes: Uint8Array): boolean {
+  let i = 0;
+  while (i < bytes.length) {
+    const lead = bytes[i];
+    if (lead < 0x80) {
+      i += 1;
+      continue;
+    }
+    let follow: number;
+    let least: number;
+    let point: number;
+    if (lead >= 0xc2 && lead <= 0xdf) {
+      [follow, least, point] = [1, 0x80, lead & 0x1f];
+    } else if (lead >= 0xe0 && lead <= 0xef) {
+      [follow, least, point] = [2, 0x800, lead & 0x0f];
+    } else if (lead >= 0xf0 && lead <= 0xf4) {
+      [follow, least, point] = [3, 0x10000, lead & 0x07];
+    } else {
+      return false;
+    }
+    if (i + follow >= bytes.length) return false;
+    for (let k = 1; k <= follow; k += 1) {
+      const next = bytes[i + k];
+      if ((next & 0xc0) !== 0x80) return false;
+      point = point * 64 + (next & 0x3f);
+    }
+    if (point < least || point > 0x10ffff) return false;
+    if (point >= 0xd800 && point <= 0xdfff) return false;
+    i += follow + 1;
+  }
+  return true;
+}
+
 function u64(data: Uint8Array, offset: number): string {
   let value = BigInt(0);
   for (let i = 7; i >= 0; i -= 1) {
@@ -203,6 +241,11 @@ function decodeSystem(data: Uint8Array, accounts: readonly Account[]): Decoded {
     case SYSTEM_ASSIGN:
       if (data.length !== 4 + 32) return undecoded(id, "unexpected-data");
       if (accounts.length < 1) return undecoded(id, "missing-accounts");
+      // Assigning an account to the System Program, which already owns a
+      // wallet account, can change nothing; limen does not decode it.
+      if (encodeBase58(data.subarray(4, 36)) === programs.SYSTEM_PROGRAM) {
+        return undecoded(id, "instruction-not-decoded");
+      }
       return {
         kind: "assign",
         account: accounts[0],
@@ -231,6 +274,11 @@ function decodeSystem(data: Uint8Array, accounts: readonly Account[]): Decoded {
       const seedLength = BigInt(u64(data, 12));
       if (BigInt(data.length) !== BigInt(4 + 8 + 8 + 32) + seedLength) {
         return undecoded(id, "unexpected-data");
+      }
+      // from_seed is a Rust String (solana-sdk 7b382f6,
+      // system-interface/src/instruction.rs:268): its bytes must be UTF-8.
+      if (!isUtf8(data.subarray(20, 20 + Number(seedLength)))) {
+        return undecoded(id, "invalid-data");
       }
       if (accounts.length < 3) return undecoded(id, "missing-accounts");
       return {
@@ -269,24 +317,26 @@ const AUTHORITY_TYPES = [
 ];
 const TOKEN_AUTHORITY_TYPE_COUNT = 4;
 
-// Tags shown by name only. None of them moves tokens out of an account or
-// hands over control of an existing one.
-const TOKEN_NAMED: Readonly<Record<number, string>> = {
-  0: "InitializeMint",
-  1: "InitializeAccount",
-  2: "InitializeMultisig",
-  10: "FreezeAccount",
-  11: "ThawAccount",
-  16: "InitializeAccount2",
-  17: "SyncNative",
-  18: "InitializeAccount3",
-  19: "InitializeMultisig2",
-  20: "InitializeMint2",
-  21: "GetAccountDataSize",
-  22: "InitializeImmutableOwner",
-  23: "AmountToUiAmount",
-  24: "UiAmountToAmount",
+// Tags shown by name only, at their exact data length and with their
+// accounts (solana-program/token 38de8d1, interface/src/instruction.rs,
+// unpack at lines 571, 626, 627 and 646). None of them moves tokens, changes
+// an authority or freezes an account. Every other tag not decoded below,
+// FreezeAccount and ThawAccount among them, goes to the fallback card.
+const TOKEN_NAMED: Readonly<
+  Record<number, readonly [name: string, length: number, accounts: number]>
+> = {
+  1: ["InitializeAccount", 1, 4],
+  17: ["SyncNative", 1, 1],
+  18: ["InitializeAccount3", 33, 2],
+  22: ["InitializeImmutableOwner", 1, 1],
 };
+
+// Token-2022 tags limen does not decode, though their layout is the Token
+// program's: a transfer can credit less than its amount (a transfer fee) or
+// call another program (a transfer hook), and CloseAccount can close a mint
+// (solana-program/token-2022 efe55b4, program/src/processor.rs:574, :611,
+// :1339). Only the mint's extensions would show which.
+const TOKEN_2022_NOT_DECODED: ReadonlySet<number> = new Set([3, 9, 12]);
 
 function decodeToken(
   program: TokenProgram,
@@ -297,6 +347,9 @@ function decodeToken(
     program === "token" ? programs.TOKEN_PROGRAM : programs.TOKEN_2022_PROGRAM;
   if (data.length === 0) return undecoded(id, "unexpected-data");
   const tag = data[0];
+  if (program === "token-2022" && TOKEN_2022_NOT_DECODED.has(tag)) {
+    return undecoded(id, "instruction-not-decoded");
+  }
 
   // Exact data length and the fewest accounts each decoded tag takes.
   const shape = (
@@ -366,8 +419,9 @@ function decodeToken(
         program === "token"
           ? TOKEN_AUTHORITY_TYPE_COUNT
           : AUTHORITY_TYPES.length;
-      if (typeIndex >= typeCount) return undecoded(id, "unexpected-data");
+      if (typeIndex >= typeCount) return undecoded(id, "invalid-data");
       const option = data[2];
+      if (option !== 0 && option !== 1) return undecoded(id, "invalid-data");
       if (
         !(option === 0 && data.length === 3) &&
         !(option === 1 && data.length === 35)
@@ -429,8 +483,13 @@ function decodeToken(
       };
     }
     default: {
-      const name = TOKEN_NAMED[tag];
-      if (name !== undefined) return { kind: "token-other", program, name };
+      const named = TOKEN_NAMED[tag];
+      if (named !== undefined) {
+        const [name, length, minAccounts] = named;
+        const problem = shape(length, minAccounts);
+        if (problem) return undecoded(id, problem);
+        return { kind: "token-other", program, name };
+      }
       // Token-2022 extension instructions (25 and up), Batch (255) and
       // anything else.
       return undecoded(id, "instruction-not-decoded");

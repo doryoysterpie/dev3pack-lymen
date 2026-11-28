@@ -85,7 +85,7 @@ export type SignBlock =
 export type Preflight =
   | {
       readonly kind: "malformed";
-      readonly problem: WireProblem | "not-base64";
+      readonly problem: WireProblem | "not-base64" | "bad-lookup-index";
     }
   | { readonly kind: "not-devnet" }
   | { readonly kind: "user-not-fee-payer"; readonly feePayer: string }
@@ -122,6 +122,29 @@ export function signBlocks(
   if (simulation.status === "not-run") blocks.push("simulation-not-run");
   else if (simulation.err !== null) blocks.push("simulation-failed");
   return blocks;
+}
+
+/**
+ * What the runtime refuses once the lookup tables are read: an index past the
+ * end of a table that was read, or an address loaded twice, once through a
+ * lookup. A table that could not be read leaves its addresses unknown.
+ */
+function lookupProblem(
+  transaction: ParsedTransaction,
+  tables: LookupTables,
+): "bad-lookup-index" | "duplicate-key" | null {
+  for (const lookup of transaction.message.lookups) {
+    const table = tables.get(lookup.table);
+    if (table === undefined) continue;
+    const indexes = [...lookup.writableIndexes, ...lookup.readonlyIndexes];
+    if (indexes.some((index) => index >= table.length)) {
+      return "bad-lookup-index";
+    }
+  }
+  const addresses = messageAccounts(transaction.message, tables)
+    .map((account) => account.address)
+    .filter((address): address is string => address !== null);
+  return new Set(addresses).size === addresses.length ? null : "duplicate-key";
 }
 
 async function loadTables(
@@ -185,6 +208,8 @@ export async function preflight(
   try {
     await assertDevnet(rpc);
     tables = await loadTables(rpc, transaction);
+    const refused = lookupProblem(transaction, tables);
+    if (refused !== null) return { kind: "malformed", problem: refused };
     const watched = watchedAddresses(
       feePayer,
       messageAccounts(transaction.message, tables),

@@ -95,16 +95,16 @@ describe("m7: tokens minted with the wallet's mint authority", () => {
     ]);
   });
 
-  it("the wallet as one signer of a multisig mint authority", () => {
+  // Audit finding 4: a multisig member is not the multisig, which is the
+  // mint authority (token 38de8d1, processor.rs, validate_owner).
+  it("the wallet as one signer of a multisig mint authority: not the wallet's effect", () => {
     const got = summary(
       spl.createMintToInstruction(mint, destination, attacker, BigInt(1), [
         user,
       ]),
     );
-    assert.deepEqual(
-      got.effects.map((effect) => effect.kind),
-      ["tokens-minted"],
-    );
+    assert.deepEqual(got.effects, []);
+    assert.deepEqual(got.others, [{ instruction: 0, kind: "token-mint-to" }]);
   });
 
   it("another address's mint authority: not the wallet's effect", () => {

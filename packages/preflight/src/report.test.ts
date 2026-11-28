@@ -119,13 +119,13 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
     });
     assert.ok(result.summary.kind === "ready");
     const effects = result.summary.summary.effects;
-    // The checked transfer and the owner change are on the Token-2022
-    // account, the close on the Token account, which comes later in the
-    // message.
-    assert.ok(effects[0].kind === "token-out");
-    assert.deepEqual(effects[0].source, { address: "user token account 1" });
-    assert.ok(effects[2].kind === "account-closed");
-    assert.deepEqual(effects[2].account, { address: "user token account 2" });
+    // The owner change is on the Token-2022 account, the close on the Token
+    // account, which comes later in the message. (The checked transfer on
+    // Token-2022 is not decoded.)
+    assert.ok(effects[0].kind === "authority-changed");
+    assert.deepEqual(effects[0].account, { address: "user token account 1" });
+    assert.ok(effects[1].kind === "account-closed");
+    assert.deepEqual(effects[1].account, { address: "user token account 2" });
   });
 
   it("with no simulation, marks a token account the wallet approves from as its owner", async () => {

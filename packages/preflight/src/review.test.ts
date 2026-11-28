@@ -625,6 +625,9 @@ describe("n3: which token accounts a report marks as the wallet's", () => {
       ],
       offline(),
     );
-    assert.ok(json.includes(K.userTokenAccount));
+    // Audit finding 4: the multisig, not the wallet, authorizes it, so it is
+    // no effect of the wallet's and nothing marks it as the wallet's.
+    assert.equal(json.includes("user token account"), false);
+    assert.equal(json.includes('"effects":[]'), true);
   });
 });
