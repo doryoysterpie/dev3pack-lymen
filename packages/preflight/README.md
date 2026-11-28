@@ -56,7 +56,7 @@ const rpc = recordedRpc({
 const result = await preflightTransaction(drainerBytes, { rpc, user: wallet });
 ```
 
-`recordedRpc` answers from recorded data, by address, through the same JSON-RPC parsing as `jsonRpc`. The accounts take the shape `getMultipleAccounts` and `simulateTransaction` return with base64 encoding. `genesisHash` defaults to devnet's; `simulation.slot` and `simulation.replacementBlockhash` are optional and come back as `simulatedAt`.
+`recordedRpc` answers from recorded data, by address, through the same JSON-RPC parsing as `jsonRpc`. The accounts take the shape `getMultipleAccounts` and `simulateTransaction` return with base64 encoding. `genesisHash` defaults to devnet's; `simulation.slot` and `simulation.replacementBlockhash` are optional and come back as `simulatedAt`. An address left out of `simulation.accounts` is recorded as unchanged: its post state and its post balances are those in `accounts`. Its token balances follow agave: none unless a token program is among the transaction's accounts (`src/recorded.ts`).
 
 ### For the app
 
