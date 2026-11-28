@@ -228,8 +228,6 @@ describe("audit 4: only the authority account itself authorizes", () => {
   });
 });
 
-describe("audit 5: a Token-2022 Revoke does not prove ownership", () => {});
-
 describe("audit 13: Assign to the System Program is not decoded", () => {
   it("goes to the fallback card, with no drain pattern", async () => {
     const assign = web3.SystemProgram.assign({

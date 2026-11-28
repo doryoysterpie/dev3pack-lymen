@@ -9,7 +9,7 @@
 // wallet's address; a report also marks the other accounts named in
 // instructions the wallet signs and has every address scrubbed from the text
 // the RPC wrote (marker.ts). So the app and a server produce the same report
-// for the same bytes.
+// for the same bytes and the same RPC answers.
 //
 // From a simulation, limen takes only the run's status and the wallet's SOL
 // change, from the run's own balances (the owner's ruling 20a): it reads no

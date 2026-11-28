@@ -10,7 +10,7 @@
 // from 1 in the order first met, for any other, such as a new authority an
 // instruction's data names. The reason a simulation is not used, or the
 // error it ran into, has every address in it replaced. So the app and a
-// server produce the same report for the same bytes.
+// server produce the same report for the same bytes and the same RPC answers.
 
 import { decodePublicKey } from "./base58.ts";
 import {
