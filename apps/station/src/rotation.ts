@@ -1,7 +1,8 @@
 // Station display rotation (E-03). Fetches a signed QR from the API, shows it, and fetches a
-// fresh one when the API says to, every 30 s. A failed fetch clears the QR, shows why, and
-// retries after 5 s; a fetch that takes over 10 s counts as failed. If a QR outlives its own
-// lifetime on screen before a new one arrives, it is cleared and the page says it is refreshing.
+// fresh one when the API says to, every 30 s or sooner near a session's end. A failed fetch
+// clears the QR, shows why, and retries after 5 s; a fetch that takes over 10 s counts as
+// failed. Each answer says how long its QR has left; the page counts its whole round trip off
+// that, never draws a QR with no time left, and clears a shown QR when its time runs out.
 // This file has no DOM code, and the tests drive it with fakes.
 
 /** What the API returns from GET /stations/:id/qr. */
@@ -12,6 +13,8 @@ export interface StationQrResponse {
   readonly issued_at: number;
   readonly expires_at: number;
   readonly refresh_after_s: number;
+  /** How long the QR has left as it leaves the API, in milliseconds. */
+  readonly expires_in_ms: number;
 }
 
 /**
@@ -25,6 +28,8 @@ export interface StationQr {
   readonly issuedAt: number;
   readonly expiresAt: number;
   readonly refreshAfterS: number;
+  /** How long the QR had left as it left the API, in milliseconds. */
+  readonly expiresInMs: number;
 }
 
 export type StationView =
@@ -40,6 +45,8 @@ export interface RotationDeps {
   /** Fetches one QR. The rotation aborts `signal` when the fetch runs past FETCH_TIMEOUT_MS. */
   readonly fetchQr: (signal: AbortSignal) => Promise<StationQr>;
   readonly render: (view: StationView) => void;
+  /** A clock in milliseconds that only moves forward, such as performance.now(). */
+  readonly now: () => number;
   readonly setTimeout: (fn: () => void, ms: number) => unknown;
   readonly clearTimeout: (handle: unknown) => void;
 }
@@ -63,6 +70,7 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
     timer = null;
     let next: number;
     try {
+      const sentAt = deps.now();
       const controller = new AbortController();
       const timedOut = new Promise<never>((_, reject) => {
         controller.signal.addEventListener("abort", () =>
@@ -81,16 +89,27 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
       }
       if (stopped) return;
       clearStale();
-      deps.render({ kind: "qr", ...res });
-      // Once this QR's lifetime has run out on screen, it can no longer check anyone in.
-      staleTimer = deps.setTimeout(
-        () => {
+      // The QR's time left, less the whole round trip: the API may have issued it as the
+      // request left, so this is the most that can be left.
+      const elapsed = deps.now() - sentAt;
+      const left = res.expiresInMs - elapsed;
+      if (left <= 0) {
+        // It expired on the way. It is never drawn; the next one is fetched at once.
+        deps.render({ kind: "refreshing" });
+        next = 0;
+      } else {
+        deps.render({ kind: "qr", ...res });
+        // Once this QR's time has run out on screen, it can no longer check anyone in.
+        staleTimer = deps.setTimeout(() => {
           staleTimer = null;
           if (!stopped) deps.render({ kind: "refreshing" });
-        },
-        (res.expiresAt - res.issuedAt) * 1000,
-      );
-      next = res.refreshAfterS * 1000;
+        }, left);
+        // The API's refresh point, or the QR's expiry if sooner, counted from when it was issued.
+        next = Math.max(
+          0,
+          Math.min(res.refreshAfterS * 1000, res.expiresInMs) - elapsed,
+        );
+      }
     } catch (err) {
       if (stopped) return;
       clearStale();
@@ -206,7 +225,9 @@ function isQrResponse(value: unknown): value is StationQrResponse {
     Number.isSafeInteger(v.issued_at) &&
     Number.isSafeInteger(v.expires_at) &&
     Number.isSafeInteger(v.refresh_after_s) &&
-    (v.refresh_after_s as number) > 0
+    (v.refresh_after_s as number) > 0 &&
+    Number.isSafeInteger(v.expires_in_ms) &&
+    (v.expires_in_ms as number) > 0
   );
 }
 
@@ -262,5 +283,6 @@ export async function fetchStationQr(
     issuedAt: payload.issued_at,
     expiresAt: payload.expires_at,
     refreshAfterS: body.refresh_after_s,
+    expiresInMs: body.expires_in_ms,
   };
 }

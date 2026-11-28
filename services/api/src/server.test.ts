@@ -144,6 +144,7 @@ test("the station display gets a QR for its station in the active session that v
   assert.equal(body.issued_at, T + 100);
   assert.equal(body.expires_at, T + 160);
   assert.equal(body.refresh_after_s, 30);
+  assert.equal(body.expires_in_ms, 60_000);
   const result = verifyStationQr(String(body.qr), {
     allowlist: stationAllowlist([SIGNER.publicKey]),
     nowMs: (T + 100) * 1000,
@@ -237,6 +238,33 @@ test("a QR issued in a session's last second expires when the session ends", asy
   clock = T;
   const next = (await (await getQr("st-front")).json()) as { session: string };
   assert.equal(next.session, "day-2");
+});
+
+test("with a millisecond clock the QR's time left is exact, so a QR issued 100 ms before its session ends says so", async () => {
+  const msServer = createApiServer({
+    db,
+    version: API_VERSION,
+    stationSigner: SIGNER,
+    stationDisplayToken: TOKEN,
+    now: () => T - 1,
+    nowMs: () => (T - 1) * 1000 + 900,
+  });
+  await new Promise<void>((resolve) =>
+    msServer.listen(0, "127.0.0.1", resolve),
+  );
+  try {
+    const url = `http://127.0.0.1:${(msServer.address() as AddressInfo).port}`;
+    const res = await fetch(`${url}/stations/st-front/qr`, {
+      headers: { authorization: `Bearer ${displayCredential("st-front")}` },
+    });
+    const body = (await res.json()) as Record<string, unknown>;
+    assert.deepEqual(
+      [body.session, body.expires_at, body.refresh_after_s, body.expires_in_ms],
+      ["day-1", T, 1, 100],
+    );
+  } finally {
+    await new Promise<void>((resolve) => msServer.close(() => resolve()));
+  }
 });
 
 test("the QR endpoint refuses methods other than GET", async () => {
