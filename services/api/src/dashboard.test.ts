@@ -1,16 +1,28 @@
 // E-12: the dashboard routes, end to end over HTTP, including the done test: a dismissed case
 // does not re-open on a third sighting.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import type { Server } from "node:http";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { after, test } from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createContext, runInContext } from "node:vm";
 
 import { openDatabase } from "./db.ts";
-import { DASHBOARD_CSP } from "./dashboard.ts";
+import { DASHBOARD_CSP, LIMEN_LOGO_SVG } from "./dashboard.ts";
 import type { Resimulator } from "./evidence.ts";
 import { API_VERSION, createApiServer } from "./server.ts";
+import { TEST_STATION_SETTINGS } from "./test-station.ts";
 
 const FIXTURES = JSON.parse(
   readFileSync(
@@ -57,6 +69,7 @@ async function start(options: {
   const server = createApiServer({
     db: openDatabase(":memory:"),
     version: API_VERSION,
+    ...TEST_STATION_SETTINGS,
     reports: { now: () => clock++, ...options },
   });
   servers.push(server);
@@ -279,7 +292,12 @@ test("the page, script and style are served without a token, with a CSP that all
   );
 });
 
-test("E-19: the header shows the logo with the alt text limen, served from the repository's assets folder", async () => {
+test("E-19: the header shows the logo with the alt text limen, and GET /limen-logo.svg serves LIMEN_LOGO_SVG", async () => {
+  const constantBytes = Buffer.from(LIMEN_LOGO_SVG, "utf8");
+  assert.deepEqual(
+    constantBytes,
+    readFileSync(new URL("../../../assets/limen-logo.svg", import.meta.url)),
+  );
   const base = await start({});
   assert.match(
     await (await fetch(`${base}/dashboard`)).text(),
@@ -288,11 +306,87 @@ test("E-19: the header shows the logo with the alt text limen, served from the r
   const logo = await fetch(`${base}/limen-logo.svg`);
   assert.equal(logo.status, 200);
   assert.equal(logo.headers.get("content-type"), "image/svg+xml");
-  assert.deepEqual(
-    Buffer.from(await logo.arrayBuffer()),
-    readFileSync(new URL("../../../assets/limen-logo.svg", import.meta.url)),
-  );
+  assert.deepEqual(Buffer.from(await logo.arrayBuffer()), constantBytes);
   assert.match(DASHBOARD_CSP, /(^|; )img-src 'self'(;|$)/);
+});
+
+test("GET /limen-logo.svg serves the LIMEN_LOGO_SVG string constant without reading assets/limen-logo.svg from disk, even when that path aliases another file", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "limen-logo-const-"));
+  try {
+    const apiRoot = fileURLToPath(new URL("..", import.meta.url));
+    const copiedApi = join(dir, "services", "api");
+    for (const part of ["src", "dashboard", "package.json"]) {
+      cpSync(join(apiRoot, part), join(copiedApi, part), { recursive: true });
+    }
+    mkdirSync(join(dir, "assets"), { recursive: true });
+    const credentialFile = join(dir, "aliased-credential.txt");
+    const canary = "ALIASED_LOGO_CREDENTIAL=canary-value-0123456789";
+    writeFileSync(credentialFile, `${canary}\n`);
+    symlinkSync(credentialFile, join(dir, "assets", "limen-logo.svg"));
+
+    const copied = (await import(
+      pathToFileURL(join(copiedApi, "src", "dashboard.ts")).href
+    )) as {
+      LIMEN_LOGO_SVG?: unknown;
+      routeDashboard: (
+        db: ReturnType<typeof openDatabase>,
+        options: {
+          triageToken: string | undefined;
+          lists: { phantom: Set<string>; phishdestroy: Set<string> };
+          now: () => number;
+        },
+        req: IncomingMessage,
+        res: ServerResponse,
+        pathname: string,
+      ) => boolean;
+    };
+
+    let status = 0;
+    let headers: Record<string, unknown> = {};
+    const chunks: Buffer[] = [];
+    const req = { method: "GET", headers: {} } as unknown as IncomingMessage;
+    const res = {
+      writeHead(code: number, hdrs: Record<string, unknown>) {
+        status = code;
+        headers = hdrs;
+        return this;
+      },
+      end(chunk?: Buffer | string) {
+        if (chunk !== undefined)
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        return this;
+      },
+    } as unknown as ServerResponse;
+
+    const handled = copied.routeDashboard(
+      openDatabase(":memory:"),
+      {
+        triageToken: undefined,
+        lists: { phantom: new Set(), phishdestroy: new Set() },
+        now: () => 0,
+      },
+      req,
+      res,
+      "/limen-logo.svg",
+    );
+    assert.equal(handled, true);
+    assert.equal(status, 200);
+    assert.equal(headers["content-type"], "image/svg+xml");
+    const served = Buffer.concat(chunks);
+    assert.ok(
+      !served.toString("utf8").includes(canary),
+      "GET /limen-logo.svg read the aliased file from disk",
+    );
+    assert.equal(typeof copied.LIMEN_LOGO_SVG, "string");
+    const constantBytes = Buffer.from(copied.LIMEN_LOGO_SVG as string, "utf8");
+    assert.deepEqual(served, constantBytes);
+    assert.deepEqual(
+      served,
+      readFileSync(new URL("../../../assets/limen-logo.svg", import.meta.url)),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("without the domain lists, /health and the page still answer, and the triage routes answer 503", async () => {

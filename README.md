@@ -8,7 +8,7 @@ limen is a mobile build-station check-in pass with QR pre-flight, and a report t
 
 ## Status
 
-Repository skeleton only (E-01). Each feature lands with its unit, E-02 to E-17, and the claims table below records what each check proves once it exists.
+Each feature lands with its unit. The claims table below is still a placeholder; E-15 fills it with what each check proves.
 
 ## Built before and during the event
 
@@ -39,7 +39,7 @@ npm ci
 npm run check
 ```
 
-Local secrets go in `.env`, copied from `.env.example`. Git ignores `.env`.
+Local secrets go in `.env`, copied from `.env.example`. Git ignores `.env`. Git also ignores `.der`, `.pem`, `.key` and `.p12` files. CI runs `node services/api/src/key-scan.ts` over every tracked path from `git ls-files`; any tracked path it cannot read, or that is not a regular file (such as a symlink), is not scanned and fails the run. On each readable regular tracked file it checks four patterns: PEM private-key header lines (`-----BEGIN ... PRIVATE KEY-----` with ASCII uppercase letters, digits or spaces, whether or not key bytes follow); the two 14-byte Ed25519 PKCS#8 DER header sequences for versions 1 and 2 (`020100300506032b657004220420` and `020101300506032b657004220420`, matched by byte substring alone without checking an outer `SEQUENCE` or trailing seed bytes, so a truncated header alone matches); any JSON-parseable 64-byte Ed25519 keypair the organizer-key loader accepts, tried on every `[...]` bracketed span balanced by bracket depth, as written or with a trailing comma before its closing bracket; and any contiguous base58 run whose decoded bytes the organizer-key loader accepts. The loader accepts 64 integers from 0 to 255 whose last 32 bytes are the Ed25519 public key of the first 32, so a signature or any other 64-byte value is not a hit. Any pattern match or unscannable tracked path fails the run (`services/api/src/key-scan.test.ts`). The scan does not cover untracked files or git history, non-key secrets (such as `.env` tokens, salts or API keys), or keys in any other form (such as hex, bare base64, RSA or EC keys in DER, Ed25519 PKCS#8 encodings with non-minimal BER lengths or algorithm parameters or attributes before the key, non-JSON byte arrays, or base58 split across lines).
 
 ## What each check proves
 
