@@ -20,7 +20,9 @@ import {
   createMintToInstruction,
   createUpdateFieldInstruction,
   ExtensionType,
+  getAccount,
   getAssociatedTokenAddressSync,
+  getMint,
   getMintLen,
   LENGTH_SIZE,
   TOKEN_2022_PROGRAM_ID,
@@ -253,19 +255,20 @@ export async function connectDevnet(
 }
 
 /**
- * Mints one pass to `holder` on devnet. Returns the new mint, the holder's token account and the
- * signature. Over-long details are refused before the cluster is asked anything, and a connection
- * to any other cluster is refused before anything is sent.
+ * Mints one pass to `holder` on devnet, at `mint`'s address: a new keypair unless one is given,
+ * as E-05 gives one derived per check-in so a retry targets the same address. Returns the mint,
+ * the holder's token account and the signature. Over-long details are refused before the cluster
+ * is asked anything, and a connection to any other cluster is refused before anything is sent.
  */
 export async function mintPass(
   connection: Connection,
   organizer: Keypair,
   holder: PublicKey,
   details: PassDetails,
+  mint: Keypair = Keypair.generate(),
 ): Promise<{ mint: PublicKey; tokenAccount: PublicKey; signature: string }> {
   const space = passAccountLen(details);
   await requireDevnet(connection);
-  const mint = Keypair.generate();
   const lamports = await connection.getMinimumBalanceForRentExemption(space);
   const tx = buildPassMintTransaction({
     organizer: organizer.publicKey,
@@ -283,6 +286,40 @@ export async function mintPass(
     tokenAccount: passTokenAccount(mint.publicKey, holder),
     signature,
   };
+}
+
+/**
+ * Where a pass stands on chain, read without sending anything: "absent" when no account exists
+ * at `mint`, "minted" when it is a Token-2022 mint with a supply of one and `holder`'s associated
+ * token account holds that one token, and "other" for anything else. A connection to any other
+ * cluster than devnet is refused first. The mint transaction is one transaction, so it lands
+ * whole or not at all.
+ */
+export async function passMintState(
+  connection: Connection,
+  mint: PublicKey,
+  holder: PublicKey,
+): Promise<"absent" | "minted" | "other"> {
+  await requireDevnet(connection);
+  const info = await connection.getAccountInfo(mint, "confirmed");
+  if (info === null) return "absent";
+  try {
+    const state = await getMint(
+      connection,
+      mint,
+      "confirmed",
+      TOKEN_2022_PROGRAM_ID,
+    );
+    const held = await getAccount(
+      connection,
+      passTokenAccount(mint, holder),
+      "confirmed",
+      TOKEN_2022_PROGRAM_ID,
+    );
+    return state.supply === 1n && held.amount === 1n ? "minted" : "other";
+  } catch {
+    return "other";
+  }
 }
 
 /**

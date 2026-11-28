@@ -53,12 +53,14 @@ export interface ApiContext {
    */
   readonly nowMs: () => number;
   /**
-   * Check-in dependencies (E-05): registration binding from E-07 and minting from E-06. Unset
-   * until those land and are wired in; POST /checkins then answers 503.
+   * Check-in dependencies (E-05): registration binding from E-07, minting from E-06, and the
+   * secret each pass's mint keypair is derived from. The running API (index.ts) sets them when
+   * REGISTRATION_SALT is set; unset, POST /checkins answers 503.
    */
   readonly checkin?: {
     readonly registrations: CheckinRegistrations;
     readonly minter: PassMinter;
+    readonly mintSecret: string;
   };
 }
 
@@ -118,6 +120,7 @@ async function postCheckin(
       allowlist: stationAllowlist([ctx.stationSigner.publicKey]),
       registrations: ctx.checkin.registrations,
       minter: ctx.checkin.minter,
+      mintSecret: ctx.checkin.mintSecret,
     },
     body,
     ctx.nowMs(),

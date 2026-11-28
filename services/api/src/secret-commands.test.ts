@@ -19,6 +19,7 @@ import { join, relative } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { loadPassMintSecret } from "./checkin.ts";
 import { loadRegistrationSalt } from "./registration.ts";
 
 const EXAMPLE = readFileSync(
@@ -127,6 +128,15 @@ test("the REGISTRATION_SALT commands in .env.example and the import error write 
   );
 });
 
+test("the PASS_MINT_SECRET commands in .env.example and the start-up error write a new secret into .env without printing it", () => {
+  const documented = documentedCommand("PASS_MINT_SECRET");
+  assertWritesWithoutPrinting(documented, "PASS_MINT_SECRET");
+  assert.throws(
+    () => loadPassMintSecret(undefined),
+    (err: Error) => recommendedCommand(err.message) === documented,
+  );
+});
+
 // The one command form that writes a secret without printing it, for the variable it names.
 const WRITE_COMMAND =
   /printf '\\n([A-Z][A-Z0-9_]*)=%s\\n' "\$\(openssl rand -base64 32\)" >> \.env/;
@@ -173,7 +183,12 @@ test("every secret .env.example documents comes with a command that writes it in
   const secrets = documentedSecrets();
   assert.deepEqual(
     secrets.map((s) => s.name),
-    ["REGISTRATION_SALT", "STATION_DISPLAY_TOKEN", "TRIAGE_TOKEN"],
+    [
+      "REGISTRATION_SALT",
+      "PASS_MINT_SECRET",
+      "STATION_DISPLAY_TOKEN",
+      "TRIAGE_TOKEN",
+    ],
   );
   for (const { name, comment } of secrets) {
     const commands = comment

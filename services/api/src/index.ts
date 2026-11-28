@@ -4,7 +4,11 @@ import type { Server } from "node:http";
 import { isIPv6, type AddressInfo } from "node:net";
 
 import { chainabuseHook, parseChainabuseMode } from "./chainabuse.ts";
-import { devnetMinter, registrationsFrom } from "./checkin.ts";
+import {
+  devnetMinter,
+  loadPassMintSecret,
+  registrationsFrom,
+} from "./checkin.ts";
 import { openDatabase } from "./db.ts";
 import { devnetEndpoint } from "./devnet-endpoint.ts";
 import { isMainModule } from "./main-module.ts";
@@ -52,13 +56,16 @@ export async function start(
   // whether or not check-in is wired, and the error does not echo it (devnet-endpoint.ts).
   const rpcEndpoint = devnetEndpoint(env.SOLANA_RPC_URL);
   // Check-in (E-05) binds registrations with E-07's code under REGISTRATION_SALT and mints with
-  // E-06's mintPass at that endpoint, paid for by the organizer key. With REGISTRATION_SALT unset
-  // or empty, POST /checkins answers 503; a set but short salt stops start-up, as it stops the
-  // import tool.
+  // E-06's mintPass at that endpoint, paid for by the organizer key, at a mint address derived
+  // from PASS_MINT_SECRET. With REGISTRATION_SALT unset or empty, POST /checkins answers 503; a
+  // set but short salt stops start-up, as it stops the import tool, and with the salt set a
+  // missing or short PASS_MINT_SECRET stops it too.
   const salt =
     env.REGISTRATION_SALT === undefined || env.REGISTRATION_SALT === ""
       ? undefined
       : loadRegistrationSalt(env.REGISTRATION_SALT);
+  const mintSecret =
+    salt === undefined ? undefined : loadPassMintSecret(env.PASS_MINT_SECRET);
   const port = parsePort(env.API_PORT);
   const host = env.API_HOST || "127.0.0.1";
   const db = openDatabase(env.DATABASE_PATH || "limen.db");
@@ -81,11 +88,12 @@ export async function start(
     stationDisplayToken,
     nowMs: () => Date.now(),
     checkin:
-      salt === undefined
+      salt === undefined || mintSecret === undefined
         ? undefined
         : {
             registrations: registrationsFrom(db, salt),
             minter: devnetMinter(rpcEndpoint, organizerKey),
+            mintSecret,
           },
     reports: {
       triageToken: env.TRIAGE_TOKEN || undefined,

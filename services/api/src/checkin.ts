@@ -23,10 +23,12 @@
 // session still open; the wallet's signature over the message; the registration (the wallet's
 // binding, or a first binding of registration_id); one check-in per registration per session.
 // Only then does it mint.
+import { createHmac, createPrivateKey, createPublicKey } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { Connection } from "@solana/web3.js";
 
+import { encodeBase58 } from "./base58.ts";
 import { devnetEndpoint } from "./devnet-endpoint.ts";
 import type { OrganizerKey } from "./organizer-key.ts";
 import {
@@ -65,16 +67,76 @@ export interface CheckinRegistrations {
     | { readonly ok: false; readonly reason: BindRefusal };
 }
 
-/** What E-05 needs from E-06 (E-06: mintPass). */
+/** What E-05 needs from E-06 (E-06: mintPass and passMintState). */
 export interface PassMinter {
+  /**
+   * Mints the pass to `wallet` at the address of the keypair `seed` gives, and confirms it. It
+   * may fail before or after the pass lands; the caller reads `state` to tell which.
+   */
   mint(
     wallet: string,
+    seed: Uint8Array,
     details: {
       readonly station: string;
       readonly session: string;
       readonly checkedInAt: number;
     },
-  ): Promise<{ readonly mint: string; readonly signature: string }>;
+  ): Promise<{ readonly signature: string }>;
+  /** Reads the chain at `mint`: no account, the pass held by `wallet`, or anything else. */
+  state(wallet: string, mint: string): Promise<"absent" | "minted" | "other">;
+}
+
+/**
+ * The 32-byte seed of a check-in's pass mint keypair: HMAC-SHA256 under PASS_MINT_SECRET of
+ * "limen:pass-mint:v1:<session>:<registration hash>". The same check-in always gets the same
+ * mint address, so a retry cannot mint a second pass: a second createAccount at that address
+ * fails. The registration hash is 64 hex characters, so the text names one session and hash.
+ */
+export function mintSeed(
+  secret: string,
+  session: string,
+  regHash: string,
+): Buffer {
+  return createHmac("sha256", secret)
+    .update(`limen:pass-mint:v1:${session}:${regHash}`, "utf8")
+    .digest();
+}
+
+/** The shortest PASS_MINT_SECRET accepted, as for REGISTRATION_SALT. */
+const MIN_MINT_SECRET_LENGTH = 32;
+
+/**
+ * Reads PASS_MINT_SECRET. Unset, empty or shorter than 32 characters stops start-up, and the
+ * error never echoes the value. Changing the secret moves every pending pass to an address this
+ * API can no longer derive, so it is set once.
+ */
+export function loadPassMintSecret(value: string | undefined): string {
+  if (value === undefined || value.length < MIN_MINT_SECRET_LENGTH) {
+    throw new Error(
+      `PASS_MINT_SECRET must be set to at least ${MIN_MINT_SECRET_LENGTH} characters (${value === undefined || value === "" ? "it is not set" : "it is too short"}). To add one to .env without printing it, run from the repository root: printf '\\nPASS_MINT_SECRET=%s\\n' "$(openssl rand -base64 32)" >> .env`,
+    );
+  }
+  return value;
+}
+
+// DER header of a PKCS #8 Ed25519 private key holding a 32-byte seed (RFC 8410).
+const PKCS8_ED25519_PREFIX = Buffer.from(
+  "302e020100300506032b657004220420",
+  "hex",
+);
+
+/** The base58 address of the Ed25519 keypair `seed` gives, as Keypair.fromSeed derives it. */
+export function mintAddressFromSeed(seed: Uint8Array): string {
+  const publicKey = createPublicKey(
+    createPrivateKey({
+      key: Buffer.concat([PKCS8_ED25519_PREFIX, seed]),
+      format: "der",
+      type: "pkcs8",
+    }),
+  );
+  return encodeBase58(
+    Buffer.from(publicKey.export({ format: "jwk" }).x ?? "", "base64url"),
+  );
 }
 
 /** E-07's registration binding on `db`, with registration IDs hashed under `salt`. */
@@ -109,40 +171,37 @@ export function devnetMinter(
   connect?: (url: string) => Promise<Connection>,
 ): PassMinter {
   const endpoint = devnetEndpoint(url);
-  let ready: Promise<{
-    mint: (
-      wallet: string,
-      details: Parameters<PassMinter["mint"]>[1],
-    ) => Promise<{ mint: string; signature: string }>;
-  }> | null = null;
-  const prepare = async () => {
+  const prepare = async (): Promise<PassMinter> => {
     const { Keypair, PublicKey } = await import("@solana/web3.js");
-    const { connectDevnet, mintPass } = await import("./pass-mint.ts");
+    const { connectDevnet, mintPass, passMintState } =
+      await import("./pass-mint.ts");
     const connection = await (connect ?? connectDevnet)(endpoint);
     const payer = Keypair.fromSecretKey(organizer.secretKeyBytes());
     return {
-      mint: async (
-        wallet: string,
-        details: Parameters<PassMinter["mint"]>[1],
-      ) => {
+      async mint(wallet, seed, details) {
         const minted = await mintPass(
           connection,
           payer,
           new PublicKey(wallet),
           details,
+          Keypair.fromSeed(seed),
         );
-        return { mint: minted.mint.toBase58(), signature: minted.signature };
+        return { signature: minted.signature };
       },
+      state: (wallet, mint) =>
+        passMintState(connection, new PublicKey(mint), new PublicKey(wallet)),
     };
   };
+  let ready: Promise<PassMinter> | null = null;
+  const minter = (): Promise<PassMinter> =>
+    (ready ??= prepare().catch((err: unknown) => {
+      ready = null;
+      throw err;
+    }));
   return {
-    async mint(wallet, details) {
-      ready ??= prepare().catch((err: unknown) => {
-        ready = null;
-        throw err;
-      });
-      return (await ready).mint(wallet, details);
-    },
+    mint: async (wallet, seed, details) =>
+      (await minter()).mint(wallet, seed, details),
+    state: async (wallet, mint) => (await minter()).state(wallet, mint),
   };
 }
 
@@ -152,6 +211,8 @@ export interface CheckinDeps {
   readonly allowlist: ReadonlySet<string>;
   readonly registrations: CheckinRegistrations;
   readonly minter: PassMinter;
+  /** PASS_MINT_SECRET, which each pass's mint keypair is derived from (mintSeed). */
+  readonly mintSecret: string;
 }
 
 export interface CheckinOutcome {
@@ -378,12 +439,15 @@ export async function checkIn(
     regHash = existing;
   }
 
-  let checkinId: number;
+  // The pass's mint address is fixed by the check-in, and recorded with it before anything is sent.
+  const seed = mintSeed(deps.mintSecret, payload.session, regHash);
+  const mint = mintAddressFromSeed(seed);
+  let reservation: Reservation;
   try {
-    checkinId = Number(
+    const id = Number(
       deps.db
         .prepare(
-          "INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          "INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, mint, mint_status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
         )
         .run(
           payload.session,
@@ -391,42 +455,97 @@ export async function checkIn(
           regHash,
           req.wallet,
           payload.nonce,
+          mint,
           now,
         ).lastInsertRowid,
     );
+    reservation = { id, station: payload.station, checkedInAt: now };
   } catch (err) {
     if (
-      /UNIQUE constraint failed: checkins\.session_id, checkins\.reg_hash/.test(
+      !/UNIQUE constraint failed: checkins\.session_id, checkins\.reg_hash/.test(
         String(err),
       )
     ) {
-      return refuse(409, "already_checked_in");
+      throw err;
     }
-    throw err;
+    const existing = deps.db
+      .prepare(
+        "SELECT id, station_id, created_at, mint, mint_status FROM checkins WHERE session_id = ? AND reg_hash = ?",
+      )
+      .get(payload.session, regHash) as {
+      id: number;
+      station_id: string;
+      created_at: number;
+      mint: string | null;
+      mint_status: string | null;
+    };
+    if (existing.mint_status !== "pending")
+      return refuse(409, "already_checked_in");
+    // A reservation recorded under another secret names a mint this request cannot derive, so it
+    // is left for a person rather than minted at a second address.
+    if (existing.mint !== mint) return refuse(502, "mint_failed");
+    reservation = {
+      id: existing.id,
+      station: existing.station_id,
+      checkedInAt: existing.created_at,
+      earlier: true,
+    };
   }
+  return completePass(deps, reservation, req.wallet, payload.session, seed);
+}
 
-  try {
-    const minted = await deps.minter.mint(req.wallet, {
-      station: payload.station,
-      session: payload.session,
-      checkedInAt: now,
-    });
+/** A reserved check-in: its row, and the station and time its pass carries. */
+interface Reservation {
+  readonly id: number;
+  readonly station: string;
+  readonly checkedInAt: number;
+  /** True when an earlier request made the reservation, so its mint may already be on chain. */
+  readonly earlier?: boolean;
+}
+
+/**
+ * Brings a pending reservation to a pass. For a reservation an earlier request made, the chain is
+ * read first: a pass already held by the wallet is recorded as done without minting, and an
+ * account at the address that is not that pass is left pending. Otherwise the pass is minted at
+ * the reservation's address. Any failure leaves the reservation pending, never deleted, and
+ * answers 502; the next request for this check-in reads the chain again.
+ */
+async function completePass(
+  deps: CheckinDeps,
+  reservation: Reservation,
+  wallet: string,
+  session: string,
+  seed: Uint8Array,
+): Promise<CheckinOutcome> {
+  const mint = mintAddressFromSeed(seed);
+  const done = (signature: string | null): CheckinOutcome => {
     deps.db
-      .prepare("UPDATE checkins SET mint = ? WHERE id = ?")
-      .run(minted.mint, checkinId);
+      .prepare("UPDATE checkins SET mint_status = 'done' WHERE id = ?")
+      .run(reservation.id);
     return {
       status: 201,
       body: {
         status: "checked_in",
-        station: payload.station,
-        session: payload.session,
-        mint: minted.mint,
-        signature: minted.signature,
+        station: reservation.station,
+        session,
+        mint,
+        signature,
       },
     };
+  };
+  try {
+    if (reservation.earlier === true) {
+      const state = await deps.minter.state(wallet, mint);
+      if (state === "minted") return done(null);
+      if (state === "other") return refuse(502, "mint_failed");
+    }
+    const { signature } = await deps.minter.mint(wallet, seed, {
+      station: reservation.station,
+      session,
+      checkedInAt: reservation.checkedInAt,
+    });
+    return done(signature);
   } catch {
-    // No pass exists, so the check-in is undone and the participant can try again.
-    deps.db.prepare("DELETE FROM checkins WHERE id = ?").run(checkinId);
     return refuse(502, "mint_failed");
   }
 }

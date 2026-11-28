@@ -22,16 +22,19 @@ import type { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 import { ed25519 } from "@noble/curves/ed25519.js";
-import { PublicKey, type Connection } from "@solana/web3.js";
+import { Keypair, PublicKey, type Connection } from "@solana/web3.js";
 
 import {
   checkIn,
   checkinMessage,
   devnetMinter,
+  mintAddressFromSeed,
+  mintSeed,
   registrationsFrom,
   walletKeyAcceptable,
   walletSignatureValid,
   type CheckinDeps,
+  type PassMinter,
 } from "./checkin.ts";
 import { openDatabase } from "./db.ts";
 import { start } from "./index.ts";
@@ -78,6 +81,8 @@ const STRANGER = rfcSigner(
 const T = 1_795_000_000;
 /** A test value of REGISTRATION_SALT, at least 32 characters. */
 const SALT = "test-registration-salt-0123456789abcdef";
+/** A test value of PASS_MINT_SECRET, at least 32 characters. */
+const MINT_SECRET = "test-pass-mint-secret-0123456789abcdef";
 /** RFC 8032 TEST 1 as a Solana keypair file: 32-byte seed, then the public key. */
 const RFC_KEYPAIR = [
   ...Buffer.from(
@@ -275,35 +280,59 @@ function nodeVerifies(
 }
 
 /**
- * mintDouble: a test double for E-06's devnet mint (mintPass), used wherever a check-in would
- * succeed and so spend devnet SOL. It records each call and can be made to fail.
+ * mintDouble: a test double for E-06's devnet mint (mintPass) and its chain read, used wherever a
+ * check-in would succeed and so spend devnet SOL. It keeps its own chain, each mint address with
+ * the wallet holding it, and records every mint call. A second mint at an address already on its
+ * chain fails, as a second createAccount does. failNextMint() makes the next mint fail before
+ * anything lands; landThenFailNextMint() makes it land and then fail, as a lost confirmation does.
  */
 function mintDouble() {
-  const calls: { wallet: string; details: unknown }[] = [];
-  let failNext = false;
-  return {
-    calls,
-    failNextMint: () => {
-      failNext = true;
+  const calls: { wallet: string; mint: string; details: unknown }[] = [];
+  const chain = new Map<string, string>();
+  let next: "ok" | "fail" | "land-then-fail" = "ok";
+  const minter: PassMinter = {
+    async mint(wallet, seed, details) {
+      const mint = mintAddressFromSeed(seed);
+      calls.push({ wallet, mint, details });
+      const mode = next;
+      next = "ok";
+      if (mode === "fail") throw new Error("devnet unavailable");
+      if (chain.has(mint)) throw new Error("account already in use");
+      chain.set(mint, wallet);
+      if (mode === "land-then-fail") throw new Error("confirmation timed out");
+      return { signature: `sig-${calls.length}` };
     },
-    minter: {
-      mint: async (
-        address: string,
-        details: { station: string; session: string; checkedInAt: number },
-      ) => {
-        calls.push({ wallet: address, details });
-        if (failNext) {
-          failNext = false;
-          throw new Error("devnet unavailable");
-        }
-        return {
-          mint: `mint-${calls.length}`,
-          signature: `sig-${calls.length}`,
-        };
-      },
+    async state(wallet, mint) {
+      const holder = chain.get(mint);
+      if (holder === undefined) return "absent";
+      return holder === wallet ? "minted" : "other";
     },
   };
+  return {
+    calls,
+    chain,
+    failNextMint: () => {
+      next = "fail";
+    },
+    landThenFailNextMint: () => {
+      next = "land-then-fail";
+    },
+    minter,
+  };
 }
+
+/** The registration hash E-07 stores for a test registration ID. */
+function regHashOf(registrationId: string): string {
+  const hash = registrationHash(SALT, registrationId);
+  assert.ok(hash !== null);
+  return hash;
+}
+
+/** The mint address a check-in of this registration in this session targets. */
+const passAddress = (session: string, registrationId: string) =>
+  mintAddressFromSeed(
+    mintSeed(MINT_SECRET, session, regHashOf(registrationId)),
+  );
 
 function setup() {
   const db = openDatabase(":memory:");
@@ -323,6 +352,7 @@ function setup() {
     allowlist: stationAllowlist([ORGANIZER.publicKey]),
     registrations: registrationsFrom(db, SALT),
     minter: minting.minter,
+    mintSecret: MINT_SECRET,
   };
   return { db, deps, alice, bob, fresh, minting };
 }
@@ -385,6 +415,7 @@ test("the wallet signs this exact check-in message", () => {
 
 test("a first check-in binds the registration, mints once and records the pass", async () => {
   const { db, deps, alice, minting } = setup();
+  const mint = passAddress("day-2", "LMN-0001");
   const outcome = await checkInAt(deps, request(alice, "LMN-0001"), T + 5);
   assert.deepEqual(outcome, {
     status: 201,
@@ -392,13 +423,14 @@ test("a first check-in binds the registration, mints once and records the pass",
       status: "checked_in",
       station: "st-front",
       session: "day-2",
-      mint: "mint-1",
+      mint,
       signature: "sig-1",
     },
   });
   assert.deepEqual(minting.calls, [
     {
       wallet: alice.address,
+      mint,
       details: { station: "st-front", session: "day-2", checkedInAt: T + 5 },
     },
   ]);
@@ -406,7 +438,7 @@ test("a first check-in binds the registration, mints once and records the pass",
     {
       ...(db
         .prepare(
-          "SELECT session_id, station_id, reg_hash, wallet, mint FROM checkins",
+          "SELECT session_id, station_id, reg_hash, wallet, mint, mint_status FROM checkins",
         )
         .get() as object),
     },
@@ -415,9 +447,29 @@ test("a first check-in binds the registration, mints once and records the pass",
       station_id: "st-front",
       reg_hash: registrationHash(SALT, "LMN-0001"),
       wallet: alice.address,
-      mint: "mint-1",
+      mint,
+      mint_status: "done",
     },
   );
+});
+
+test("the pass's mint key is derived from PASS_MINT_SECRET, the session and the registration, as Solana derives it from a seed", () => {
+  const seed = mintSeed(MINT_SECRET, "day-2", regHashOf("LMN-0001"));
+  assert.equal(seed.length, 32);
+  assert.equal(
+    mintAddressFromSeed(seed),
+    Keypair.fromSeed(seed).publicKey.toBase58(),
+  );
+  // The same inputs give the same seed; any one changed gives another.
+  const regHash = regHashOf("LMN-0001");
+  const seeds = [
+    mintSeed(MINT_SECRET, "day-2", regHash),
+    mintSeed(MINT_SECRET, "day-3", regHash),
+    mintSeed(MINT_SECRET, "day-2", regHashOf("LMN-0002")),
+    mintSeed(`${MINT_SECRET}x`, "day-2", regHash),
+  ].map((s) => s.toString("hex"));
+  assert.equal(seeds[0], seed.toString("hex"));
+  assert.equal(new Set(seeds).size, 4);
 });
 
 test("E-05 done test: a second check-in in the same session is refused as already_checked_in", async () => {
@@ -642,22 +694,140 @@ test("a QR from a key off the allowlist, or a closed session, is refused before 
   assert.equal(deps.registrations.bindingOf(alice.address), null);
 });
 
-test("a failed mint undoes the check-in, so the participant can try again", async () => {
+/** The check-in rows' mint address and status. */
+const mintRows = (db: DatabaseSync) =>
+  (
+    db.prepare("SELECT mint, mint_status FROM checkins").all() as {
+      mint: string;
+      mint_status: string;
+    }[]
+  ).map((r) => ({ ...r }));
+
+/** A later request from the same wallet, relying on its binding, on a fresh QR. */
+const retryAt = (d: CheckinDeps, w: Wallet, seconds: number) =>
+  checkInAt(d, request(w, null, { issuedAt: seconds - 2 }), seconds);
+
+test("a mint that fails before it lands leaves the check-in pending, and a retry mints to the same address", async () => {
   const { db, deps, alice, minting } = setup();
+  const mint = passAddress("day-2", "LMN-0001");
   minting.failNextMint();
   assert.deepEqual(await checkInAt(deps, request(alice, "LMN-0001"), T + 5), {
     status: 502,
     body: { error: "mint_failed" },
   });
-  assert.equal(checkinCount(db), 0);
-  // The binding stays, so the retry needs no registration ID.
-  const retry = await checkInAt(
-    deps,
-    request(alice, null, { issuedAt: T + 10 }),
-    T + 12,
-  );
+  assert.deepEqual(mintRows(db), [{ mint, mint_status: "pending" }]);
+  const retry = await retryAt(deps, alice, T + 12);
   assert.equal(retry.status, 201);
-  assert.equal(minting.calls.length, 2);
+  assert.equal(retry.body.mint, mint);
+  assert.deepEqual(mintRows(db), [{ mint, mint_status: "done" }]);
+  assert.deepEqual(
+    [...new Set(minting.calls.map((c) => c.mint))],
+    [mint],
+    "one mint address is ever used",
+  );
+  assert.deepEqual([...minting.chain.keys()], [mint]);
+});
+
+test("a mint that lands but whose confirmation fails is not minted twice: a retry reads the chain and completes", async () => {
+  const { db, deps, alice, minting } = setup();
+  const mint = passAddress("day-2", "LMN-0001");
+  minting.landThenFailNextMint();
+  assert.deepEqual(await checkInAt(deps, request(alice, "LMN-0001"), T + 5), {
+    status: 502,
+    body: { error: "mint_failed" },
+  });
+  assert.deepEqual(mintRows(db), [{ mint, mint_status: "pending" }]);
+  const retry = await retryAt(deps, alice, T + 12);
+  assert.deepEqual(retry, {
+    status: 201,
+    body: {
+      status: "checked_in",
+      station: "st-front",
+      session: "day-2",
+      mint,
+      signature: null,
+    },
+  });
+  assert.deepEqual(mintRows(db), [{ mint, mint_status: "done" }]);
+  assert.equal(minting.calls.length, 1, "the retry mints nothing");
+  assert.deepEqual([...minting.chain.keys()], [mint]);
+});
+
+test("a mint that lands but whose recording UPDATE fails is not minted twice", async () => {
+  const { db, deps, alice, minting } = setup();
+  const mint = passAddress("day-2", "LMN-0001");
+  db.exec(`CREATE TEMP TRIGGER no_update BEFORE UPDATE ON checkins
+    BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END;`);
+  const first = await checkInAt(deps, request(alice, "LMN-0001"), T + 5);
+  assert.equal(first.status, 502);
+  db.exec("DROP TRIGGER no_update");
+  const retry = await retryAt(deps, alice, T + 12);
+  assert.equal(retry.status, 201);
+  assert.equal(retry.body.mint, mint);
+  assert.equal(minting.calls.length, 1, "the retry mints nothing");
+  assert.deepEqual([...minting.chain.keys()], [mint]);
+  assert.deepEqual(mintRows(db), [{ mint, mint_status: "done" }]);
+});
+
+test("a reservation left with no pass, as after a crash before the mint was sent, is completed by the next request", async () => {
+  const { db, deps, alice, minting } = setup();
+  const mint = passAddress("day-2", "LMN-0001");
+  // The binding and the reservation exist, and nothing was sent.
+  assert.equal(deps.registrations.bind("LMN-0001", alice.address, T).ok, true);
+  db.prepare(
+    "INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, mint, mint_status, created_at) VALUES ('day-2', 'st-front', ?, ?, 'n', ?, 'pending', ?)",
+  ).run(registrationHash(SALT, "LMN-0001"), alice.address, mint, T);
+  const next = await retryAt(deps, alice, T + 12);
+  assert.equal(next.status, 201);
+  assert.equal(next.body.mint, mint);
+  assert.deepEqual(mintRows(db), [{ mint, mint_status: "done" }]);
+  assert.deepEqual(
+    minting.calls.map((c) => c.mint),
+    [mint],
+  );
+});
+
+test("a pending check-in whose address holds something other than the wallet's pass answers 502, mints nothing and stays pending", async () => {
+  const { db, deps, alice, bob, minting } = setup();
+  const mint = passAddress("day-2", "LMN-0001");
+  minting.failNextMint();
+  assert.equal(
+    (await checkInAt(deps, request(alice, "LMN-0001"), T + 5)).status,
+    502,
+  );
+  // The address now holds a pass, but not the checking-in wallet's.
+  minting.chain.set(mint, bob.address);
+  assert.deepEqual(await retryAt(deps, alice, T + 12), {
+    status: 502,
+    body: { error: "mint_failed" },
+  });
+  assert.equal(minting.calls.length, 1, "the retry mints nothing");
+  assert.deepEqual(mintRows(db), [{ mint, mint_status: "pending" }]);
+});
+
+test("a pending check-in recorded under another PASS_MINT_SECRET answers 502, mints nothing and stays pending", async () => {
+  const { db, deps, alice, minting } = setup();
+  minting.failNextMint();
+  assert.equal(
+    (
+      await checkInAt(
+        { ...deps, mintSecret: "another-secret-of-at-least-32-characters" },
+        request(alice, "LMN-0001"),
+        T + 5,
+      )
+    ).status,
+    502,
+  );
+  const [recorded] = mintRows(db);
+  assert.notEqual(recorded?.mint, passAddress("day-2", "LMN-0001"));
+  assert.deepEqual(await retryAt(deps, alice, T + 12), {
+    status: 502,
+    body: { error: "mint_failed" },
+  });
+  assert.equal(minting.calls.length, 1, "the retry mints nothing");
+  assert.deepEqual(mintRows(db), [
+    { mint: recorded?.mint, mint_status: "pending" },
+  ]);
 });
 
 test("a malformed request is refused by field", async () => {
@@ -723,7 +893,11 @@ test("POST /checkins runs the check-in end to end, and answers 503 on a server b
   };
   const wired = createApiServer({
     ...base,
-    checkin: { registrations: deps.registrations, minter: deps.minter },
+    checkin: {
+      registrations: deps.registrations,
+      minter: deps.minter,
+      mintSecret: MINT_SECRET,
+    },
   });
   const unwired = createApiServer(base);
   const urls: string[] = [];
@@ -778,7 +952,11 @@ test("the API reads one millisecond clock: a server built without nowMs is refus
     stationSigner: ORGANIZER,
     stationDisplayToken: "test-display-token-0123456789abcdef",
     now: () => T + 60,
-    checkin: { registrations: deps.registrations, minter: deps.minter },
+    checkin: {
+      registrations: deps.registrations,
+      minter: deps.minter,
+      mintSecret: MINT_SECRET,
+    },
   } as unknown as Parameters<typeof createApiServer>[0];
   assert.throws(() => createApiServer(secondsOnly), {
     message: "createApiServer needs nowMs, the API's millisecond clock",
@@ -793,7 +971,11 @@ test("POST /checkins checks the QR window against the millisecond clock: at 60.5
     stationSigner: ORGANIZER,
     stationDisplayToken: "test-display-token-0123456789abcdef",
     nowMs: () => (T + 60) * 1000 + 500,
-    checkin: { registrations: deps.registrations, minter: deps.minter },
+    checkin: {
+      registrations: deps.registrations,
+      minter: deps.minter,
+      mintSecret: MINT_SECRET,
+    },
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
@@ -849,7 +1031,11 @@ test("the running API checks in with E-07's binding: refusals only the salted bi
   const started: { server: { close(cb: () => void): void } }[] = [];
   try {
     const wired = await start(
-      env({ REGISTRATION_SALT: SALT, API_PORT: String(await freePort()) }),
+      env({
+        REGISTRATION_SALT: SALT,
+        PASS_MINT_SECRET: MINT_SECRET,
+        API_PORT: String(await freePort()),
+      }),
     );
     started.push(wired);
     const unwired = await start(env({ API_PORT: String(await freePort()) }));
@@ -897,6 +1083,25 @@ test("the running API checks in with E-07's binding: refusals only the salted bi
           err.message,
         ) && !err.message.includes("short-salt"),
     );
+    // With check-in wired, PASS_MINT_SECRET is required too, and the message does not echo it.
+    for (const [secret, why] of [
+      [undefined, "it is not set"],
+      ["short-secret", "it is too short"],
+    ] as const) {
+      await assert.rejects(
+        start(
+          env({
+            REGISTRATION_SALT: SALT,
+            ...(secret === undefined ? {} : { PASS_MINT_SECRET: secret }),
+            API_PORT: String(await freePort()),
+          }),
+        ),
+        (err: Error) =>
+          err.message.startsWith(
+            `PASS_MINT_SECRET must be set to at least 32 characters (${why}).`,
+          ) && !err.message.includes("short-secret"),
+      );
+    }
   } finally {
     for (const s of started)
       await new Promise<void>((resolve) => s.server.close(() => resolve()));
@@ -924,10 +1129,10 @@ test("the API refuses a SOLANA_RPC_URL that is not the allowlisted devnet endpoi
       "http://127.0.0.1:8899",
       "https://rpc.example.test/?api-key=secret-value-0123",
     ]) {
-      for (const salt of [{ REGISTRATION_SALT: SALT }, {}] as Record<
-        string,
-        string
-      >[]) {
+      for (const salt of [
+        { REGISTRATION_SALT: SALT, PASS_MINT_SECRET: MINT_SECRET },
+        {},
+      ] as Record<string, string>[]) {
         // A server that starts is kept so it can be closed, and then the test fails.
         const outcome = await start(
           env({
@@ -959,6 +1164,7 @@ test("the API refuses a SOLANA_RPC_URL that is not the allowlisted devnet endpoi
         await start(
           env({
             REGISTRATION_SALT: SALT,
+            PASS_MINT_SECRET: MINT_SECRET,
             ...extra,
             API_PORT: String(await freePort()),
           }),
@@ -1018,7 +1224,10 @@ test("the minter reaches only the allowlisted devnet endpoint: another URL is re
       { status: 502, body: { error: "mint_failed" } },
     );
     assert.deepEqual(calls, ["getGenesisHash"]);
-    assert.equal(checkinCount(db), 0);
+    // Nothing was sent; the reservation stays pending for a later request.
+    assert.deepEqual(mintRows(db), [
+      { mint: passAddress("day-2", "LMN-0001"), mint_status: "pending" },
+    ]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

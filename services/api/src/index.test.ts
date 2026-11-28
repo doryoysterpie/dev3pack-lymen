@@ -404,7 +404,7 @@ test("start-up with a good key file serves health with the API version", async (
     assert.deepEqual(await res.json(), {
       status: "ok",
       version: "0.1.0",
-      schema_version: 3,
+      schema_version: 4,
     });
   } finally {
     child.kill();

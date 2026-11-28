@@ -21,6 +21,7 @@ import {
 import {
   Keypair,
   Transaction,
+  type Connection,
   type PublicKey,
   type TransactionInstruction,
 } from "@solana/web3.js";
@@ -29,7 +30,9 @@ import { FailedTransactionMetadata, LiteSVM } from "litesvm";
 import {
   buildPassMintTransaction,
   buildRevokeTransaction,
+  DEVNET_GENESIS_HASH,
   passAccountLen,
+  passMintState,
   passTokenAccount,
 } from "./pass-mint.ts";
 
@@ -258,4 +261,52 @@ test("in-process SVM: a key that is not the permanent delegate cannot burn the p
     "a stranger's burn must fail",
   );
   assert.equal(balance(svm, mint, holder.publicKey), 1n);
+});
+
+/** A Connection stand-in that answers devnet's genesis hash and reads accounts from litesvm. */
+function svmConnection(svm: LiteSVM): Connection {
+  return {
+    getGenesisHash: async () => DEVNET_GENESIS_HASH,
+    getAccountInfo: async (address: PublicKey) => {
+      const info = svm.getAccount(address);
+      return info === null ? null : { ...info, data: Buffer.from(info.data) };
+    },
+  } as unknown as Connection;
+}
+
+test("in-process SVM: passMintState reads a pass as absent, minted to its holder, or other", async () => {
+  const { svm, organizer, mint, holder } = setup();
+  const connection = svmConnection(svm);
+  assert.equal(
+    await passMintState(
+      connection,
+      Keypair.generate().publicKey,
+      holder.publicKey,
+    ),
+    "absent",
+  );
+  assert.equal(
+    await passMintState(connection, mint, holder.publicKey),
+    "minted",
+  );
+  assert.equal(
+    await passMintState(connection, mint, Keypair.generate().publicKey),
+    "other",
+  );
+  // Burned by the organizer as permanent delegate, its supply is 0.
+  const burned = send(
+    svm,
+    organizer,
+    [],
+    ...buildRevokeTransaction({
+      organizer: organizer.publicKey,
+      mint,
+      holder: holder.publicKey,
+    }).instructions,
+  );
+  assert.ok(!(burned instanceof FailedTransactionMetadata));
+  assert.equal(
+    await passMintState(connection, mint, holder.publicKey),
+    "other",
+  );
 });

@@ -17,6 +17,7 @@ import {
   SystemInstruction,
   SystemProgram,
   type Connection,
+  type Transaction,
 } from "@solana/web3.js";
 
 import {
@@ -359,4 +360,30 @@ test("mintPass and revokePass refuse a cluster whose genesis hash is not devnet'
     "sendTransaction",
     "confirmTransaction",
   ]);
+});
+
+test("mintPass creates the pass at the mint keypair it is given", async () => {
+  const given = Keypair.generate();
+  let sent: Transaction | undefined;
+  const connection = {
+    getGenesisHash: async () => DEVNET_GENESIS_HASH,
+    getMinimumBalanceForRentExemption: async () => 4_181_760,
+    sendTransaction: async (tx: Transaction) => {
+      sent = tx;
+      return "stand-in-signature";
+    },
+    confirmTransaction: async () => ({
+      context: { slot: 1 },
+      value: { err: null },
+    }),
+  } as unknown as Connection;
+  const minted = await mintPass(connection, organizer, holder, DETAILS, given);
+  assert.equal(minted.mint.toBase58(), given.publicKey.toBase58());
+  assert.ok(sent !== undefined);
+  assert.equal(
+    SystemInstruction.decodeCreateAccount(
+      sent.instructions[0]!,
+    ).newAccountPubkey.toBase58(),
+    given.publicKey.toBase58(),
+  );
 });

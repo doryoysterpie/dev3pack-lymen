@@ -31,6 +31,7 @@ const OWED_SCHEMA: Record<string, string[]> = {
     "station_nonce",
     "mint",
     "created_at",
+    "mint_status",
   ],
   evidence_bundles: [
     "sighting_id",
@@ -80,14 +81,14 @@ function withTempDir(fn: (dir: string) => void): void {
   }
 }
 
-test("an empty database migrates to schema version 3 with exactly the seven owed tables", () => {
+test("an empty database migrates to schema version 4 with exactly the seven owed tables", () => {
   const db = new DatabaseSync(":memory:");
   assert.equal(schemaVersion(db), 0);
   assert.deepEqual(tables(db), []);
 
-  assert.equal(migrate(db), 3);
-  assert.equal(schemaVersion(db), 3);
-  assert.equal(MIGRATIONS.length, 3);
+  assert.equal(migrate(db), 4);
+  assert.equal(schemaVersion(db), 4);
+  assert.equal(MIGRATIONS.length, 4);
   assert.deepEqual(tables(db), Object.keys(OWED_SCHEMA).sort());
   for (const [table, owed] of Object.entries(OWED_SCHEMA)) {
     assert.deepEqual(columns(db, table), owed, `columns of ${table}`);
@@ -98,14 +99,14 @@ test("an empty database file on disk migrates, and reopening it does not migrate
   withTempDir((dir) => {
     const path = join(dir, "limen.db");
     const first = openDatabase(path);
-    assert.equal(schemaVersion(first), 3);
+    assert.equal(schemaVersion(first), 4);
     first
       .prepare("INSERT INTO stations (id, name, created_at) VALUES (?, ?, ?)")
       .run("st-1", "Front desk", 1_700_000_000);
     first.close();
 
     const second = openDatabase(path);
-    assert.equal(schemaVersion(second), 3);
+    assert.equal(schemaVersion(second), 4);
     const row = second
       .prepare("SELECT name FROM stations WHERE id = ?")
       .get("st-1") as {
@@ -121,7 +122,7 @@ test("a database from a newer build is refused, not run against", () => {
   db.exec("PRAGMA user_version = 99");
   assert.throws(
     () => migrate(db),
-    /schema version 99 is newer than this build supports \(3\)/,
+    /schema version 99 is newer than this build supports \(4\)/,
   );
 });
 
@@ -173,7 +174,7 @@ test("a version 1 database migrates to the latest version and keeps its rows", (
   db.exec(
     "INSERT INTO sightings (device_hash, qr_text, created_at) VALUES ('d-1', 'qr', 1)",
   );
-  assert.equal(migrate(db), 3);
+  assert.equal(migrate(db), 4);
   const row = db.prepare("SELECT qr_text FROM sightings").get() as {
     qr_text: string;
   };
@@ -233,7 +234,7 @@ test("migration 3 keeps an E-02 case row and the sightings foreign key to cases"
   db.exec(
     "INSERT INTO cases (id, status, created_at, updated_at) VALUES (7, 'escalated', 1, 2)",
   );
-  assert.equal(migrate(db), 3);
+  assert.equal(migrate(db), 4);
   const row = db.prepare("SELECT * FROM cases").get() as Record<
     string,
     unknown

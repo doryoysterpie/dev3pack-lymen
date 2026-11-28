@@ -116,6 +116,13 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE cases_new RENAME TO cases;
   CREATE INDEX sightings_by_case ON sightings (case_id);
   `,
+  // E-05: a check-in's pass mint. The mint address is recorded when the check-in is reserved,
+  // before anything is sent: 'pending' until the pass is known to be on chain, then 'done'. A
+  // pending row is never deleted; a later request reads the chain and completes it.
+  `
+  ALTER TABLE checkins ADD COLUMN mint_status TEXT
+    CHECK (mint_status IS NULL OR (mint_status IN ('pending', 'done') AND mint IS NOT NULL));
+  `,
 ];
 
 /** The number of migrations the database has applied, read from PRAGMA user_version. */
