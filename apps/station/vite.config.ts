@@ -2,6 +2,12 @@
 // servers forward those requests to the limen API, so the page and the API share one origin.
 // STATION_API_URL, from the shell or the repository's root .env, overrides the API address
 // (default http://127.0.0.1:8787). It is read here only and never reaches the page.
+//
+// The dev server serves files from the whole workspace, the repository root, by /@fs/ path, so
+// a station link file left in the repository's .station-links/ folder could be read by any page
+// on localhost. The link tool now refuses to write inside the repository, and the dev server
+// also denies that folder. Setting server.fs.deny replaces Vite's own list, so Vite 8.3.8's
+// default entries are repeated here first.
 import { fileURLToPath } from "node:url";
 
 import { defineConfig, loadEnv } from "vite";
@@ -22,7 +28,23 @@ export default defineConfig(({ mode }) => {
     },
   };
   return {
-    server: { host: "127.0.0.1", port: 5173, strictPort: true, proxy },
+    server: {
+      host: "127.0.0.1",
+      port: 5173,
+      strictPort: true,
+      proxy,
+      fs: {
+        deny: [
+          ".env",
+          ".env.*",
+          "*.{crt,pem,key,p12,pfx,cer,der}",
+          ".npmrc",
+          ".yarnrc.yml",
+          "**/.git/**",
+          "**/.station-links/**",
+        ],
+      },
+    },
     preview: { host: "127.0.0.1", port: 4173, strictPort: true, proxy },
   };
 });
