@@ -348,6 +348,7 @@ const refuse = (
     | "bad_wallet_signature"
     | "no_registration_binding"
     | "already_checked_in"
+    | "pass_revoked"
     | "mint_failed"
     | BindRefusal,
   extra:
@@ -471,7 +472,9 @@ export async function checkIn(
       mint: string | null;
       mint_status: string | null;
     };
-    // done, or unrecorded from before migration 4 (db.ts): either way nothing more is minted.
+    // A revoked pass stays revoked. done, or unrecorded from before migration 4 (db.ts): either
+    // way nothing more is minted.
+    if (existing.mint_status === "revoked") return refuse(409, "pass_revoked");
     if (existing.mint_status !== "pending")
       return refuse(409, "already_checked_in");
     // A reservation recorded under another secret names a mint this request cannot derive, so it
@@ -498,9 +501,10 @@ interface Reservation {
 
 /**
  * Brings a pending reservation to a pass. For a reservation an earlier request made, the chain is
- * read first: a pass already held by the wallet is recorded as done without minting, and an
- * account at the address that is not that pass is left pending. Otherwise the pass is minted at
- * the reservation's address. Any failure leaves the reservation pending, never deleted, and
+ * read first: a pass already held by the wallet is recorded as done without minting, and any
+ * other account at the address, a pass issued there and since burned, is recorded revoked and
+ * answered 409, never minted again. Only an empty address is minted to, at the reservation's
+ * address. Any failure leaves the reservation pending, never deleted, and
  * answers 502; the next request for this check-in reads the chain again. When two requests both
  * reach completion, only the one that moves the row from pending to done answers 201.
  */
@@ -536,7 +540,16 @@ async function completePass(
     if (reservation.earlier === true) {
       const state = await deps.minter.state(wallet, mint);
       if (state === "minted") return done(null);
-      if (state === "unheld") return refuse(502, "mint_failed");
+      // An account at the derived address means a pass was issued there, burned or not, so the
+      // check-in is never retried. The wallet does not hold it, so it was revoked.
+      if (state === "unheld") {
+        deps.db
+          .prepare(
+            "UPDATE checkins SET mint_status = 'revoked' WHERE id = ? AND mint_status = 'pending'",
+          )
+          .run(reservation.id);
+        return refuse(409, "pass_revoked");
+      }
     }
     const { signature } = await deps.minter.mint(wallet, seed, {
       station: reservation.station,

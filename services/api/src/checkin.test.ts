@@ -30,6 +30,7 @@ import {
   SystemInstruction,
   Transaction,
 } from "@solana/web3.js";
+import { FailedTransactionMetadata, LiteSVM } from "litesvm";
 
 import {
   checkIn,
@@ -46,7 +47,13 @@ import {
 import { openDatabase } from "./db.ts";
 import { start } from "./index.ts";
 import { loadOrganizerKey } from "./organizer-key.ts";
-import { DEVNET_GENESIS_HASH, passTokenAccount } from "./pass-mint.ts";
+import {
+  buildPassMintTransaction,
+  buildRevokeTransaction,
+  DEVNET_GENESIS_HASH,
+  passAccountLen,
+  passTokenAccount,
+} from "./pass-mint.ts";
 import { accountInfoResult, sendAnswers, withDevnetStub } from "./rpc-stub.ts";
 import {
   bindRegistration,
@@ -812,7 +819,7 @@ test("a reservation left with no pass, as after a crash before the mint was sent
   );
 });
 
-test("a pending check-in whose address holds something other than the wallet's pass answers 502, mints nothing and stays pending", async () => {
+test("a pending check-in whose mint address holds a pass the wallet does not hold is recorded revoked: 409 pass_revoked, nothing minted, now and later", async () => {
   const { db, deps, alice, bob, minting } = setup();
   const mint = passAddress("day-2", "LMN-0001");
   minting.failNextMint();
@@ -820,14 +827,116 @@ test("a pending check-in whose address holds something other than the wallet's p
     (await checkInAt(deps, request(alice, "LMN-0001"), T + 5)).status,
     502,
   );
-  // The address now holds a pass, but not the checking-in wallet's.
+  // An account is at the address, so a pass was issued there, but the wallet does not hold it.
   minting.chain.set(mint, bob.address);
-  assert.deepEqual(await retryAt(deps, alice, T + 12), {
-    status: 502,
-    body: { error: "mint_failed" },
-  });
-  assert.equal(minting.calls.length, 1, "the retry mints nothing");
-  assert.deepEqual(mintRows(db), [{ mint, mint_status: "pending" }]);
+  for (const at of [T + 12, T + 20])
+    assert.deepEqual(await retryAt(deps, alice, at), {
+      status: 409,
+      body: { error: "pass_revoked" },
+    });
+  assert.equal(minting.calls.length, 1, "nothing more is minted");
+  assert.deepEqual(mintRows(db), [{ mint, mint_status: "revoked" }]);
+});
+
+/** A litesvm chain where the pass of alice's LMN-0001 check-in in day-2 was minted, and burned if asked. */
+function chainWithPass(alice: Wallet, burned: boolean): LiteSVM {
+  const svm = new LiteSVM();
+  const organizer = Keypair.fromSecretKey(Uint8Array.from(RFC_KEYPAIR));
+  svm.airdrop(organizer.publicKey, 10_000_000_000n);
+  const mintKey = Keypair.fromSeed(
+    mintSeed(MINT_SECRET, "day-2", regHashOf("LMN-0001")),
+  );
+  const holder = new PublicKey(alice.address);
+  const details = { station: "st-front", session: "day-2", checkedInAt: T };
+  const send = (tx: Transaction, signers: Keypair[]) => {
+    tx.recentBlockhash = svm.latestBlockhash();
+    tx.sign(...signers);
+    const result = svm.sendTransaction(tx);
+    assert.ok(!(result instanceof FailedTransactionMetadata), String(result));
+    svm.expireBlockhash();
+  };
+  send(
+    buildPassMintTransaction({
+      organizer: organizer.publicKey,
+      mint: mintKey.publicKey,
+      holder,
+      details,
+      lamports: Number(
+        svm.minimumBalanceForRentExemption(BigInt(passAccountLen(details))),
+      ),
+    }),
+    [organizer, mintKey],
+  );
+  if (burned)
+    send(
+      buildRevokeTransaction({
+        organizer: organizer.publicKey,
+        mint: mintKey.publicKey,
+        holder,
+      }),
+      [organizer],
+    );
+  return svm;
+}
+
+/** Devnet's JSON-RPC answered from litesvm: devnet's genesis hash, and accounts as litesvm holds them. */
+const chainAnswer =
+  (svm: LiteSVM) => (method: string, params: readonly unknown[]) => {
+    if (method === "getGenesisHash") return DEVNET_GENESIS_HASH;
+    if (method !== "getAccountInfo")
+      throw new Error(`unexpected method ${method}`);
+    const info = svm.getAccount(new PublicKey(String(params[0])));
+    return accountInfoResult(
+      info === null ? null : { owner: info.owner.toBase58(), data: info.data },
+    );
+  };
+
+test("recovery decides from the reservation's derived mint in the in-process VM: issued and burned is revoked, issued and held is done, and neither mints", async () => {
+  for (const burned of [true, false]) {
+    const { db, deps, alice } = setup();
+    const dir = mkdtempSync(join(tmpdir(), "limen-checkin-"));
+    const keyPath = join(dir, "organizer.json");
+    writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
+    const mint = passAddress("day-2", "LMN-0001");
+    // The reservation is pending, as after a lost answer; the chain holds its history.
+    assert.equal(
+      deps.registrations.bind("LMN-0001", alice.address, T).ok,
+      true,
+    );
+    db.prepare(
+      "INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, mint, mint_status, created_at) VALUES ('day-2', 'st-front', ?, ?, 'n', ?, 'pending', ?)",
+    ).run(regHashOf("LMN-0001"), alice.address, mint, T);
+    const svm = chainWithPass(alice, burned);
+    try {
+      const minter = devnetMinter(loadOrganizerKey(keyPath));
+      await withDevnetStub(chainAnswer(svm), async (calls) => {
+        const answer = await retryAt({ ...deps, minter }, alice, T + 12);
+        if (burned) {
+          assert.deepEqual(answer, {
+            status: 409,
+            body: { error: "pass_revoked" },
+          });
+          assert.deepEqual(mintRows(db), [{ mint, mint_status: "revoked" }]);
+          // A later request is refused from the row, and nothing is minted.
+          assert.deepEqual(await retryAt({ ...deps, minter }, alice, T + 20), {
+            status: 409,
+            body: { error: "pass_revoked" },
+          });
+        } else {
+          assert.equal(answer.status, 201);
+          assert.equal(answer.body.signature, null);
+          assert.deepEqual(mintRows(db), [{ mint, mint_status: "done" }]);
+        }
+        assert.equal(
+          calls.some((c) => c.method === "sendTransaction"),
+          false,
+          "nothing is sent",
+        );
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
 });
 
 test("a pending check-in recorded under another PASS_MINT_SECRET answers 502, mints nothing and stays pending", async () => {
@@ -944,38 +1053,35 @@ test("a pending check-in is taken up only while its session is open; after it cl
   ]);
 });
 
-test("the README's operator statements for a pending or unrecorded check-in run as it says", () => {
+test("the README's operator statements settle a pending check-in from its mint account, delete nothing, and change only the row they name", () => {
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
   const section = readme.slice(readme.indexOf("### A check-in's mint state"));
   const block = /```sql\n([\s\S]*?)```/.exec(section)?.[1];
   assert.ok(block !== undefined, "the section has an sql block");
+  assert.doesNotMatch(block, /\bDELETE\b/i, "no statement deletes a row");
   const statements = block
     .split("\n")
     .filter((line) => !line.startsWith("--") && line.trim() !== "");
-  assert.equal(statements.length, 3);
-  const [markDone, recordAndMarkDone, removeUnrecorded] = statements as [
-    string,
-    string,
-    string,
-  ];
+  assert.equal(statements.length, 2);
+  const [markDone, markRevoked] = statements as [string, string];
   const { db } = setup();
   db.exec(`
     INSERT INTO registrations (reg_hash, wallet, bound_at) VALUES ('h1', 'w1', ${T}), ('h2', 'w2', ${T}), ('h3', 'w3', ${T}), ('h4', 'w4', ${T});
     INSERT INTO checkins (id, session_id, station_id, reg_hash, wallet, station_nonce, mint, mint_status, created_at) VALUES
       (1, 'day-2', 'st-front', 'h1', 'w1', 'n1', 'Mint1111', 'pending', ${T}),
-      (2, 'day-2', 'st-front', 'h2', 'w2', 'n2', NULL, 'unrecorded', ${T}),
+      (2, 'day-2', 'st-front', 'h2', 'w2', 'n2', 'Mint2222', 'pending', ${T}),
       (3, 'day-2', 'st-front', 'h3', 'w3', 'n3', NULL, 'unrecorded', ${T}),
       (4, 'day-2', 'st-front', 'h4', 'w4', 'n4', 'Mint4444', 'done', ${T});
   `);
-  const changes = (sql: string, params: Record<string, string | number>) =>
-    Number(db.prepare(sql).run(params).changes);
-  // Each statement touches only a row in the state it names.
-  assert.equal(changes(markDone, { id: 4 }), 0);
-  assert.equal(changes(recordAndMarkDone, { id: 1, mint: "Other111" }), 0);
-  assert.equal(changes(removeUnrecorded, { id: 1 }), 0);
-  assert.equal(changes(markDone, { id: 1 }), 1);
-  assert.equal(changes(recordAndMarkDone, { id: 2, mint: "Mint2222" }), 1);
-  assert.equal(changes(removeUnrecorded, { id: 3 }), 1);
+  const changes = (sql: string, id: number) =>
+    Number(db.prepare(sql).run({ id }).changes);
+  // Neither touches a row that is not pending.
+  for (const id of [3, 4]) {
+    assert.equal(changes(markDone, id), 0);
+    assert.equal(changes(markRevoked, id), 0);
+  }
+  assert.equal(changes(markDone, 1), 1);
+  assert.equal(changes(markRevoked, 2), 1);
   assert.deepEqual(
     db
       .prepare("SELECT id, mint, mint_status FROM checkins ORDER BY id")
@@ -983,7 +1089,8 @@ test("the README's operator statements for a pending or unrecorded check-in run 
       .map((r) => ({ ...r })),
     [
       { id: 1, mint: "Mint1111", mint_status: "done" },
-      { id: 2, mint: "Mint2222", mint_status: "done" },
+      { id: 2, mint: "Mint2222", mint_status: "revoked" },
+      { id: 3, mint: null, mint_status: "unrecorded" },
       { id: 4, mint: "Mint4444", mint_status: "done" },
     ],
   );
