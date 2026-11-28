@@ -2,7 +2,7 @@
 // sample is built at run time, so this file holds no key material itself.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -11,11 +11,21 @@ import { base58, keyMaterialIn, scanTrackedFiles } from "./key-scan.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
+/** A real Solana-style keypair: the 32-byte Ed25519 seed, then its own public key. */
+function solanaKeypair(): Buffer {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const seed = privateKey
+    .export({ format: "der", type: "pkcs8" })
+    .subarray(-32);
+  const pub = publicKey.export({ format: "der", type: "spki" }).subarray(-32);
+  return Buffer.concat([seed, pub]);
+}
+
 test("each kind of private-key material is found, in text and in raw bytes", () => {
   const { privateKey } = generateKeyPairSync("ed25519");
   const pem = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
   const der = privateKey.export({ format: "der", type: "pkcs8" });
-  const keypair = [...randomBytes(64)];
+  const keypair = [...solanaKeypair()];
   const cases: [string, Buffer][] = [
     ["pem-private-key", Buffer.from(`const k = \`${pem}\`;\n`)],
     [
@@ -23,22 +33,32 @@ test("each kind of private-key material is found, in text and in raw bytes", () 
       Buffer.from(`-----BEGIN ${"RSA "}PRIVATE KEY-----\nAAAA\n`),
     ],
     ["pkcs8-der", Buffer.concat([randomBytes(5), der, randomBytes(5)])],
-    ["json-64-byte-array", Buffer.from(`${JSON.stringify(keypair)}\n`)],
-    ["json-64-byte-array", Buffer.from(`{"key": [${keypair.join(", ")}]}`)],
-    ["base58-64-bytes", Buffer.from(`secret: ${base58(randomBytes(64))}\n`)],
+    ["json-keypair", Buffer.from(`${JSON.stringify(keypair)}\n`)],
+    ["json-keypair", Buffer.from(`{"key": [${keypair.join(", ")}]}`)],
+    ["base58-keypair", Buffer.from(`secret: ${base58(solanaKeypair())}\n`)],
   ];
   for (const [reason, bytes] of cases)
     assert.deepEqual(keyMaterialIn(bytes), [reason], reason);
 });
 
-test("near misses are not hits: a public key, 63 or 65 numbers, a value over 255, 32 bytes of base58", () => {
-  const { publicKey } = generateKeyPairSync("ed25519");
+test("near misses are not hits: a public key, a real signature and random 64 bytes, 63 or 65 numbers, a value over 255, 32 bytes of base58", () => {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  // A real Ed25519 signature, 64 bytes, as a Solana transaction carries one.
+  const signature = sign(
+    null,
+    Buffer.from("a transaction message"),
+    privateKey,
+  );
   const near = [
     publicKey.export({ format: "pem", type: "spki" }).toString(),
     JSON.stringify([...randomBytes(63)]),
     JSON.stringify([...randomBytes(65)]),
     JSON.stringify([256, ...randomBytes(63)]),
     base58(randomBytes(32)),
+    base58(signature),
+    JSON.stringify([...signature]),
+    base58(randomBytes(64)),
+    JSON.stringify([...randomBytes(64)]),
     "the words BEGIN and PRIVATE KEY apart",
   ];
   for (const text of near)

@@ -39,7 +39,7 @@ npm ci
 npm run check
 ```
 
-Local secrets go in `.env`, copied from `.env.example`. Git ignores `.env`. Git also ignores `.der`, `.pem`, `.key` and `.p12` files. CI scans every tracked file for private-key material by content: PEM private-key headers, the PKCS#8 DER prefixes of Ed25519, RSA and EC keys in raw bytes, JSON arrays of 64 byte values, and base58 strings that decode to 64 bytes. Any hit fails the run (`services/api/src/key-scan.test.ts`). The scan does not find a key in any other form, such as hex, bare base64, or base58 split across lines.
+Local secrets go in `.env`, copied from `.env.example`. Git ignores `.env`. Git also ignores `.der`, `.pem`, `.key` and `.p12` files. CI scans every tracked file for private-key material by content: PEM private-key headers, the PKCS#8 DER prefixes of Ed25519, RSA and EC keys in raw bytes, and Solana keypairs: 64 bytes, as a JSON array of numbers or in base58, whose last 32 bytes are the Ed25519 public key of the first 32. A signature or any other 64-byte value is not a hit. Any hit fails the run (`services/api/src/key-scan.test.ts`). The scan does not find a key in any other form, such as hex, bare base64, or base58 split across lines.
 
 ## What each check proves
 
