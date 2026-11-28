@@ -180,24 +180,19 @@ test("stop ends the rotation", async () => {
   assert.equal(calls, 1);
 });
 
-test("the page reads its station from ?station=, and nothing else from the address", () => {
-  assert.deepEqual(readStationId("http://localhost:5173/?station=st-front"), {
+test("the page reads its station from the query string's ?station=", () => {
+  assert.deepEqual(readStationId("?station=st-front"), { station: "st-front" });
+  // A token in the query, as an earlier version took it in the fragment, is not read.
+  assert.deepEqual(readStationId("?station=st-front&token=abc"), {
     station: "st-front",
   });
-  // A token in the fragment or the query, as an earlier version took it, is not read.
-  assert.deepEqual(
-    readStationId(
-      "http://localhost:5173/?station=st-front&token=abc#token=abc",
-    ),
-    { station: "st-front" },
-  );
-  for (const href of [
-    "http://localhost:5173/",
-    "http://localhost:5173/#token=abc",
-    "http://localhost:5173/?station=st%20front",
-    `http://localhost:5173/?station=${"x".repeat(65)}`,
+  for (const search of [
+    "",
+    "?token=abc",
+    "?station=st%20front",
+    `?station=${"x".repeat(65)}`,
   ])
-    assert.deepEqual(readStationId(href), {
+    assert.deepEqual(readStationId(search), {
       error: "Add ?station=<station ID> to the page address.",
     });
 });

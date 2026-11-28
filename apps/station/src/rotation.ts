@@ -124,13 +124,13 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
- * Reads the station ID from ?station= in the page URL. The display token is not in the URL: the
- * page asks for it (main.ts).
+ * Reads the station ID from the page address's query string, such as "?station=st-front". The
+ * page passes location.search alone, so it reads no fragment.
  */
 export function readStationId(
-  href: string,
+  search: string,
 ): { station: string } | { error: string } {
-  const station = new URL(href).searchParams.get("station") ?? "";
+  const station = new URLSearchParams(search).get("station") ?? "";
   if (!ID.test(station))
     return { error: "Add ?station=<station ID> to the page address." };
   return { station };

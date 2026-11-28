@@ -128,6 +128,13 @@ function askForToken(station: string): void {
   tokenPrompt.hidden = false;
 }
 
-const id = readStationId(window.location.href);
+// An address from an earlier version's link file carries a token in its fragment. The page
+// replaces its address with its path and query, without reading the fragment.
+window.history.replaceState(
+  null,
+  "",
+  window.location.pathname + window.location.search,
+);
+const id = readStationId(window.location.search);
 if ("error" in id) showProblem(id.error);
 else askForToken(id.station);
