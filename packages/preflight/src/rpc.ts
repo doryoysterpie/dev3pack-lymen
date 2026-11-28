@@ -5,6 +5,7 @@
 // Devnet only (D-03): every pre-flight starts with assertDevnet, which compares
 // the endpoint's genesis hash with devnet's and refuses any other cluster.
 
+import { decodePublicKey } from "./base58.ts";
 import { decodeBase64 } from "./base64.ts";
 import { DEVNET_GENESIS_HASH } from "./programs.ts";
 
@@ -29,6 +30,16 @@ export interface AccountState {
   readonly data: Uint8Array;
 }
 
+/** A token account's balance as the simulation reports it, by account index. */
+export interface TokenBalance {
+  /** The account's index in the transaction's account list. */
+  readonly accountIndex: number;
+  readonly mint: string;
+  readonly owner: string | null;
+  /** In base units, as a decimal string. */
+  readonly amount: string;
+}
+
 export interface Simulation {
   /** The runtime error, as the RPC reports it, or null when it ran clean. */
   readonly err: unknown;
@@ -40,6 +51,17 @@ export interface Simulation {
   readonly slot: number | null;
   /** The blockhash the simulation used in place of the transaction's own. */
   readonly replacementBlockhash: string | null;
+  /**
+   * Lamports of every account in the transaction's account list, before and
+   * after, from the simulation's own run (anza-xyz/agave a64fa73,
+   * rpc-client-types/src/response.rs:467 to 470, filled from
+   * bank.simulate_transaction in rpc/src/rpc.rs:3515 to 3531). Null when the
+   * endpoint gives none.
+   */
+  readonly preBalances: readonly string[] | null;
+  readonly postBalances: readonly string[] | null;
+  readonly preTokenBalances: readonly TokenBalance[] | null;
+  readonly postTokenBalances: readonly TokenBalance[] | null;
 }
 
 export class RpcError extends Error {
@@ -128,6 +150,10 @@ async function call(
   }
   const body = await response.json();
   if (!isRecord(body)) throw new RpcError("shape", `${method}: not an object`);
+  // An answer to another request is not evidence for this one.
+  if (body.id !== id) {
+    throw new RpcError("shape", `${method}: the answer is for another request`);
+  }
   if (isRecord(body.error)) {
     throw new RpcError("rpc", `${method}: ${String(body.error.message)}`);
   }
@@ -158,13 +184,63 @@ export async function assertDevnet(rpc: Rpc): Promise<void> {
   }
 }
 
+const U64_MAX = BigInt("18446744073709551615");
+
+/**
+ * A lamport or token amount: a whole number from 0 to the largest u64, as a
+ * JSON number no larger than 2^53 (past it, precision is already lost) or as
+ * a decimal string. Anything else is refused.
+ */
+function amountOf(value: unknown, what: string): string {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    return String(value);
+  }
+  if (
+    typeof value === "string" &&
+    /^(0|[1-9][0-9]*)$/.test(value) &&
+    BigInt(value) <= U64_MAX
+  ) {
+    return value;
+  }
+  throw new RpcError("shape", `${what}: not a whole amount`);
+}
+
+function balancesOf(value: unknown, what: string): string[] | null {
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value)) throw new RpcError("shape", `${what}: not a list`);
+  return value.map((item) => amountOf(item, what));
+}
+
+function tokenBalancesOf(value: unknown, what: string): TokenBalance[] | null {
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value)) throw new RpcError("shape", `${what}: not a list`);
+  return value.map((item) => {
+    if (!isRecord(item) || !isRecord(item.uiTokenAmount)) {
+      throw new RpcError("shape", `${what}: entry`);
+    }
+    const { accountIndex, mint, owner } = item;
+    if (
+      typeof accountIndex !== "number" ||
+      !Number.isSafeInteger(accountIndex) ||
+      accountIndex < 0 ||
+      typeof mint !== "string" ||
+      (owner !== undefined && owner !== null && typeof owner !== "string")
+    ) {
+      throw new RpcError("shape", `${what}: entry`);
+    }
+    return {
+      accountIndex,
+      mint,
+      owner: typeof owner === "string" ? owner : null,
+      amount: amountOf(item.uiTokenAmount.amount, what),
+    };
+  });
+}
+
 function accountState(value: unknown): AccountState | null {
   if (value === null) return null;
   if (!isRecord(value)) throw new RpcError("shape", "account: not an object");
   const { lamports, owner, data } = value;
-  if (typeof lamports !== "number" && typeof lamports !== "string") {
-    throw new RpcError("shape", "account: lamports");
-  }
   if (typeof owner !== "string") throw new RpcError("shape", "account: owner");
   if (
     !Array.isArray(data) ||
@@ -176,12 +252,11 @@ function accountState(value: unknown): AccountState | null {
   const bytes = decodeBase64(data[0]);
   if (bytes === null)
     throw new RpcError("shape", "account: data is not base64");
-  // lamports fit in a u64; a JSON number past 2^53 has already lost precision,
-  // so such a value is refused rather than shown wrong.
-  if (typeof lamports === "number" && !Number.isSafeInteger(lamports)) {
-    throw new RpcError("shape", "account: lamports past 2^53");
-  }
-  return { lamports: String(lamports), owner, data: bytes };
+  return {
+    lamports: amountOf(lamports, "account: lamports"),
+    owner,
+    data: bytes,
+  };
 }
 
 function valueOf(result: unknown, method: string): unknown {
@@ -235,8 +310,11 @@ async function fetchSimulation(
   const slot =
     isRecord(context) && typeof context.slot === "number" ? context.slot : null;
   const replacement = value.replacementBlockhash;
+  // A blockhash is 32 bytes in base58; anything else is not kept.
   const replacementBlockhash =
-    isRecord(replacement) && typeof replacement.blockhash === "string"
+    isRecord(replacement) &&
+    typeof replacement.blockhash === "string" &&
+    decodePublicKey(replacement.blockhash) !== null
       ? replacement.blockhash
       : null;
   // A missing err field is not a clean run, and a clean run must return the
@@ -264,6 +342,22 @@ async function fetchSimulation(
       typeof value.unitsConsumed === "number" ? value.unitsConsumed : null,
     slot,
     replacementBlockhash,
+    preBalances: balancesOf(
+      value.preBalances,
+      "simulateTransaction: preBalances",
+    ),
+    postBalances: balancesOf(
+      value.postBalances,
+      "simulateTransaction: postBalances",
+    ),
+    preTokenBalances: tokenBalancesOf(
+      value.preTokenBalances,
+      "simulateTransaction: preTokenBalances",
+    ),
+    postTokenBalances: tokenBalancesOf(
+      value.postTokenBalances,
+      "simulateTransaction: postTokenBalances",
+    ),
   };
 }
 

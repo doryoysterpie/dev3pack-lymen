@@ -74,6 +74,13 @@ describe("balance changes", () => {
         state(TOKEN_PROGRAM, token(USER, 5)),
       ],
       [state(SYSTEM_PROGRAM, new Uint8Array(), "100"), null],
+      {
+        keys: [USER, ACCOUNT],
+        pre: ["100", "1"],
+        post: ["100", "0"],
+        preToken: [{ accountIndex: 1, mint: MINT, owner: USER, amount: "5" }],
+        postToken: [],
+      },
     );
     assert.deepEqual(changes, [
       {
@@ -99,6 +106,13 @@ describe("balance changes", () => {
       [USER, ACCOUNT],
       [null, state(TOKEN_2022_PROGRAM, token(USER, 5, 200))],
       [null, state(TOKEN_2022_PROGRAM, token(OTHER, 5, 200))],
+      {
+        keys: [USER, ACCOUNT],
+        pre: ["0", "1"],
+        post: ["0", "1"],
+        preToken: [{ accountIndex: 1, mint: MINT, owner: USER, amount: "5" }],
+        postToken: [{ accountIndex: 1, mint: MINT, owner: OTHER, amount: "5" }],
+      },
     );
     assert.equal(changes.length, 1);
     assert.ok(changes[0].kind === "token");
@@ -117,6 +131,13 @@ describe("balance changes", () => {
         state(SYSTEM_PROGRAM, new Uint8Array(), "100"),
         state(TOKEN_PROGRAM, token(OTHER, 0)),
       ],
+      {
+        keys: [USER, ACCOUNT],
+        pre: ["100", "1"],
+        post: ["100", "1"],
+        preToken: [{ accountIndex: 1, mint: MINT, owner: OTHER, amount: "5" }],
+        postToken: [{ accountIndex: 1, mint: MINT, owner: OTHER, amount: "0" }],
+      },
     );
     assert.deepEqual(changes, []);
   });

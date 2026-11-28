@@ -38,7 +38,9 @@ import { assertDevnet, RpcError, type Rpc } from "./rpc.ts";
 import {
   balanceChanges,
   ownedTokenAccounts,
+  unchangedBetween,
   watchedAddresses,
+  watchProblem,
   type BalanceChange,
 } from "./simulate.ts";
 import { parseLookupTable } from "./state.ts";
@@ -210,28 +212,59 @@ export async function preflight(
     tables = await loadTables(rpc, transaction);
     const refused = lookupProblem(transaction, tables);
     if (refused !== null) return { kind: "malformed", problem: refused };
-    const watched = watchedAddresses(
-      feePayer,
-      messageAccounts(transaction.message, tables),
-    );
+    const accounts = messageAccounts(transaction.message, tables);
+    // The simulation is used only when its evidence covers every account the
+    // transaction can write and belongs to this transaction alone; otherwise
+    // it is marked not used, which holds signing (signBlocks).
+    const unwatched = watchProblem(feePayer, accounts);
+    if (unwatched !== null) throw new Error(unwatched);
+    const watched = watchedAddresses(feePayer, accounts);
     const before = await rpc.getAccounts(watched);
     owned = ownedTokenAccounts(feePayer, watched, before, []);
     const result = await rpc.simulate(base64, watched);
-    const after =
-      result.accounts.length === watched.length ? result.accounts : [];
-    owned = ownedTokenAccounts(feePayer, watched, before, after);
+    if (result.accounts.length !== watched.length) {
+      throw new Error(
+        `the simulation returned ${result.accounts.length} accounts for the ${watched.length} asked`,
+      );
+    }
+    const keys = accounts.map((account) => account.address);
+    const { preBalances, postBalances, preTokenBalances, postTokenBalances } =
+      result;
+    if (
+      preBalances === null ||
+      postBalances === null ||
+      preTokenBalances === null ||
+      postTokenBalances === null ||
+      preBalances.length !== keys.length ||
+      postBalances.length !== keys.length
+    ) {
+      throw new Error(
+        "the simulation did not return the balances of its own run",
+      );
+    }
+    // The amounts come from the simulation's own run. The other fields come
+    // from the read before it, which a second read must confirm, so a change
+    // another transaction made in between is not taken for this one's.
+    const again = await rpc.getAccounts(watched);
+    if (!unchangedBetween(before, again)) {
+      throw new Error(
+        "an account limen watches changed on devnet during the check",
+      );
+    }
+    owned = ownedTokenAccounts(feePayer, watched, before, result.accounts);
+    const changes = balanceChanges(feePayer, watched, before, result.accounts, {
+      keys,
+      pre: preBalances,
+      post: postBalances,
+      preToken: preTokenBalances,
+      postToken: postTokenBalances,
+    });
     simulation = {
       status: "ran",
       // The runtime's error, with any address the RPC wrote into it scrubbed.
       err: scrubAddresses(result.err),
       // Like the summary, the changes name the user's wallet by its role.
-      changes:
-        result.accounts.length === watched.length
-          ? withMarker(
-              balanceChanges(feePayer, watched, before, result.accounts),
-              feePayer,
-            )
-          : [],
+      changes: withMarker(changes, feePayer),
     };
     simulatedAt = { slot: result.slot, blockhash: result.replacementBlockhash };
   } catch (error) {
