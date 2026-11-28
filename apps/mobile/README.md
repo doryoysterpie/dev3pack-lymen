@@ -110,7 +110,7 @@ For the release build, run the same prebuild without `LIMEN_TEST_CA_CERT`, after
 
 What was checked, on 2026-11-28:
 
-- **Without `LIMEN_TEST_CA_CERT`:** `npx expo prebuild` wrote an Android project byte-identical to the one it writes at E-09's `b1c27af` (`diff -r`, no differences).
+- **Without `LIMEN_TEST_CA_CERT`:** `npx expo prebuild` wrote an Android project byte-identical to the one it writes at E-09's `ac1ce67` (`diff -r`, no differences), and `src/with-test-certificate.test.ts` checks that the release build's config and compiled Android project carry no test-certificate trust.
 - **With it:** the project differs in three places. The manifest's `application` element gains `android:networkSecurityConfig`, and `res/raw` and `res/xml` are added. `res/raw/limen_test_ca.pem` is byte-identical to `ca.pem`.
 - **A key file named instead:** prebuild stops with the plugin's error, and the key's text is not printed.
 - **The server:**
@@ -118,11 +118,11 @@ What was checked, on 2026-11-28:
   - For another posted account, the answer has that account as fee payer, and `summarizeTransaction` gives it exactly the drainer case's owed summary.
   - `curl` with the test CA gets HTTP 200, and without it refuses the certificate (exit 60).
 
-**The device check**, on emulator-5554 on 2026-11-28, with both APKs built at `6188e0c`:
+**The device check (recorded on #49 at an earlier commit, not at this head):** on emulator-5554 on 2026-11-28, both APKs were built and run at the earlier commit `6188e0c` (stacked on E-09 at `b1c27af`, draft PR #52), before E-18 was re-stacked onto E-09 at `ac1ce67`. Neither APK has been rebuilt or run on an emulator or device at this head (unverified at this head):
 
-- **The setup.** The emulator was started once with `-camera-back virtualscene -virtualscene-poster wall=<a PNG of the QR>`. The wall poster takes the place of the scene's framed print in the kitchen, which the camera's start position cannot see. So the camera was moved to face it by an emulator automation macro that set the device's position to (-1.8, 0.3, 3.6) and its rotation to (0, -150, 0). After that cold boot, the emulator had not joined its `AndroidWifi` network; `adb shell cmd wifi connect-network AndroidWifi open` joined it.
-- **Release build.** After Authorize in the fake wallet, the fetch failed with "javax.net.ssl.SSLHandshakeException: java.security.cert.CertPathValidatorException: Trust anchor for certification path not found." The server logged the client's TLS alert, certificate unknown, and no request.
-- **Test build.** The server logged `POST /drainer` answered 200 for the fake wallet's account. The app showed the drainer's pre-flight card: flagged, 4.99 SOL out, a delegate approved, the simulation failed on devnet (`InvalidAccountForFee`, since that account holds no SOL), and limen holds the transaction. The card offers no sign button.
+- **The setup (at `6188e0c`).** The emulator was started once with `-camera-back virtualscene -virtualscene-poster wall=<a PNG of the QR>`. The wall poster takes the place of the scene's framed print in the kitchen, which the camera's start position cannot see. So the camera was moved to face it by an emulator automation macro that set the device's position to (-1.8, 0.3, 3.6) and its rotation to (0, -150, 0). After that cold boot, the emulator had not joined its `AndroidWifi` network; `adb shell cmd wifi connect-network AndroidWifi open` joined it.
+- **Release build (at `6188e0c`).** After Authorize in the fake wallet, the fetch failed with "javax.net.ssl.SSLHandshakeException: java.security.cert.CertPathValidatorException: Trust anchor for certification path not found." The server logged the client's TLS alert, certificate unknown, and no request.
+- **Test build (at `6188e0c`).** The server logged `POST /drainer` answered 200 for the fake wallet's account. The app showed the drainer's pre-flight card: flagged, 4.99 SOL out, a delegate approved, the simulation failed on devnet (`InvalidAccountForFee`, since that account holds no SOL), and limen holds the transaction. The card offers no sign button.
 
 ## Tests
 
@@ -137,6 +137,8 @@ The E-04 done test is `src/qr/classify.test.ts`. It reads `fixtures/qr/e04-class
 The E-08 done test is `src/pay/transfer.test.ts`, which reads `fixtures/pay/e08-transfer.json` and asserts the full card result each URL owes, and `src/result-card.test.ts`, which asserts the card text for an organizer recipient and a flagged one.
 
 The E-09 done test runs in two places. In `packages/preflight` (`npm test --workspace @limen/preflight`): `src/summary.test.ts` (each fixture transaction yields its owed summary; the drainer shows SOL balance out and a delegate approved; an unknown program is listed as undecoded; every strict prefix of a fixture is refused as truncated, and a damaged copy that parses reads as web3.js reads it), `src/preflight.test.ts` (the drainer's simulated SOL change against a recorded RPC, the devnet stop, the signing blocks and the card-shown gate) `src/drain.test.ts` (the server entry point and the drain pattern), `src/review.test.ts` (the cases from the internal read: SOL sweeps, hand-overs, time limits and signing blocks), `src/fee-payer.test.ts` (a request that leaves the fee payer unset), and `src/audit.test.ts` and `src/audit-sim.test.ts` (the cases from the owner's Codex audit). Here: `src/tx/card-text.test.ts` (the card strings, and the fallback card), `src/tx/request.test.ts` (the link's time limit) and `src/tx/audit-6c4e64e.test.ts` (the cases from the owner's audit of `6c4e64e`). The package's `src/crosscheck.test.ts` checks the parser, the account order and the decoder against `@solana/web3.js` and `@solana/spl-token` on seeded random inputs.
+
+The E-18 config check is `src/with-test-certificate.test.ts`. It loads `app.json` through `expo/config`, compiles the Android mods into a scratch project, and checks that without `LIMEN_TEST_CA_CERT` (or when it is empty) the release build's config and manifest match the project without the plugin and carry no test-certificate trust, that with one PEM certificate it trusts `10.0.2.2` alone, and that a non-certificate or multi-block file is refused without printing its contents.
 
 ## Not checked yet
 
