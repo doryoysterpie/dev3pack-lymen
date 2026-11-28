@@ -72,15 +72,20 @@ function tokenAmount(amount: string, decimals: number | null): string {
     : withDecimals(amount, decimals);
 }
 
+// What each authority type is called; a Token-2022 extension's authority
+// goes by its type's name.
 const AUTHORITY: Readonly<Record<string, string>> = {
-  AccountOwner: "Ownership",
-  CloseAccount: "The close authority",
-  MintTokens: "The mint authority",
-  FreezeAccount: "The freeze authority",
+  AccountOwner: "owner",
+  CloseAccount: "close authority",
+  MintTokens: "mint authority",
+  FreezeAccount: "freeze authority",
 };
 
 /**
- * One row per decoded effect. owned lists the token accounts a read shows
+ * One row per decoded effect, saying what the instruction asks for: an
+ * instruction alone cannot show that it is accepted or what it changes, so a
+ * row states an outcome only where the program refuses the request whatever
+ * the accounts hold. owned lists the token accounts a read shows
  * the wallet owns (Preflight.userTokenAccounts); an instruction alone shows
  * no ownership, so only these are called the wallet's.
  */
@@ -90,7 +95,7 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
       return effect.reason === "create-account"
         ? {
             label: "Pays to create an account",
-            value: `Your wallet pays ${sol(effect.lamports)} into new account ${where(effect.to)}.`,
+            value: `It asks your wallet to pay ${sol(effect.lamports)} into new account ${where(effect.to)}.`,
           }
         : {
             label: "Sends SOL",
@@ -102,7 +107,7 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
     case "owner-assigned":
       return {
         label: "Hands over your wallet account",
-        value: `Assigns your wallet account to program ${effect.newOwner}, which would then control its SOL.`,
+        value: `It asks to assign your wallet account to program ${effect.newOwner}, which would then control its SOL.`,
       };
     case "pays-for-token-account":
       // The wallet pays only what the account lacks of its rent, and an
@@ -110,20 +115,20 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
       return effect.idempotent
         ? {
             label: "May create a token account",
-            value: `If token account ${where(effect.account)} does not exist yet, it is created and your wallet pays up to its rent.`,
+            value: `It asks to create token account ${where(effect.account)} if it does not exist yet, with your wallet paying up to its rent.`,
           }
         : {
             label: "Creates a token account",
-            value: `Your wallet pays up to the rent for new token account ${where(effect.account)}.`,
+            value: `It asks your wallet to pay up to the rent for new token account ${where(effect.account)}.`,
           };
     case "token-out":
-      // A transfer to the account it comes from returns success before any
-      // amount moves (solana-program/token 38de8d1, program/src/processor.rs
-      // :270 to :311).
+      // A transfer to the account it comes from returns before any amount
+      // moves (solana-program/token 38de8d1, program/src/processor.rs:270 to
+      // :311), if its checks pass, which the instruction does not show.
       if (samePlace(effect.source, effect.destination)) {
         return {
-          label: "Moves no tokens",
-          value: `A transfer of ${tokenAmount(effect.amount, effect.decimals)} from token account ${where(effect.source)} to itself, which ${programName(effect.program)} accepts without moving any.`,
+          label: "Transfers to the same account",
+          value: `It asks to transfer ${tokenAmount(effect.amount, effect.decimals)} from token account ${where(effect.source)} to itself, which moves no tokens if accepted.`,
         };
       }
       return {
@@ -167,17 +172,17 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
           value: `It asks to remove the owner of token account ${where(effect.account)}, which ${programName(effect.program)} refuses, so the transaction would fail.`,
         };
       }
-      const what = AUTHORITY[effect.authorityType] ?? effect.authorityType;
-      // The wallet signs as the current authority, so setting it to the
-      // wallet moves nothing.
+      const what =
+        AUTHORITY[effect.authorityType] ?? `${effect.authorityType} authority`;
+      // With no close authority, the account's owner closes it
+      // (solana-program/token 38de8d1, program/src/processor.rs:686 to 688;
+      // token-2022 efe55b4, :1364 to :1367).
       return {
         label: "Changes an authority",
         value:
           effect.newAuthority === null
-            ? `${what} of ${where(effect.account)} is removed.`
-            : effect.newAuthority === USER_MARKER
-              ? `${what} of ${where(effect.account)} is set to your wallet.`
-              : `${what} of ${where(effect.account)} moves to ${shown(effect.newAuthority)}.`,
+            ? `It asks to set no ${what} on ${where(effect.account)}.${effect.authorityType === "CloseAccount" ? " If accepted, the account's owner can still close it." : ""}`
+            : `It asks to set the ${what} of ${where(effect.account)} to ${shown(effect.newAuthority)}.`,
       };
     }
     case "account-closed":
@@ -192,7 +197,7 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
       }
       return {
         label: "Closes a token account",
-        value: `Closes ${where(effect.account)} and sends its SOL to ${where(effect.destination)}.`,
+        value: `It asks to close ${where(effect.account)} and send its SOL to ${where(effect.destination)}.`,
       };
     case "tokens-minted":
       return {
@@ -240,7 +245,7 @@ function otherText(kind: TransactionSummary["others"][number]["kind"]): string {
     case "token-other":
       return "A token program instruction whose details are not shown.";
     case "advance-nonce":
-      return "Advances a durable nonce.";
+      return "It asks to advance a durable nonce.";
     default:
       // The summary keeps an instruction here when it names the wallet
       // neither as its payer nor as its authority; a multisig the wallet
@@ -494,7 +499,7 @@ export function transactionCardText(
               // row shows only these (changeRow): SOL that reaches a token
               // account, or leaves another signer, has no row.
               "This card shows the changes limen simulated to your wallet's SOL, owner program and data, and to the token amount, delegate, owner and close authority of each token account a read shows your wallet owns. Other changes, such as SOL sent to a token account by another signer, may not be shown."
-            : `This card shows what the decoded instructions would do. ${simulated(simulation)}`,
+            : `This card shows what the decoded instructions ask for. ${simulated(simulation)}`,
     rows,
   };
 }

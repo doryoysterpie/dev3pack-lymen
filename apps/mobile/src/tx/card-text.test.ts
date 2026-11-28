@@ -273,7 +273,7 @@ describe("transaction card text", () => {
     );
     assert.deepEqual(card.rows[1], {
       label: "Closes a token account",
-      value: `Closes ${userTokenAccount} and sends its SOL to your wallet.`,
+      value: `It asks to close ${userTokenAccount} and send its SOL to your wallet.`,
     });
   });
 
@@ -488,7 +488,7 @@ describe("transaction card text", () => {
     });
     assert.equal(
       card.status,
-      "This card shows what the decoded instructions would do. No simulation result is used, so no balance change is shown.",
+      "This card shows what the decoded instructions ask for. No simulation result is used, so no balance change is shown.",
     );
   });
 
@@ -626,7 +626,7 @@ describe("the owner's audit: what the card claims", () => {
     });
     assert.equal(
       card.status,
-      "This card shows what the decoded instructions would do. No simulation result is used, so no balance change is shown.",
+      "This card shows what the decoded instructions ask for. No simulation result is used, so no balance change is shown.",
     );
   });
 
@@ -659,6 +659,103 @@ describe("the owner's audit: what the card claims", () => {
     );
   });
 
+  it("re-audit 2, item 5: each row says what an instruction asks, not what happens", async () => {
+    const authority = (
+      instruction: number,
+      authorityType: string,
+      newAuthority: string | null,
+    ) => ({
+      kind: "authority-changed" as const,
+      instruction,
+      program: "token-2022" as const,
+      account: { address: userTokenAccount },
+      authorityType,
+      newAuthority,
+    });
+    const rows = await rowsFor([
+      {
+        kind: "sol-out" as const,
+        instruction: 0,
+        to: { address: attacker },
+        lamports: "5000000",
+        reason: "create-account" as const,
+      },
+      {
+        kind: "owner-assigned" as const,
+        instruction: 1,
+        newOwner: unknownProgram,
+      },
+      authority(2, "CloseAccount", null),
+      authority(3, "MintTokens", null),
+      authority(4, "TransferFeeConfig", null),
+      authority(5, "FreezeAccount", attacker),
+      authority(6, "TransferFeeConfig", attacker),
+      {
+        kind: "account-closed" as const,
+        instruction: 7,
+        program: "token-2022" as const,
+        account: { address: userTokenAccount },
+        destination: { address: attacker },
+      },
+    ]);
+    assert.deepEqual(rows.slice(1, 9), [
+      {
+        label: "Pays to create an account",
+        value: `It asks your wallet to pay 0.005 SOL into new account ${attacker}.`,
+      },
+      {
+        label: "Hands over your wallet account",
+        value: `It asks to assign your wallet account to program ${unknownProgram}, which would then control its SOL.`,
+      },
+      {
+        label: "Changes an authority",
+        value: `It asks to set no close authority on ${userTokenAccount}. If accepted, the account's owner can still close it.`,
+      },
+      {
+        label: "Changes an authority",
+        value: `It asks to set no mint authority on ${userTokenAccount}.`,
+      },
+      {
+        label: "Changes an authority",
+        value: `It asks to set no TransferFeeConfig authority on ${userTokenAccount}.`,
+      },
+      {
+        label: "Changes an authority",
+        value: `It asks to set the freeze authority of ${userTokenAccount} to ${attacker}.`,
+      },
+      {
+        label: "Changes an authority",
+        value: `It asks to set the TransferFeeConfig authority of ${userTokenAccount} to ${attacker}.`,
+      },
+      {
+        label: "Closes a token account",
+        value: `It asks to close ${userTokenAccount} and send its SOL to ${attacker}.`,
+      },
+    ]);
+    const result = await drainerOffline();
+    const nonce = transactionCardText(LINK, null, {
+      ...result,
+      summary: {
+        ...result.summary,
+        effects: [],
+        others: [{ instruction: 0, kind: "advance-nonce" as const }],
+      },
+    });
+    assert.ok(
+      nonce.rows.some(
+        (row) => row.value === "It asks to advance a durable nonce.",
+      ),
+    );
+    // No row says an instruction is accepted, removes something, or happens.
+    for (const row of [...rows, ...nonce.rows]) {
+      assert.doesNotMatch(
+        row.value,
+        /\baccepts\b|\bis removed\b|\bmoves to\b/,
+        row.value,
+      );
+    }
+  });
+
   it("A7: a transfer from a token account to itself moves no tokens", async () => {
     const rows = await rowsFor([
       {
@@ -673,8 +770,8 @@ describe("the owner's audit: what the card claims", () => {
       },
     ]);
     assert.deepEqual(rows[1], {
-      label: "Moves no tokens",
-      value: `A transfer of 5 base units from token account ${userTokenAccount} to itself, which the Token program accepts without moving any.`,
+      label: "Transfers to the same account",
+      value: `It asks to transfer 5 base units from token account ${userTokenAccount} to itself, which moves no tokens if accepted.`,
     });
   });
 
@@ -900,11 +997,11 @@ describe("the owner's audit: what the card claims", () => {
     assert.deepEqual(rows.slice(1, 3), [
       {
         label: "Changes an authority",
-        value: `Ownership of ${userTokenAccount} is set to your wallet.`,
+        value: `It asks to set the owner of ${userTokenAccount} to your wallet.`,
       },
       {
         label: "Changes an authority",
-        value: `The mint authority of ${fixture.keys.mint} moves to ${attacker}.`,
+        value: `It asks to set the mint authority of ${fixture.keys.mint} to ${attacker}.`,
       },
     ]);
   });
@@ -1094,11 +1191,11 @@ describe("the owner's audit: what the card claims", () => {
       },
       {
         label: "Creates a token account",
-        value: `Your wallet pays up to the rent for new token account ${attacker}.`,
+        value: `It asks your wallet to pay up to the rent for new token account ${attacker}.`,
       },
       {
         label: "May create a token account",
-        value: `If token account ${attacker} does not exist yet, it is created and your wallet pays up to its rent.`,
+        value: `It asks to create token account ${attacker} if it does not exist yet, with your wallet paying up to its rent.`,
       },
     ]);
   });
