@@ -10,6 +10,7 @@
 
 import { decodePublicKey } from "./base58.ts";
 import { decodeBase64 } from "./base64.ts";
+import { jsonNumbers, pathKey } from "./json.ts";
 import { DEVNET_GENESIS_HASH } from "./programs.ts";
 
 /** What a fetch resolves to: plain data, the body already read as text. */
@@ -148,12 +149,27 @@ function asFetched(url: string): string {
     : `${authorityOnly[1]}/${authorityOnly[2] ?? ""}`;
 }
 
+/** The raw text of a number in a call's result, by its path from there. */
+type RawNumber = (path: readonly (string | number)[]) => string | undefined;
+
 /** One JSON-RPC call; its result, parsed from the answer's text. */
 async function call(
   endpoint: Required<RpcEndpoint>,
   method: string,
   params: unknown[],
 ): Promise<unknown> {
+  return (await callKeepingNumbers(endpoint, method, params)).result;
+}
+
+/**
+ * One JSON-RPC call; its result, and the text of each number in it as the
+ * answer wrote it (json.ts), for the amounts and slot the client keeps.
+ */
+async function callKeepingNumbers(
+  endpoint: Required<RpcEndpoint>,
+  method: string,
+  params: unknown[],
+): Promise<{ readonly result: unknown; readonly raw: RawNumber }> {
   const id = nextId;
   nextId += 1;
   const late = () =>
@@ -185,8 +201,10 @@ async function call(
       `${method}: the answer came from another address`,
     );
   }
+  const numbers = jsonNumbers(answer.text);
   let body: unknown;
   try {
+    if (numbers === null) throw new Error("not JSON");
     body = JSON.parse(answer.text);
   } catch {
     throw new RpcError("shape", `${method}: not JSON`);
@@ -204,7 +222,10 @@ async function call(
     );
   }
   if (!("result" in body)) throw new RpcError("shape", `${method}: no result`);
-  return body.result;
+  return {
+    result: body.result,
+    raw: (path) => numbers?.get(pathKey(["result", ...path])),
+  };
 }
 
 /** What the pre-flight asks of the endpoint, inside the package only. */
@@ -243,13 +264,20 @@ export function isAmount(value: unknown): value is string {
 }
 
 /**
- * A lamport or token amount: a whole number from 0 to the largest u64, as a
- * JSON number no larger than 2^53 (past it, precision is already lost) or as
- * a decimal string. Anything else is refused.
+ * A lamport amount: a whole number from 0 to the largest u64. A JSON number is
+ * taken from its text as the answer wrote it (raw), digit for digit, and one
+ * written with a fraction or an exponent is refused, even where JSON.parse
+ * rounds it to a whole number (1.0000000000000001 reads as 1). A decimal
+ * string is taken as it is. Anything else is refused.
  */
-function amountOf(value: unknown, what: string): string {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
-    return String(value);
+function amountAt(
+  value: unknown,
+  raw: string | undefined,
+  what: string,
+): string {
+  if (typeof value === "number") {
+    if (raw !== undefined && isAmount(raw)) return raw;
+    throw new RpcError("shape", `${what}: not a whole amount`);
   }
   if (isAmount(value)) return value;
   throw new RpcError("shape", `${what}: not a whole amount`);
@@ -259,17 +287,21 @@ function amountOf(value: unknown, what: string): string {
 function listOf<T>(
   value: unknown,
   what: string,
-  read: (item: unknown) => T,
+  read: (item: unknown, index: number) => T,
 ): T[] {
   if (!Array.isArray(value)) throw new RpcError("shape", `${what}: not a list`);
   const out: T[] = [];
-  for (let i = 0; i < value.length; i += 1) out.push(read(value[i]));
+  for (let i = 0; i < value.length; i += 1) out.push(read(value[i], i));
   return out;
 }
 
-function balancesOf(value: unknown, what: string): string[] | null {
+function balancesOf(
+  value: unknown,
+  what: string,
+  raw: (index: number) => string | undefined,
+): string[] | null {
   if (value === undefined || value === null) return null;
-  return listOf(value, what, (item) => amountOf(item, what));
+  return listOf(value, what, (item, index) => amountAt(item, raw(index), what));
 }
 
 /** Whether a value is a public key: base58 for 32 bytes. */
@@ -338,15 +370,19 @@ async function fetchSimulation(
   endpoint: Required<RpcEndpoint>,
   transactionBase64: string,
 ): Promise<Simulation> {
-  const result = await call(endpoint, "simulateTransaction", [
-    transactionBase64,
-    {
-      encoding: "base64",
-      sigVerify: false,
-      replaceRecentBlockhash: true,
-      commitment: "confirmed",
-    },
-  ]);
+  const { result, raw } = await callKeepingNumbers(
+    endpoint,
+    "simulateTransaction",
+    [
+      transactionBase64,
+      {
+        encoding: "base64",
+        sigVerify: false,
+        replaceRecentBlockhash: true,
+        commitment: "confirmed",
+      },
+    ],
+  );
   const value = valueOf(result, "simulateTransaction");
   if (!isRecord(value)) {
     throw new RpcError("shape", "simulateTransaction: value");
@@ -354,7 +390,15 @@ async function fetchSimulation(
   const context = isRecord(result) ? result.context : undefined;
   // A slot that is given must be one; with none given, it is unknown.
   const given = isRecord(context) ? context.slot : undefined;
-  if (given !== undefined && !isSlot(given)) {
+  // Read from its text, so a slot written with a fraction or an exponent is
+  // refused even where JSON.parse rounds it (json.ts).
+  const givenText = raw(["context", "slot"]);
+  if (
+    given !== undefined &&
+    (!isSlot(given) ||
+      givenText === undefined ||
+      !/^(0|[1-9][0-9]*)$/.test(givenText))
+  ) {
     throw new RpcError("shape", "simulateTransaction: context slot");
   }
   const slot = given ?? null;
@@ -389,10 +433,12 @@ async function fetchSimulation(
     preBalances: balancesOf(
       value.preBalances,
       "simulateTransaction: preBalances",
+      (index) => raw(["value", "preBalances", index]),
     ),
     postBalances: balancesOf(
       value.postBalances,
       "simulateTransaction: postBalances",
+      (index) => raw(["value", "postBalances", index]),
     ),
   };
 }

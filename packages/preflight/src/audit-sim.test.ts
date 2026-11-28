@@ -212,7 +212,9 @@ describe("audit 8: a malformed balance is refused, not thrown later", () => {
     "18446744073709551616",
     -1,
     1.5,
-    2 ** 53 + 2,
+    // A number past 2^53 is kept as the answer wrote it (ruling 20a, item
+    // 5, below); 2^64 is past the largest u64.
+    18446744073709551616,
   ];
   const simulateWith = (value: Json) =>
     jsonRpc(
@@ -1000,5 +1002,83 @@ describe("ruling 20a, item 4: every answer comes from the endpoint, with status 
         reason: "getGenesisHash: the answer came from another address",
       },
     );
+  });
+});
+
+describe("ruling 20a, item 5: balances and the slot are read as the answer wrote them", () => {
+  // An answer written by hand, so its numbers keep the text JSON.stringify
+  // would round away.
+  const raw = (pre: string, post: string, slot = "7"): RpcEndpoint => ({
+    url: "https://rpc.example/",
+    fetch: async (url, init) => {
+      const { id, method } = JSON.parse(init.body) as {
+        id: number;
+        method: string;
+      };
+      const result =
+        method === "getGenesisHash"
+          ? JSON.stringify(DEVNET_GENESIS_HASH)
+          : `{"context":{"slot":${slot}},"value":{"err":null,"logs":[],"accounts":null,"preBalances":[${pre},0,1],"postBalances":[${post},0,1],"loadedAddresses":{"writable":[],"readonly":[]}}}`;
+      return {
+        ok: true,
+        status: 200,
+        url,
+        text: `{"jsonrpc":"2.0","id":${id},"result":${result}}`,
+      };
+    },
+  });
+  const run = async (endpoint: RpcEndpoint) => {
+    const result = await preflight(
+      endpoint,
+      encodeBase64(build([transfer()])),
+      USER,
+    );
+    assert.ok(result.kind === "ready");
+    return result;
+  };
+
+  for (const bad of [
+    "1.0000000000000001",
+    "5000000000.0",
+    "5e9",
+    "5E9",
+    "1e0",
+  ]) {
+    it(`refuses the balance ${bad}`, async () => {
+      for (const endpoint of [raw(bad, "1"), raw("1", bad)]) {
+        const { simulation } = await run(endpoint);
+        assert.equal(simulation.status, "not-run");
+        assert.match(
+          simulation.status === "not-run" ? simulation.reason : "",
+          /^simulateTransaction: (pre|post)Balances: not a whole amount$/,
+        );
+      }
+    });
+  }
+
+  for (const bad of ["1.0000000000000001", "7.0", "7e0"]) {
+    it(`refuses the slot ${bad}`, async () => {
+      assert.deepEqual((await run(raw("5", "4", bad))).simulation, {
+        status: "not-run",
+        reason: "simulateTransaction: context slot",
+      });
+    });
+  }
+
+  it("keeps a u64 past 2^53 digit for digit", async () => {
+    const result = await run(raw("18446744073709551615", "9007199254740993"));
+    assert.deepEqual(result.simulation, {
+      status: "ran",
+      err: null,
+      changes: [
+        {
+          kind: "sol",
+          account: "user",
+          before: "18446744073709551615",
+          after: "9007199254740993",
+        },
+      ],
+    });
+    assert.deepEqual(result.simulatedAt?.slot, 7);
   });
 });
