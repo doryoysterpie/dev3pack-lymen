@@ -1423,6 +1423,97 @@ describe("re-audit A6: the runtime error is JSON data", () => {
   });
 });
 
+describe("re-audit A4: the report names no address of the wallet's", () => {
+  const offline = () =>
+    jsonRpc(async () => {
+      throw new Error("offline");
+    }, "x");
+  const other = key(K.userToken2022Account);
+  // A Token transfer, signed by the wallet, from one of its token accounts
+  // to another.
+  const between = () =>
+    build([
+      new web3.TransactionInstruction({
+        programId: new web3.PublicKey(TOKEN_PROGRAM),
+        keys: [
+          { pubkey: tokenAccount, isSigner: false, isWritable: true },
+          { pubkey: other, isSigner: false, isWritable: true },
+          { pubkey: user, isSigner: true, isWritable: false },
+        ],
+        data: Buffer.from([3, 5, 0, 0, 0, 0, 0, 0, 0]),
+      }),
+    ]);
+
+  it("(i) with no read, a wallet-signed transfer's destination is marked too", async () => {
+    const result = await preflightTransaction(between(), {
+      rpc: offline(),
+      user: USER,
+    });
+    assert.ok(result.summary.kind === "ready");
+    assert.equal(result.summary.simulation.status, "not-run");
+    const json = JSON.stringify(result);
+    assert.equal(json.includes(K.userTokenAccount), false);
+    assert.equal(json.includes(K.userToken2022Account), false);
+    const out = result.summary.summary.effects[0];
+    assert.ok(out.kind === "token-out");
+    assert.deepEqual(out.source, {
+      address: "user-authorized token account 1",
+    });
+    assert.deepEqual(out.destination, {
+      address: "user-authorized token account 2",
+    });
+  });
+
+  it("(ii) an address of the wallet's inside a longer run of RPC text is scrubbed", async () => {
+    const approve = build([
+      new web3.TransactionInstruction({
+        programId: new web3.PublicKey(TOKEN_PROGRAM),
+        keys: [
+          { pubkey: tokenAccount, isSigner: false, isWritable: true },
+          { pubkey: attacker, isSigner: false, isWritable: false },
+          { pubkey: user, isSigner: true, isWritable: false },
+        ],
+        data: Buffer.from([4, 5, 0, 0, 0, 0, 0, 0, 0]),
+      }),
+    ]);
+    const recorded = recordedRpc({
+      accounts: {
+        [USER]: system(5_000_000_000) as never,
+        [K.userTokenAccount]: tokenState(9, null) as never,
+      },
+      simulation: {
+        err: {
+          [`x${USER}y`]: `z${K.userTokenAccount}z`,
+          list: [`2${USER}`],
+        },
+        accounts: {},
+      },
+    });
+    const ran = await preflightTransaction(approve, {
+      rpc: recorded,
+      user: USER,
+    });
+    assert.ok(ran.summary.kind === "ready");
+    assert.equal(ran.summary.simulation.status, "ran");
+    const failed = await preflightTransaction(approve, {
+      rpc: {
+        ...recorded,
+        simulate: async () => {
+          throw new Error(`refused: k${K.userTokenAccount}k and 9${USER}`);
+        },
+      },
+      user: USER,
+    });
+    assert.ok(failed.summary.kind === "ready");
+    assert.equal(failed.summary.simulation.status, "not-run");
+    for (const result of [ran, failed]) {
+      const json = JSON.stringify(result);
+      assert.equal(json.includes(USER), false, json);
+      assert.equal(json.includes(K.userTokenAccount), false, json);
+    }
+  });
+});
+
 describe("audit 9: the report JSON and the blockhash", () => {
   const offline = () =>
     jsonRpc(async () => {
