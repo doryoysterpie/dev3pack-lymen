@@ -125,7 +125,7 @@ test("the inliner refuses a script holding </script, <script or <!-- in any case
   );
 });
 
-test("the build runs Vite with PATH and NODE_ENV alone: a VITE_ variable and DEBUG=vite:env set for it reach neither its output nor the page", () => {
+test("the build passes Vite PATH and NODE_ENV (plus NODE_V8_COVERAGE when Node propagates it): a VITE_ variable and DEBUG=vite:env set for it reach neither its output nor the page", () => {
   const label = "vite-secret-label-5e1b";
   const env = { VITE_SECRET_LABEL: label, DEBUG: "vite:env" };
   const viteBin = join(
@@ -250,5 +250,57 @@ test("the station build is documented as node apps/station/build.ts, not an npm 
         `${manifestPath} script ${name} invokes build.ts`,
       );
     }
+  }
+});
+
+test("the Vite child receives PATH and NODE_ENV=production, plus NODE_V8_COVERAGE when non-empty in the parent, and the station README and build.ts state that exact set", () => {
+  const envKeysOf = (parentEnv: Record<string, string>): string[] => {
+    const outDir = mkdtempSync(join(tmpdir(), "limen-station-build-"));
+    try {
+      const r = spawnSync(
+        process.execPath,
+        [join(APP, "build.ts"), "--outDir", outDir],
+        {
+          cwd: APP,
+          encoding: "utf8",
+          env: {
+            PATH: process.env.PATH ?? "",
+            NODE_DEBUG: "child_process",
+            EXTRA_CALLER_VAR: "ignored",
+            ...parentEnv,
+          },
+          timeout: 120_000,
+        },
+      );
+      assert.equal(r.status, 0, r.stderr.slice(-600));
+      const block = /envPairs: \[([\s\S]*?)\]/.exec(r.stderr)?.[1];
+      assert.ok(block !== undefined, "CHILD_PROCESS logged envPairs");
+      return [...block.matchAll(/'([A-Za-z0-9_]+)=/g)].map((m) => m[1]!);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  };
+
+  assert.deepEqual(envKeysOf({}), ["PATH", "NODE_ENV"]);
+  assert.deepEqual(envKeysOf({ NODE_V8_COVERAGE: "" }), ["PATH", "NODE_ENV"]);
+  const covDir = mkdtempSync(join(tmpdir(), "limen-station-cov-"));
+  try {
+    assert.deepEqual(envKeysOf({ NODE_V8_COVERAGE: covDir }), [
+      "PATH",
+      "NODE_ENV",
+      "NODE_V8_COVERAGE",
+    ]);
+  } finally {
+    rmSync(covDir, { recursive: true, force: true });
+  }
+
+  for (const rel of ["README.md", "build.ts"]) {
+    const text = readFileSync(join(APP, rel), "utf8");
+    assert.match(text, /NODE_V8_COVERAGE/, `${rel} names NODE_V8_COVERAGE`);
+    assert.doesNotMatch(
+      text,
+      /`?PATH`? and `?NODE_ENV`? alone/,
+      `${rel} no longer says PATH and NODE_ENV alone`,
+    );
   }
 });

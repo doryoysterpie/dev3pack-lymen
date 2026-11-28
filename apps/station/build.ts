@@ -1,6 +1,6 @@
-// Builds the station page (E-03): `node apps/station/build.ts`. Vite
-// runs in a child process whose environment is PATH and NODE_ENV alone, so no variable of the
-// caller's, a secret or a VITE_ one, reaches the build or its debug output (src/build.test.ts).
+// Builds the station page (E-03): `node apps/station/build.ts`. Vite runs in a child process
+// given { PATH, NODE_ENV: "production" }, to which Node adds NODE_V8_COVERAGE when non-empty in
+// the parent; no other variable from the caller reaches the child (src/build.test.ts).
 // Arguments, such as --outDir, pass through to `vite build`.
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
