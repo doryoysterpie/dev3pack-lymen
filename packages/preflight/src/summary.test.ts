@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
+import * as web3 from "@solana/web3.js";
+
 import { decodeBase64 } from "./base64.ts";
 import { summarizeTransaction } from "./summary.ts";
 import { parseTransaction, type ParsedTransaction } from "./wire.ts";
@@ -63,7 +65,7 @@ describe("E-09 done test: fixture transactions yield the owed summary", () => {
   });
 });
 
-describe("no crash on damaged transactions", () => {
+describe("damaged transactions", () => {
   // A small deterministic generator, so a failure can be replayed.
   let state = 0x2545f491;
   const next = () => {
@@ -72,18 +74,87 @@ describe("no crash on damaged transactions", () => {
     state ^= state << 5;
     return (state >>> 0) / 0x100000000;
   };
+  const fixtureBytes = fixture.cases.map((c) => {
+    const bytes = decodeBase64(c.transaction);
+    assert.ok(bytes !== null);
+    return bytes;
+  });
 
-  it("parses or refuses 20000 damaged copies of the fixtures, and summarizes every one it parses", () => {
-    let parsedCount = 0;
+  // A well-formed transaction cut short always runs out of bytes, so every
+  // strict prefix owes exactly "truncated".
+  it("refuses every strict prefix of every fixture as truncated", () => {
+    let prefixes = 0;
+    for (const bytes of fixtureBytes) {
+      for (let length = 0; length < bytes.length; length += 1) {
+        assert.deepEqual(parseTransaction(bytes.slice(0, length)), {
+          ok: false,
+          problem: "truncated",
+        });
+        prefixes += 1;
+      }
+    }
+    assert.ok(prefixes > 1000);
+  });
+
+  // web3.js 1.99.0 is the oracle: a damaged copy limen accepts must read
+  // exactly as web3.js reads it.
+  it("reads a damaged copy it accepts exactly as web3.js does", () => {
+    let accepted = 0;
+    for (let round = 0; round < 3000; round += 1) {
+      const damaged = fixtureBytes[round % fixtureBytes.length].slice();
+      for (let flips = 1 + Math.floor(next() * 4); flips > 0; flips -= 1) {
+        damaged[Math.floor(next() * damaged.length)] = Math.floor(next() * 256);
+      }
+      const result = parseTransaction(damaged);
+      if (!result.ok) continue;
+      accepted += 1;
+      const theirs = web3.VersionedTransaction.deserialize(damaged).message;
+      const ours = result.transaction.message;
+      assert.deepEqual(
+        {
+          version: ours.version,
+          header: ours.header,
+          staticKeys: ours.staticKeys,
+          recentBlockhash: ours.recentBlockhash,
+          instructions: ours.instructions.map((ix) => ({
+            programIdIndex: ix.programIdIndex,
+            accountIndexes: [...ix.accountIndexes],
+            data: [...ix.data],
+          })),
+          lookups: ours.lookups.map((lookup) => ({
+            table: lookup.table,
+            writableIndexes: [...lookup.writableIndexes],
+            readonlyIndexes: [...lookup.readonlyIndexes],
+          })),
+        },
+        {
+          version: theirs.version,
+          header: { ...theirs.header },
+          staticKeys: theirs.staticAccountKeys.map((k) => k.toBase58()),
+          recentBlockhash: theirs.recentBlockhash,
+          instructions: theirs.compiledInstructions.map((ix) => ({
+            programIdIndex: ix.programIdIndex,
+            accountIndexes: [...ix.accountKeyIndexes],
+            data: [...ix.data],
+          })),
+          lookups: theirs.addressTableLookups.map((lookup) => ({
+            table: lookup.accountKey.toBase58(),
+            writableIndexes: [...lookup.writableIndexes],
+            readonlyIndexes: [...lookup.readonlyIndexes],
+          })),
+        },
+      );
+    }
+    assert.ok(accepted > 100, `only ${accepted} damaged copies parsed`);
+  });
+
+  // Crash coverage only, not a done test: it owes no answer beyond "no throw".
+  it("throws on none of 20000 damaged or random inputs, summary included", () => {
     for (let round = 0; round < 20000; round += 1) {
       const c = fixture.cases[round % fixture.cases.length];
-      const bytes = decodeBase64(c.transaction);
-      assert.ok(bytes !== null);
+      const bytes = fixtureBytes[round % fixtureBytes.length];
       let damaged: Uint8Array;
-      const mode = round % 3;
-      if (mode === 0) {
-        damaged = bytes.slice(0, Math.floor(next() * bytes.length));
-      } else if (mode === 1) {
+      if (round % 2 === 0) {
         damaged = bytes.slice();
         for (let flips = 1 + Math.floor(next() * 4); flips > 0; flips -= 1) {
           damaged[Math.floor(next() * damaged.length)] = Math.floor(
@@ -98,18 +169,11 @@ describe("no crash on damaged transactions", () => {
       }
       const result = parseTransaction(damaged);
       if (result.ok) {
-        parsedCount += 1;
         summarizeTransaction(
           result.transaction,
           new Map(Object.entries(c.tables)),
         );
-      } else {
-        assert.equal(typeof result.problem, "string");
       }
     }
-    assert.ok(
-      parsedCount > 0,
-      "no damaged copy parsed, so summaries went untested",
-    );
   });
 });

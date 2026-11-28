@@ -4,7 +4,7 @@
 // A summary never carries the user's address as text: wherever it would
 // appear, the summary writes "user". A report goes further (preflight.ts,
 // toReport): it writes "user token account 1", "user token account 2" and so
-// on for the wallet's token accounts, and the reason a simulation did not run,
+// on for the wallet's token accounts, and the reason a simulation is not used,
 // or the error it ran into, has every address in it replaced. So the app and a
 // server produce the same report for the same bytes, and a report names
 // neither the wallet nor one of the token accounts limen found to be its own.
