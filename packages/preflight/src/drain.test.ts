@@ -213,7 +213,7 @@ describe("preflightTransaction, the server entry point", () => {
     });
   });
 
-  it("returns the slot and the blockhash the simulation ran against, outside the summary", async () => {
+  it("returns the slot the simulation ran at, outside the summary, and not the RPC's blockhash", async () => {
     const result = await preflightTransaction(DRAINER, {
       rpc: recordedRpc({
         ...unknownOutcome(9_995_000, token(1000, ATTACKER)),
@@ -225,11 +225,15 @@ describe("preflightTransaction, the server entry point", () => {
       }),
       user: USER,
     });
-    assert.deepEqual(result.simulatedAt, {
-      slot: 527004383,
-      blockhash: "GktecGbUNfCx8DDQSQYK9CKuFoN95ca2JdPYz6pZLeiW",
-    });
+    // The server output keeps no blockhash from the RPC (the PM's ruling on
+    // A4 iii); the app's Preflight keeps it, checked.
+    assert.deepEqual(result.simulatedAt, { slot: 527004383 });
     assert.ok(!JSON.stringify(result.summary).includes("527004383"));
+    assert.ok(
+      !JSON.stringify(result).includes(
+        "GktecGbUNfCx8DDQSQYK9CKuFoN95ca2JdPYz6pZLeiW",
+      ),
+    );
   });
 
   it("refuses bytes that are not a transaction, with no drain pattern", async () => {

@@ -1807,18 +1807,25 @@ describe("audit 9: the report JSON and the blockhash", () => {
   });
 
   it("keeps no replacement blockhash that is an account of the transaction, or not a hash", async () => {
+    const rpcWith = (replacementBlockhash: string) =>
+      recordedRpc({
+        accounts: { [USER]: system(5_000_000_000) as never },
+        simulation: {
+          err: null,
+          accounts: { [USER]: system(4_999_995_000) as never },
+          slot: 7,
+          replacementBlockhash,
+        },
+      });
+    // The app's Preflight keeps a checked blockhash.
     const withHash = (replacementBlockhash: string) =>
-      preflightTransaction(build([transfer()]), {
-        rpc: recordedRpc({
-          accounts: { [USER]: system(5_000_000_000) as never },
-          simulation: {
-            err: null,
-            accounts: { [USER]: system(4_999_995_000) as never },
-            slot: 7,
-            replacementBlockhash,
-          },
-        }),
-        user: USER,
+      preflight(
+        rpcWith(replacementBlockhash),
+        encodeBase64(build([transfer()])),
+        USER,
+      ).then((result) => {
+        assert.ok(result.kind === "ready");
+        return result;
       });
     assert.deepEqual((await withHash(USER)).simulatedAt, {
       slot: 7,
@@ -1832,5 +1839,22 @@ describe("audit 9: the report JSON and the blockhash", () => {
       slot: 7,
       blockhash: K.mint,
     });
+  });
+
+  it("re-audit A4 (iii): the server output keeps no blockhash from the RPC", async () => {
+    const result = await preflightTransaction(build([transfer()]), {
+      rpc: recordedRpc({
+        accounts: { [USER]: system(5_000_000_000) as never },
+        simulation: {
+          err: null,
+          accounts: { [USER]: system(4_999_995_000) as never },
+          slot: 7,
+          replacementBlockhash: K.mint,
+        },
+      }),
+      user: USER,
+    });
+    assert.deepEqual(result.simulatedAt, { slot: 7 });
+    assert.equal(JSON.stringify(result).includes(K.mint), false);
   });
 });
