@@ -106,28 +106,42 @@ function stationQr(
     sendJson(res, 404, { error: "unknown_station" });
     return;
   }
-  const sessions = ctx.db
-    .prepare(
-      "SELECT id, starts_at, ends_at FROM sessions ORDER BY starts_at DESC, id",
-    )
-    .all() as { id: string; starts_at: number; ends_at: number }[];
-  // The clock is read once, after the last database read. The session choice and issued_at both
-  // come from this reading, and issueStationQr signs after it; nothing bounds the time between
-  // the reading and the signature.
-  const nowMs = ctx.nowMs?.() ?? ctx.now() * 1000;
-  const now = Math.floor(nowMs / 1000);
-  const session = sessions.find((s) => s.starts_at <= now && now < s.ends_at);
-  if (session === undefined) {
+  // The sessions, the clock and the signature come from one BEGIN IMMEDIATE transaction, the
+  // write lock the seed also takes, so no seed can change the session between them.
+  try {
+    ctx.db.exec("BEGIN IMMEDIATE");
+  } catch {
+    sendJson(res, 503, { error: "busy" });
+    return;
+  }
+  let issued: ReturnType<typeof issueStationQr> | null;
+  try {
+    const sessions = ctx.db
+      .prepare(
+        "SELECT id, starts_at, ends_at FROM sessions ORDER BY starts_at DESC, id",
+      )
+      .all() as { id: string; starts_at: number; ends_at: number }[];
+    const nowMs = ctx.nowMs?.() ?? ctx.now() * 1000;
+    const now = Math.floor(nowMs / 1000);
+    const session = sessions.find((s) => s.starts_at <= now && now < s.ends_at);
+    issued =
+      session === undefined
+        ? null
+        : issueStationQr({
+            station: stationId,
+            session: session.id,
+            now,
+            signer: ctx.stationSigner,
+            notAfter: session.ends_at,
+          });
+  } finally {
+    ctx.db.exec("COMMIT");
+  }
+  if (issued === null) {
     sendJson(res, 409, { error: "no_active_session" });
     return;
   }
-  const { text, payload } = issueStationQr({
-    station: stationId,
-    session: session.id,
-    now,
-    signer: ctx.stationSigner,
-    notAfter: session.ends_at,
-  });
+  const { text, payload } = issued;
   sendJson(res, 200, {
     qr: text,
     station: payload.station,
