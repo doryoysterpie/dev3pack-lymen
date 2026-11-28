@@ -1,5 +1,6 @@
 // Triage dashboard routes (E-12). GET /dashboard serves a plain page and its script and style
-// from services/api/dashboard. The JSON routes behind it need the triage token as a bearer
+// from services/api/dashboard, and the logo from the repository's assets folder (E-19). The JSON
+// routes behind it need the triage token as a bearer
 // token, because they show evidence and change case status:
 //   GET  /cases                 every case, most recently updated first
 //   GET  /cases/:id             one case and its evidence, each sighting with its bundle
@@ -39,7 +40,23 @@ export interface DashboardOptions {
 const asset = (name: string): Buffer =>
   readFileSync(new URL(`../dashboard/${name}`, import.meta.url));
 
+/**
+ * The logo (E-19), read from the repository's assets folder. Without that folder, as when only
+ * this service is copied, the route is left out and the page shows the image's alt text, "limen".
+ */
+function logo(): [string, { body: Buffer; type: string }][] {
+  try {
+    const body = readFileSync(
+      new URL("../../../assets/limen-logo.svg", import.meta.url),
+    );
+    return [["/limen-logo.svg", { body, type: "image/svg+xml" }]];
+  } catch {
+    return [];
+  }
+}
+
 const ASSETS: ReadonlyMap<string, { body: Buffer; type: string }> = new Map([
+  ...logo(),
   [
     "/dashboard",
     { body: asset("index.html"), type: "text/html; charset=utf-8" },
@@ -54,9 +71,9 @@ const ASSETS: ReadonlyMap<string, { body: Buffer; type: string }> = new Map([
   ],
 ]);
 
-/** The page loads only its own script and style, and talks only to this API. */
+/** The page loads only its own script, style and logo, and talks only to this API. */
 export const DASHBOARD_CSP =
-  "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; " +
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; " +
   "base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 const CASE_PATH = /^\/cases\/([1-9][0-9]{0,15})(?:\/(escalate|dismiss))?$/;

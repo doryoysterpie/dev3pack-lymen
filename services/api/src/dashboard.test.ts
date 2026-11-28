@@ -279,6 +279,22 @@ test("the page, script and style are served without a token, with a CSP that all
   );
 });
 
+test("E-19: the header shows the logo with the alt text limen, served from the repository's assets folder", async () => {
+  const base = await start({});
+  assert.match(
+    await (await fetch(`${base}/dashboard`)).text(),
+    /<h1><img class="logo" src="\/limen-logo\.svg" alt="limen" \/> triage<\/h1>/,
+  );
+  const logo = await fetch(`${base}/limen-logo.svg`);
+  assert.equal(logo.status, 200);
+  assert.equal(logo.headers.get("content-type"), "image/svg+xml");
+  assert.deepEqual(
+    Buffer.from(await logo.arrayBuffer()),
+    readFileSync(new URL("../../../assets/limen-logo.svg", import.meta.url)),
+  );
+  assert.match(DASHBOARD_CSP, /(^|; )img-src 'self'(;|$)/);
+});
+
 test("without the domain lists, /health and the page still answer, and the triage routes answer 503", async () => {
   const base = await start({ triageToken: TOKEN, lists: null });
   const health = await fetch(`${base}/health`);
