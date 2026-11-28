@@ -31,6 +31,7 @@ import {
   scrubAddresses,
   scrubWithin,
   USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER,
+  WALLET_SIGNED_ACCOUNT_MARKER,
   USER_TOKEN_ACCOUNT_MARKER,
   withMarker,
   withMarkers,
@@ -58,6 +59,7 @@ import { parseLookupTable } from "./state.ts";
 import {
   summarizeTransaction,
   userAuthorizedTokenAccounts,
+  walletSignedAccounts,
   userTokenAccounts,
   type TransactionSummary,
 } from "./summary.ts";
@@ -138,6 +140,12 @@ export type Preflight =
        * ownership. A report writes "user-authorized token account N".
        */
       readonly userAuthorizedTokenAccounts: readonly string[];
+      /**
+       * Every other account an instruction the wallet signs names, in the
+       * same order (summary.ts, walletSignedAccounts). A report writes
+       * "account in a wallet-signed instruction N".
+       */
+      readonly walletSignedAccounts: readonly string[];
     };
 
 export function signBlocks(
@@ -384,10 +392,24 @@ export async function preflight(
   ]
     .filter((address) => !tokenAccounts.includes(address))
     .sort(inOrder);
+  // Every other account an instruction the wallet signs names, whatever the
+  // instruction (summary.ts, walletSignedAccounts).
+  const signedAccounts = walletSignedAccounts(transaction, tables)
+    .filter(
+      (address) =>
+        !tokenAccounts.includes(address) &&
+        !authorizedAccounts.includes(address),
+    )
+    .sort(inOrder);
   // The RPC's text can hold an address inside a longer run, which the scrub
-  // of whole runs leaves; the wallet's own addresses are removed wherever
-  // they occur.
-  const walletAddresses = [feePayer, ...tokenAccounts, ...authorizedAccounts];
+  // of whole runs leaves; every address a report marks is removed wherever
+  // it occurs.
+  const walletAddresses = [
+    feePayer,
+    ...tokenAccounts,
+    ...authorizedAccounts,
+    ...signedAccounts,
+  ];
   simulation =
     simulation.status === "ran"
       ? { ...simulation, err: scrubWithin(simulation.err, walletAddresses) }
@@ -406,6 +428,7 @@ export async function preflight(
     simulatedAt,
     userTokenAccounts: tokenAccounts,
     userAuthorizedTokenAccounts: authorizedAccounts,
+    walletSignedAccounts: signedAccounts,
   };
 }
 
@@ -475,6 +498,10 @@ export function toReport(result: Preflight): PreflightReport {
     ...result.userAuthorizedTokenAccounts.map(
       (address, i) =>
         [address, `${USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER} ${i + 1}`] as const,
+    ),
+    ...result.walletSignedAccounts.map(
+      (address, i) =>
+        [address, `${WALLET_SIGNED_ACCOUNT_MARKER} ${i + 1}`] as const,
     ),
   ]);
   return withMarkers(

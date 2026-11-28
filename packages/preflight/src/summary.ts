@@ -30,6 +30,16 @@ import {
   priorityFeeLamports,
 } from "./fee.ts";
 import { withMarker } from "./marker.ts";
+import {
+  ADDRESS_LOOKUP_TABLE_PROGRAM,
+  ASSOCIATED_TOKEN_PROGRAM,
+  COMPUTE_BUDGET_PROGRAM,
+  MEMO_PROGRAM,
+  MEMO_V1_PROGRAM,
+  SYSTEM_PROGRAM,
+  TOKEN_2022_PROGRAM,
+  TOKEN_PROGRAM,
+} from "./programs.ts";
 import type { ParsedTransaction } from "./wire.ts";
 
 /** An account in the summary: its address, or where it sits when unknown. */
@@ -586,4 +596,67 @@ export function summarizeTransaction(
     },
     user,
   );
+}
+
+/**
+ * Programs and sysvars a decoded instruction can name as an account, such as
+ * the System Program in an associated token account creation or the Rent
+ * sysvar in InitializeAccount. None is one of the wallet's accounts, and
+ * each can appear in a report as a value of its own (an account's owner
+ * program), so none is marked.
+ */
+const NOT_MARKED: ReadonlySet<string> = new Set([
+  SYSTEM_PROGRAM,
+  TOKEN_PROGRAM,
+  TOKEN_2022_PROGRAM,
+  ASSOCIATED_TOKEN_PROGRAM,
+  COMPUTE_BUDGET_PROGRAM,
+  MEMO_PROGRAM,
+  MEMO_V1_PROGRAM,
+  ADDRESS_LOOKUP_TABLE_PROGRAM,
+  "SysvarRent111111111111111111111111111111111",
+  "SysvarRecentB1ockHashes11111111111111111111",
+]);
+
+/**
+ * Every address in the account list of an instruction the user's wallet
+ * signs (the wallet is among its accounts as a signer), whatever the
+ * instruction and whatever the position: any of them could be one of the
+ * wallet's accounts, so a report marks them all (preflight.ts, toReport).
+ * Not the wallet itself, a program an instruction of the message invokes,
+ * or a program or sysvar in NOT_MARKED. Addresses only, in the order the
+ * instructions name them, without repeats.
+ */
+export function walletSignedAccounts(
+  transaction: ParsedTransaction,
+  tables: LookupTables,
+): string[] {
+  const { message } = transaction;
+  const accounts = messageAccounts(message, tables);
+  const user = message.staticKeys[0];
+  const invoked = new Set<string | null>();
+  for (const compiled of message.instructions) {
+    invoked.add(accounts[compiled.programIdIndex]?.address ?? null);
+  }
+  const found: string[] = [];
+  for (const compiled of message.instructions) {
+    const listed = compiled.accountIndexes.map((index) => accounts[index]);
+    const signedByUser = listed.some(
+      (account) => account?.address === user && account.signer,
+    );
+    if (!signedByUser) continue;
+    for (const account of listed) {
+      const address = account?.address ?? null;
+      if (
+        address !== null &&
+        address !== user &&
+        !invoked.has(address) &&
+        !NOT_MARKED.has(address) &&
+        !found.includes(address)
+      ) {
+        found.push(address);
+      }
+    }
+  }
+  return found;
 }
