@@ -597,9 +597,11 @@ describe("n3: which token accounts a report marks as the wallet's", () => {
       (effect) => effect.kind === "token-out",
     );
     assert.ok(out !== undefined && out.kind === "token-out");
+    // Only the run's state after shows the wallet owns it, and no read
+    // confirms it, so it is marked as user-authorized.
     assert.ok(
       "address" in out.destination &&
-        out.destination.address.startsWith("user token account "),
+        out.destination.address.startsWith("user-authorized token account "),
     );
   });
 

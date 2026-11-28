@@ -1707,6 +1707,58 @@ describe("hunt: the public interface refuses what it cannot use, and never throw
   });
 });
 
+describe("hunt: only the read before the run shows a token account is the wallet's", () => {
+  it("an account the wallet owns only after the run is marked user-authorized", async () => {
+    // An unknown program creates the token account; only the run's state
+    // after shows the wallet owns it.
+    const create = new web3.TransactionInstruction({
+      programId: key(K.unknownProgram),
+      keys: [
+        { pubkey: user, isSigner: true, isWritable: true },
+        { pubkey: tokenAccount, isSigner: false, isWritable: true },
+        {
+          pubkey: new web3.PublicKey(TOKEN_PROGRAM),
+          isSigner: false,
+          isWritable: false,
+        },
+      ],
+      data: Buffer.from([1]),
+    });
+    const rpc = jsonRpc(
+      endpoint({
+        accounts: (addresses) =>
+          addresses.map((address) =>
+            address === USER ? system(5_000_000_000) : null,
+          ),
+        simulation: (addresses) => ({
+          err: null,
+          logs: [],
+          accounts: addresses.map((address) =>
+            address === USER ? system(4_997_955_720) : tokenState(0, null),
+          ),
+          preBalances: [5_000_000_000, 0, 1, 1],
+          postBalances: [4_997_955_720, 2_039_280, 1, 1],
+          preTokenBalances: [],
+          postTokenBalances: [
+            {
+              accountIndex: 1,
+              mint: K.mint,
+              owner: USER,
+              uiTokenAmount: { amount: "0" },
+            },
+          ],
+        }),
+      }),
+      "x",
+    );
+    const result = await preflight(rpc, encodeBase64(build([create])), USER);
+    assert.ok(result.kind === "ready");
+    assert.equal(result.simulation.status, "ran");
+    assert.deepEqual(result.userTokenAccounts, []);
+    assert.deepEqual(result.userAuthorizedTokenAccounts, [K.userTokenAccount]);
+  });
+});
+
 describe("audit 9: the report JSON and the blockhash", () => {
   const offline = () =>
     jsonRpc(async () => {
