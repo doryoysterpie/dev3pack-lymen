@@ -66,8 +66,10 @@ function response(n: number): StationQr {
 }
 
 /**
- * The API's answer for response(n): its QR text carries the payload the page reads. The answer's
- * own timing fields are filled in as the API sends them; the page does not read them.
+ * An answer for response(n), shaped like the API's but not one it would send: the QR's signer and
+ * signature are placeholders, since the page reads the signed payload and does not check the
+ * signature. Beside the QR it carries the payload's station, session, issued_at and expires_at,
+ * as the API does; the page does not read them.
  */
 function wireBody(
   n: number,
@@ -90,8 +92,6 @@ function wireBody(
     session: r.session,
     issued_at: r.issuedAt,
     expires_at: r.expiresAt,
-    refresh_after_s: 30,
-    expires_in_ms: 60_000,
   };
 }
 
@@ -260,7 +260,7 @@ test("each failed fetch becomes the owed message for the screen", async () => {
       "The API answered with something that is not a station QR.",
     ],
     [
-      answering(200, { ...response(1), refresh_after_s: 0 }),
+      answering(200, { ...response(1) }),
       "The API answered with something that is not a station QR.",
     ],
     [
