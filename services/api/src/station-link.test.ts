@@ -2,7 +2,14 @@
 // prints neither the token nor the secret (rule 8).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -73,6 +80,43 @@ test("the link tool refuses a bad station ID or a missing secret without printin
     assert.equal(short.status, 1);
     assert.ok(!short.stderr.includes("short-secret"));
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the link tool refuses to write inside the repository, where the station page's dev server could serve the file", () => {
+  const repo = fileURLToPath(new URL("../../../", import.meta.url));
+  const owed =
+    "station-link: the link file must be outside the repository, where the station page's dev server cannot serve it.\n";
+  const dir = mkdtempSync(join(tmpdir(), "limen-link-"));
+  // A path outside the repository that leads back into it through a symlink is refused too.
+  symlinkSync(repo, join(dir, "into-repo"));
+  const outs = [
+    join(repo, ".station-links", "refused-test.url"),
+    join(repo, "apps", "station", "refused-test.url"),
+    join(repo, "refused-test.url"),
+    join(dir, "into-repo", "refused-test.url"),
+  ];
+  const hadLinkDir = existsSync(join(repo, ".station-links"));
+  try {
+    for (const out of outs) {
+      const refused = run(["st-front", out]);
+      assert.deepEqual(
+        {
+          status: refused.status,
+          stdout: refused.stdout,
+          stderr: refused.stderr,
+        },
+        { status: 1, stdout: "", stderr: owed },
+        out,
+      );
+      assert.equal(existsSync(out), false, `${out} was not written`);
+    }
+  } finally {
+    // Nothing should have been written; a failing run must not leave a file in the repository.
+    for (const out of outs) rmSync(out, { force: true });
+    if (!hadLinkDir)
+      rmSync(join(repo, ".station-links"), { recursive: true, force: true });
     rmSync(dir, { recursive: true, force: true });
   }
 });
