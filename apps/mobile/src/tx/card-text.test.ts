@@ -269,7 +269,7 @@ describe("transaction card text", () => {
     assert.equal(card.tone, "neutral");
     assert.equal(
       card.status,
-      "This card shows what the transaction would do to your wallet and to the token accounts a read shows it owns, before you sign.",
+      "This card shows the changes limen simulated to your wallet's SOL, owner program and data, and to the token amount, delegate, owner and close authority of each token account a read shows your wallet owns. Other changes, such as SOL sent to a token account by another signer, may not be shown.",
     );
     assert.deepEqual(card.rows[1], {
       label: "Closes a token account",
@@ -965,6 +965,97 @@ describe("the owner's audit: what the card claims", () => {
         `limen flags this transaction: ${owed} (${problem}).`,
       );
     }
+  });
+
+  it("re-audit 2, item 6: a clean card says which changes it shows, and that others may not be", async () => {
+    // The audit's example: another signer, who has signed, sends SOL to the
+    // wallet's token account. The wallet pays the fee. The run is clean, and
+    // no row shows the SOL the token account receives.
+    const other = attacker;
+    const key = (address: string): Uint8Array => {
+      const bytes = decodePublicKey(address);
+      assert.ok(bytes !== null, address);
+      return bytes;
+    };
+    const lamports = 5_000_000;
+    const data = new Uint8Array(12);
+    const view = new DataView(data.buffer);
+    view.setUint32(0, 2, true); // System Transfer
+    view.setBigUint64(4, BigInt(lamports), true);
+    const bytes = Uint8Array.from([
+      2,
+      ...new Uint8Array(64),
+      ...new Uint8Array(64).fill(7),
+      2, // signers: the wallet, then the other signer
+      0,
+      1, // the System program is read-only
+      4,
+      ...key(fixture.user),
+      ...key(other),
+      ...key(userTokenAccount),
+      ...key(SYSTEM_PROGRAM),
+      ...key(fixture.keys.mint), // the blockhash
+      1,
+      3,
+      2,
+      1,
+      2,
+      data.length,
+      ...data,
+    ]);
+    const tokenData = new Uint8Array(165);
+    tokenData.set(key(fixture.keys.mint), 0);
+    tokenData.set(key(fixture.user), 32);
+    tokenData[64] = 200;
+    tokenData[108] = 1;
+    const wallet = (amount: number) => ({
+      lamports: amount,
+      owner: SYSTEM_PROGRAM,
+      data: ["", "base64"] as const,
+    });
+    const tokenAccount = (amount: number) => ({
+      lamports: amount,
+      owner: TOKEN_PROGRAM,
+      data: [Buffer.from(tokenData).toString("base64"), "base64"] as const,
+    });
+    const result = await preflight(
+      recordedEndpoint({
+        accounts: {
+          [fixture.user]: wallet(5_000_000_000),
+          [other]: wallet(1_000_000_000),
+          [userTokenAccount]: tokenAccount(2_039_280),
+        },
+        simulation: {
+          err: null,
+          accounts: {
+            [fixture.user]: wallet(4_999_990_000),
+            [other]: wallet(1_000_000_000 - lamports),
+            [userTokenAccount]: tokenAccount(2_039_280 + lamports),
+          },
+        },
+      }),
+      Buffer.from(bytes).toString("base64"),
+      fixture.user,
+    );
+    assert.ok(result.kind === "ready");
+    assert.equal(result.simulation.status, "ran");
+    assert.deepEqual(result.userTokenAccounts, [userTokenAccount]);
+    const card = transactionCardText(LINK, null, result);
+    assert.equal(card.tone, "neutral");
+    assert.equal(
+      card.status,
+      "This card shows the changes limen simulated to your wallet's SOL, owner program and data, and to the token amount, delegate, owner and close authority of each token account a read shows your wallet owns. Other changes, such as SOL sent to a token account by another signer, may not be shown.",
+    );
+    // The fee is the only change shown; the token account's new SOL is not.
+    assert.deepEqual(
+      card.rows.filter((row) => row.label.endsWith(", simulated")),
+      [
+        {
+          label: "Your wallet, simulated",
+          value: "5 SOL before, 4.99999 SOL after.",
+        },
+      ],
+    );
   });
 
   it("13: the burn, revoke and create rows claim only what the instruction proves", async () => {

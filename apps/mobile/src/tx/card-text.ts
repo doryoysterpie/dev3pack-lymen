@@ -498,7 +498,10 @@ export function transactionCardText(
         : drains
           ? `limen flags this transaction: ${lower(DRAIN.simulated)}`
           : simulation.status === "ran" && simulation.err === null
-            ? "This card shows what the transaction would do to your wallet and to the token accounts a read shows it owns, before you sign."
+            ? // limen watches every account the transaction can write, but a
+              // row shows only these (changeRow): SOL that reaches a token
+              // account, or leaves another signer, has no row.
+              "This card shows the changes limen simulated to your wallet's SOL, owner program and data, and to the token amount, delegate, owner and close authority of each token account a read shows your wallet owns. Other changes, such as SOL sent to a token account by another signer, may not be shown."
             : `This card shows what the decoded instructions would do. ${simulated(simulation)}`,
     rows,
   };

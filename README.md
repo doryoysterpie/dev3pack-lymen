@@ -3,7 +3,7 @@
 limen is a mobile build-station check-in pass with QR pre-flight, and a report triage service, on Solana devnet.
 
 - **Check-in pass.** A participant scans a signed, rotating QR on a station screen and signs a check-in message with their wallet. The backend verifies the check-in and mints a non-transferable Token-2022 pass.
-- **QR pre-flight.** The app shows what a QR will do before you act on it: a station check-in, a Solana Pay transfer, a transaction request or a plain link. For a transaction request, it shows what the transaction would do before you sign.
+- **QR pre-flight.** The app shows what a QR will do before you act on it: a station check-in, a Solana Pay transfer, a transaction request or a plain link. For a transaction request, it shows what the transaction asks for and, from a devnet simulation, changes to your wallet and its token accounts, before you sign.
 - **Report triage.** A participant can report a QR. The service groups reports into cases, holds each case for a human unless the D-05 threshold is met, and escalates evidenced cases to Chainabuse and the Phantom blocklist.
 
 ## Status
