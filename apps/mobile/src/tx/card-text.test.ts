@@ -947,22 +947,17 @@ describe("the owner's audit: what the card claims", () => {
     }
   });
 
-  it("hunt: a malformed transaction's status names what limen found", () => {
-    for (const [problem, owed] of [
-      ["not-base64", "the request did not send a transaction limen can read"],
-      [
-        "duplicate-key",
-        "it names the same account twice, which Solana refuses",
-      ],
-      [
-        "bad-lookup-index",
-        "a lookup index points past the end of its table, which Solana refuses",
-      ],
-      ["truncated", "it does not follow the Solana transaction format"],
+  it("re-audit 2, item 8: a malformed transaction's status says limen cannot read it", () => {
+    for (const problem of [
+      "not-base64",
+      "duplicate-key",
+      "bad-lookup-index",
+      "truncated",
+      "unsupported-version",
     ] as const) {
       assert.equal(
         transactionCardText(LINK, null, { kind: "malformed", problem }).status,
-        `limen flags this transaction: ${owed} (${problem}).`,
+        `limen flags this transaction: limen cannot read it as a legacy or version 0 Solana transaction (${problem}).`,
       );
     }
   });
