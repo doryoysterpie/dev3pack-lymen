@@ -621,3 +621,32 @@ test("with a 2 s response delay, a QR that expires in transit is not drawn, and 
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test("with the station's clock 2 s behind the API's, the page clears the QR at T + 53 s on that clock, T + 55 s on the API's", async () => {
+  const clock = fakeClock(T * 1000 - 2000);
+  const qr = signedQr("st-front"); // signed at T for 60 s
+  let calls = 0;
+  const once = (): Promise<Response> =>
+    calls++ > 0
+      ? never()
+      : Promise.resolve(
+          new Response(JSON.stringify({ qr }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+  const { elements } = await loadPage(STATION_URL, once, clock, {
+    token: TOKEN,
+  });
+  await clock.advance(0);
+  assert.equal(elements.qr.hidden, false, "shown");
+  // min(T + 60 s, (T - 2 s) + 60 s) - 5 s = T + 53 s, 55 s after the request left.
+  assert.ok(
+    clock.delays.includes(55_000),
+    "the clearing timer is armed for 55 s",
+  );
+  clock.jump(T * 1000 + 53_000 - 1 - clock.now);
+  assert.equal(elements.qr.hidden, false, "still shown 1 ms before T + 53 s");
+  await clock.advance(1);
+  assert.equal(elements.qr.hidden, true, "cleared at T + 53 s");
+});

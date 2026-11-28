@@ -48,7 +48,8 @@ let clearing: number | null = null;
 let renders = 0;
 
 /** Shows `view`. For a QR, the promise settles once it is drawn and shown, or refused. */
-function render(view: StationView): void | Promise<void> {
+/** Shows `view`. For a QR, resolves to whether the QR was shown. */
+function render(view: StationView): void | Promise<boolean> {
   if (clearing !== null) window.clearTimeout(clearing);
   clearing = null;
   const mine = ++renders;
@@ -66,13 +67,13 @@ function render(view: StationView): void | Promise<void> {
     errorCorrectionLevel: "M",
   }).then(
     () => {
-      if (mine !== renders) return;
+      if (mine !== renders) return false;
       // The clock is read again after the draw; the QR is shown only with time left, and the
       // clearing timer is armed for that time.
       const left = view.deadline - now();
       if (left <= 0) {
         showRefreshing();
-        return;
+        return false;
       }
       canvas.dataset.qr = view.qr;
       canvas.hidden = false;
@@ -82,9 +83,11 @@ function render(view: StationView): void | Promise<void> {
         clearing = null;
         showRefreshing();
       }, left);
+      return true;
     },
     () => {
       if (mine === renders) showProblem("This QR could not be drawn.");
+      return false;
     },
   );
 }
