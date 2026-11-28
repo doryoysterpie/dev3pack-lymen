@@ -1357,6 +1357,72 @@ describe("re-audit A5: a slot, owner or mint that is not valid is not evidence",
   });
 });
 
+describe("re-audit A6: the runtime error is JSON data", () => {
+  const recorded = recordedRpc({
+    accounts: { [USER]: system(5_000_000_000) as never },
+    simulation: {
+      err: { InstructionError: [0, "Custom"] },
+      accounts: { [USER]: system(5_000_000_000) as never },
+    },
+  });
+  const withErr = (err: unknown): Rpc => ({
+    ...recorded,
+    simulate: async (base64, addresses) => ({
+      ...(await recorded.simulate(base64, addresses)),
+      err,
+    }),
+  });
+  const run = (err: unknown) =>
+    preflightTransaction(build([transfer()]), {
+      rpc: withErr(err),
+      user: USER,
+    });
+
+  it("a bigint error becomes its decimal string, and the report is JSON", async () => {
+    for (const [err, owed] of [
+      [BigInt(5), "5"],
+      [
+        { InstructionError: [0, { Custom: BigInt(7) }] },
+        { InstructionError: [0, { Custom: "7" }] },
+      ],
+    ] as const) {
+      const result = await run(err);
+      assert.ok(result.summary.kind === "ready");
+      assert.deepEqual(result.summary.simulation, {
+        status: "ran",
+        err: owed,
+        changes: [],
+      });
+      assert.deepEqual(result.summary.blocks, ["simulation-failed"]);
+      assert.deepEqual(
+        JSON.parse(JSON.stringify(result.summary)),
+        result.summary,
+      );
+    }
+  });
+
+  it("an error that is not JSON data leaves the run unused", async () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    for (const err of [
+      undefined,
+      () => 1,
+      Symbol("x"),
+      Number.NaN,
+      cyclic,
+      new Map(),
+    ]) {
+      const result = await run(err);
+      assert.ok(result.summary.kind === "ready");
+      assert.deepEqual(result.summary.simulation, {
+        status: "not-run",
+        reason: "the simulation's error is not JSON data",
+      });
+      assert.deepEqual(result.summary.blocks, ["simulation-not-run"]);
+    }
+  });
+});
+
 describe("audit 9: the report JSON and the blockhash", () => {
   const offline = () =>
     jsonRpc(async () => {

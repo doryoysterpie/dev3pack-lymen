@@ -178,6 +178,35 @@ function validStates(
   return states;
 }
 
+/**
+ * The runtime error as JSON data, for any Rpc: null, booleans, strings,
+ * finite numbers, arrays and plain objects, with a bigint written as its
+ * decimal string. Anything else, or a cycle, is not evidence, and throws.
+ */
+function jsonError(value: unknown, seen: readonly object[] = []): unknown {
+  const refused = () => new Error("the simulation's error is not JSON data");
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    typeof value === "string"
+  ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw refused();
+    return value;
+  }
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value !== "object" || seen.includes(value)) throw refused();
+  const inside = [...seen, value];
+  if (Array.isArray(value)) return value.map((item) => jsonError(item, inside));
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  if (prototype !== Object.prototype && prototype !== null) throw refused();
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, jsonError(item, inside)]),
+  );
+}
+
 async function loadTables(
   rpc: Rpc,
   transaction: ParsedTransaction,
@@ -255,6 +284,7 @@ export async function preflight(
     if (result.slot !== null && !isSlot(result.slot)) {
       throw new Error("the simulation's slot is not a slot");
     }
+    const err = jsonError(result.err);
     if (result.accounts.length !== watched.length) {
       throw new Error(
         `the simulation returned ${result.accounts.length} accounts for the ${watched.length} asked`,
@@ -303,7 +333,7 @@ export async function preflight(
     // a64fa73, rpc/src/rpc.rs:3554 and :3555), which shows nothing the
     // transaction would do, so a failed run lists no change.
     const changes =
-      result.err === null
+      err === null
         ? balanceChanges(feePayer, watched, before, result.accounts, {
             keys,
             pre: preBalances,
@@ -315,7 +345,7 @@ export async function preflight(
     simulation = {
       status: "ran",
       // The runtime's error, with any address the RPC wrote into it scrubbed.
-      err: scrubAddresses(result.err),
+      err: scrubAddresses(err),
       // Like the summary, the changes name the user's wallet by its role.
       changes: withMarker(changes, feePayer),
     };

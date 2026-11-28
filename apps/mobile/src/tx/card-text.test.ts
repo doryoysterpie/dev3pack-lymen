@@ -609,6 +609,39 @@ describe("the owner's audit: what the card claims", () => {
     );
   });
 
+  it("A6: a custom Rpc's bigint error still gives the failed-simulation card", async () => {
+    const recorded = recordedRpc({
+      accounts: {
+        [fixture.user]: {
+          lamports: 5_000_000_000,
+          owner: SYSTEM_PROGRAM,
+          data: ["", "base64"],
+        },
+      },
+      simulation: { err: null, accounts: {} },
+    });
+    const result = await preflight(
+      {
+        ...recorded,
+        simulate: async (base64, addresses) => ({
+          ...(await recorded.simulate(base64, addresses)),
+          err: { InstructionError: [1, { Custom: BigInt(6) }] },
+        }),
+      },
+      transactionOf("unknown program"),
+      fixture.user,
+    );
+    const card = transactionCardText(LINK, null, result);
+    assert.ok(
+      card.rows.some(
+        (row) =>
+          row.label === "Simulation" &&
+          row.value ===
+            'Failed on devnet: {"InstructionError":[1,{"Custom":"6"}]}. Signed now, the transaction would most likely fail the same way.',
+      ),
+    );
+  });
+
   it("13: the burn, revoke and create rows claim only what the instruction proves", async () => {
     const rows = await rowsFor([
       {
