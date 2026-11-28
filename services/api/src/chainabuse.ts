@@ -224,8 +224,9 @@ export function buildChainabuseRequest(
         ]),
     "",
     `- Case: ${view.id}`,
-    // Install IDs are what clients report about themselves, and the domain lists are the bundled
-    // fixture lists until the owner rules on DECIDE 2, so the lines say no more than that.
+    // Install IDs are what clients report about themselves, and the domain lists are bundled
+    // fixture lists (owner ruling 2a; the Phantom blocklist is not bundled, H-05), so the lines
+    // say no more than that.
     `- Decided by: ${view.decidedBy === "human" ? "human review" : "the automatic threshold (drain pattern, and two or more distinct reported install IDs or a domain on the bundled fixture list)"}`,
     `- Sightings: ${view.sightings}, from ${devices} distinct reported install ${devices === 1 ? "ID" : "IDs"}`,
     `- Domain: ${view.domain === null ? "none" : escapeMarkdown(view.domain)}`,
