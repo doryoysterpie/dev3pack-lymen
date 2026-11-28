@@ -11,6 +11,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -170,6 +171,169 @@ test("the dev and preview servers serve no key or database through a workspace l
         previewServer!.httpServer.close(() => resolve()),
       );
     for (const file of written) rmSync(file, { force: true });
+    rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+test("an organizer key with an ordinary JSON name in apps/station/build gets 403 from the dev and preview servers, and the dev server serves nothing in apps/station but src and index.html", async () => {
+  const buildDir = join(APP, "build");
+  const hadBuildDir = existsSync(buildDir);
+  mkdirSync(buildDir, { recursive: true });
+  const key = join(buildDir, `organizer-${process.pid}.json`);
+  // A stand-in, created with flag "wx", so an existing file is not overwritten.
+  writeFileSync(key, `${MARKER}\n`, { flag: "wx" });
+  const outDir = mkdtempSync(join(tmpdir(), "limen-station-build-"));
+  const config = {
+    configFile: join(APP, "vite.config.ts"),
+    root: APP,
+    logLevel: "silent" as const,
+  };
+  const dev = await createServer({
+    ...config,
+    server: { port: await freePort(), strictPort: true },
+  });
+  let previewServer: Awaited<ReturnType<typeof preview>> | null = null;
+  const status = async (port: number, path: string) => {
+    const res = await fetch(`http://127.0.0.1:${port}${path}`);
+    const body = await res.text();
+    assert.ok(!body.includes(MARKER), `${path} served the key`);
+    return { status: res.status, body };
+  };
+  try {
+    await dev.listen();
+    const devPort = (dev.httpServer!.address() as AddressInfo).port;
+    const name = `organizer-${process.pid}.json`;
+    for (const path of [
+      `/build/${name}`,
+      `/build/${name}?raw`,
+      `/build/${name}?import`,
+      `/@fs${key}`,
+      "/vite.config.ts",
+      "/package.json",
+      "/README.md",
+    ])
+      assert.equal((await status(devPort, path)).status, 403, `dev ${path}`);
+    // The page and the modules it loads still answer.
+    assert.equal((await status(devPort, "/")).status, 200);
+    const main = await status(devPort, "/src/main.ts");
+    assert.equal(main.status, 200);
+    const imports = [...main.body.matchAll(/from\s+"(\/[^"]+)"/g)].map(
+      (m) => m[1]!,
+    );
+    assert.ok(imports.some((i) => i.includes("qrcode")));
+    for (const path of imports)
+      assert.equal((await status(devPort, path)).status, 200, path);
+
+    await build({ ...config, build: { outDir, emptyOutDir: true } });
+    previewServer = await preview({
+      ...config,
+      build: { outDir },
+      preview: { port: await freePort(), strictPort: true },
+    });
+    const previewPort = (previewServer.httpServer.address() as AddressInfo)
+      .port;
+    for (const path of [
+      `/build/${name}`,
+      `/@fs${key}`,
+      "/vite.config.ts",
+      "/package.json",
+    ])
+      assert.equal(
+        (await status(previewPort, path)).status,
+        403,
+        `preview ${path}`,
+      );
+    assert.equal((await status(previewPort, "/")).status, 200);
+  } finally {
+    await dev.close();
+    if (previewServer !== null)
+      await new Promise<void>((resolve) =>
+        previewServer!.httpServer.close(() => resolve()),
+      );
+    rmSync(key, { force: true });
+    if (!hadBuildDir) rmSync(buildDir, { recursive: true, force: true });
+    rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+test("a station named keys reaches the API through the dev and preview servers' proxy", async () => {
+  // A stand-in API that records the paths it is asked for.
+  const asked: string[] = [];
+  const api = createHttpServer((req, res) => {
+    asked.push(req.url ?? "");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end('{"stand_in":true}');
+  });
+  await new Promise<void>((resolve) => api.listen(0, "127.0.0.1", resolve));
+  const before = process.env.STATION_API_URL;
+  process.env.STATION_API_URL = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
+  const outDir = mkdtempSync(join(tmpdir(), "limen-station-build-"));
+  const config = {
+    configFile: join(APP, "vite.config.ts"),
+    root: APP,
+    logLevel: "silent" as const,
+  };
+  const dev = await createServer({
+    ...config,
+    server: { port: await freePort(), strictPort: true },
+  });
+  let previewServer: Awaited<ReturnType<typeof preview>> | null = null;
+  try {
+    await dev.listen();
+    const devPort = (dev.httpServer!.address() as AddressInfo).port;
+    await build({ ...config, build: { outDir, emptyOutDir: true } });
+    previewServer = await preview({
+      ...config,
+      build: { outDir },
+      preview: { port: await freePort(), strictPort: true },
+    });
+    const previewPort = (previewServer.httpServer.address() as AddressInfo)
+      .port;
+    for (const port of [devPort, previewPort]) {
+      const res = await fetch(`http://127.0.0.1:${port}/api/stations/keys/qr`);
+      assert.equal(res.status, 200, `port ${port}`);
+      assert.equal(await res.text(), '{"stand_in":true}');
+    }
+    assert.deepEqual(asked, ["/stations/keys/qr", "/stations/keys/qr"]);
+  } finally {
+    await dev.close();
+    if (previewServer !== null)
+      await new Promise<void>((resolve) =>
+        previewServer!.httpServer.close(() => resolve()),
+      );
+    await new Promise<void>((resolve) => api.close(() => resolve()));
+    if (before === undefined) delete process.env.STATION_API_URL;
+    else process.env.STATION_API_URL = before;
+    rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+test("the build fails when its output holds anything but the page's html, js, css and svg", async () => {
+  const outDir = mkdtempSync(join(tmpdir(), "limen-station-build-"));
+  try {
+    await assert.rejects(
+      build({
+        configFile: join(APP, "vite.config.ts"),
+        root: APP,
+        logLevel: "silent",
+        build: { outDir, emptyOutDir: true },
+        // A plugin that puts an extra file in the output, as a stray asset would.
+        plugins: [
+          {
+            name: "test-stray-file",
+            generateBundle() {
+              this.emitFile({
+                type: "asset",
+                fileName: "organizer.json",
+                source: "[]",
+              });
+            },
+          },
+        ],
+      }),
+      /not the page's html, js, css or svg: organizer\.json/,
+    );
+  } finally {
     rmSync(outDir, { recursive: true, force: true });
   }
 });
