@@ -155,45 +155,6 @@ const tokenRecording = (after: RecordedAccount | null): Recording => ({
 });
 
 describe("M1: a token sweep shows a drain pattern", () => {
-  it("P1: all tokens out, then the account closed back to the wallet", async () => {
-    const transaction = build([
-      spl.createTransferCheckedInstruction(
-        tokenAccount,
-        mint,
-        attacker,
-        user,
-        BigInt(1000),
-        0,
-      ),
-      spl.createCloseAccountInstruction(tokenAccount, user, user),
-    ]);
-    assert.equal(await drain(transaction, tokenRecording(null)), true);
-  });
-
-  it("P1b: all but one base unit out", async () => {
-    const transaction = build([
-      spl.createTransferCheckedInstruction(
-        tokenAccount,
-        mint,
-        attacker,
-        user,
-        BigInt(999),
-        0,
-      ),
-    ]);
-    assert.equal(
-      await drain(transaction, tokenRecording(token({ amount: BigInt(1) }))),
-      true,
-    );
-  });
-
-  it("P2b: an unknown program empties and closes the account by a cross-program call", async () => {
-    const transaction = build([
-      unknown([writable(tokenAccount), writable(attacker), tokenProgram]),
-    ]);
-    assert.equal(await drain(transaction, tokenRecording(null)), true);
-  });
-
   it("a payment that leaves a tenth of the tokens shows none", async () => {
     const transaction = build([
       spl.createTransferCheckedInstruction(
@@ -213,30 +174,6 @@ describe("M1: a token sweep shows a drain pattern", () => {
 });
 
 describe("M2: the wallet handed to a program by a cross-program call", () => {
-  it("P2: an unknown program becomes the wallet's owner", async () => {
-    const transaction = build([unknown([])]);
-    const recording: Recording = {
-      accounts: { [USER]: wallet(5_000_000_000) },
-      simulation: {
-        err: null,
-        accounts: { [USER]: wallet(4_999_995_000, K.unknownProgram) },
-      },
-    };
-    assert.equal(await drain(transaction, recording), true);
-  });
-
-  it("the wallet account given data", async () => {
-    const transaction = build([unknown([])]);
-    const recording: Recording = {
-      accounts: { [USER]: wallet(5_000_000_000) },
-      simulation: {
-        err: null,
-        accounts: { [USER]: wallet(4_999_995_000, SYSTEM_PROGRAM, 64) },
-      },
-    };
-    assert.equal(await drain(transaction, recording), true);
-  });
-
   it("the wallet's SOL down only by the fee shows none", async () => {
     const transaction = build([unknown([])]);
     const recording: Recording = {
@@ -248,42 +185,6 @@ describe("M2: the wallet handed to a program by a cross-program call", () => {
 });
 
 describe("m2: control handed over by a cross-program call", () => {
-  it("P2c: a close authority moved to another address", async () => {
-    const transaction = build([
-      unknown([writable(tokenAccount), tokenProgram]),
-    ]);
-    const after = token({ amount: BigInt(1000), closeAuthority: K.attacker });
-    assert.equal(await drain(transaction, tokenRecording(after)), true);
-  });
-
-  it("P2d: an existing delegate's allowance raised", async () => {
-    const transaction = build([
-      unknown([writable(tokenAccount), tokenProgram]),
-    ]);
-    const recording: Recording = {
-      accounts: {
-        [USER]: wallet(5_000_000_000),
-        [K.userTokenAccount]: token({
-          amount: BigInt(1000),
-          delegate: K.attacker,
-          delegated: BigInt(1),
-        }),
-      },
-      simulation: {
-        err: null,
-        accounts: {
-          [USER]: wallet(4_999_995_000),
-          [K.userTokenAccount]: token({
-            amount: BigInt(1000),
-            delegate: K.attacker,
-            delegated: BigInt("18446744073709551615"),
-          }),
-        },
-      },
-    };
-    assert.equal(await drain(transaction, recording), true);
-  });
-
   it("an allowance lowered for the same delegate shows none", async () => {
     const transaction = build([
       unknown([writable(tokenAccount), tokenProgram]),
@@ -318,23 +219,6 @@ describe("m2: control handed over by a cross-program call", () => {
 describe("known false alarms, held for the owner", () => {
   const organizer = key(K.organizer);
 
-  it("F1: the whole token balance paid to the organizer", async () => {
-    const transaction = build([
-      spl.createTransferCheckedInstruction(
-        tokenAccount,
-        mint,
-        organizer,
-        user,
-        BigInt(1000),
-        0,
-      ),
-    ]);
-    assert.equal(
-      await drain(transaction, tokenRecording(token({ amount: BigInt(0) }))),
-      true,
-    );
-  });
-
   it("F2: a SOL payment to the organizer that leaves under a tenth", async () => {
     const transaction = build([
       web3.SystemProgram.transfer({
@@ -346,23 +230,6 @@ describe("known false alarms, held for the owner", () => {
     const recording: Recording = {
       accounts: { [USER]: wallet(1_000_000_000) },
       simulation: { err: null, accounts: { [USER]: wallet(49_995_000) } },
-    };
-    assert.equal(await drain(transaction, recording), true);
-  });
-
-  it("unwrapping wrapped SOL: a token account with a balance closed to the wallet", async () => {
-    const transaction = build([
-      spl.createCloseAccountInstruction(tokenAccount, user, user),
-    ]);
-    const recording: Recording = {
-      accounts: {
-        [USER]: wallet(1_000_000_000),
-        [K.userTokenAccount]: token({ amount: BigInt(500_000_000) }),
-      },
-      simulation: {
-        err: null,
-        accounts: { [USER]: wallet(1_502_034_280), [K.userTokenAccount]: null },
-      },
     };
     assert.equal(await drain(transaction, recording), true);
   });

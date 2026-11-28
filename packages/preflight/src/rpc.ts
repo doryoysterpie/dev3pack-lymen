@@ -38,27 +38,15 @@ export interface RpcEndpoint {
   readonly timeoutMs?: number;
 }
 
+/** An account as read for its lookup table: owner and data only. */
 export interface AccountState {
-  readonly lamports: string;
   readonly owner: string;
   readonly data: Uint8Array;
-}
-
-/** A token account's balance as the simulation reports it, by account index. */
-export interface TokenBalance {
-  /** The account's index in the transaction's account list. */
-  readonly accountIndex: number;
-  readonly mint: string;
-  readonly owner: string | null;
-  /** In base units, as a decimal string. */
-  readonly amount: string;
 }
 
 export interface Simulation {
   /** The runtime error, as the RPC reports it (JSON data), or null. */
   readonly err: unknown;
-  /** Post-simulation state of the requested accounts; null when absent. */
-  readonly accounts: readonly (AccountState | null)[];
   /** The slot the simulation ran at, from the response context. */
   readonly slot: number | null;
   /** The blockhash the simulation used in place of the transaction's own. */
@@ -72,8 +60,6 @@ export interface Simulation {
    */
   readonly preBalances: readonly string[] | null;
   readonly postBalances: readonly string[] | null;
-  readonly preTokenBalances: readonly TokenBalance[] | null;
-  readonly postTokenBalances: readonly TokenBalance[] | null;
 }
 
 export class RpcError extends Error {
@@ -202,13 +188,10 @@ export interface Rpc {
   /** Accounts at the confirmed commitment, in the order asked; null if absent. */
   getAccounts(addresses: readonly string[]): Promise<(AccountState | null)[]>;
   /**
-   * Simulates without checking signatures, with the recent blockhash replaced,
-   * and reads back the named accounts after it.
+   * Simulates without checking signatures, with the recent blockhash
+   * replaced. It asks for no account state: limen reads none (ruling 20a).
    */
-  simulate(
-    transactionBase64: string,
-    addresses: readonly string[],
-  ): Promise<Simulation>;
+  simulate(transactionBase64: string): Promise<Simulation>;
   latestBlockhash(): Promise<string>;
 }
 
@@ -264,31 +247,6 @@ function balancesOf(value: unknown, what: string): string[] | null {
   return listOf(value, what, (item) => amountOf(item, what));
 }
 
-function tokenBalancesOf(value: unknown, what: string): TokenBalance[] | null {
-  if (value === undefined || value === null) return null;
-  return listOf(value, what, (item) => {
-    if (!isRecord(item) || !isRecord(item.uiTokenAmount)) {
-      throw new RpcError("shape", `${what}: entry`);
-    }
-    const { accountIndex, mint, owner } = item;
-    if (
-      typeof accountIndex !== "number" ||
-      !Number.isSafeInteger(accountIndex) ||
-      accountIndex < 0 ||
-      !isPublicKey(mint) ||
-      (owner !== undefined && owner !== null && !isPublicKey(owner))
-    ) {
-      throw new RpcError("shape", `${what}: entry`);
-    }
-    return {
-      accountIndex,
-      mint,
-      owner: typeof owner === "string" ? owner : null,
-      amount: amountOf(item.uiTokenAmount.amount, what),
-    };
-  });
-}
-
 /** Whether a value is a public key: base58 for 32 bytes. */
 export function isPublicKey(value: unknown): value is string {
   return typeof value === "string" && decodePublicKey(value) !== null;
@@ -302,7 +260,7 @@ export function isSlot(value: unknown): value is number {
 function accountState(value: unknown): AccountState | null {
   if (value === null) return null;
   if (!isRecord(value)) throw new RpcError("shape", "account: not an object");
-  const { lamports, owner, data } = value;
+  const { owner, data } = value;
   if (!isPublicKey(owner)) throw new RpcError("shape", "account: owner");
   if (
     !Array.isArray(data) ||
@@ -317,11 +275,7 @@ function accountState(value: unknown): AccountState | null {
   if (bytes === null) {
     throw new RpcError("shape", "account: data is not base64");
   }
-  return {
-    lamports: amountOf(lamports, "account: lamports"),
-    owner,
-    data: bytes,
-  };
+  return { owner, data: bytes };
 }
 
 function valueOf(result: unknown, method: string): unknown {
@@ -358,7 +312,6 @@ async function fetchAccounts(
 async function fetchSimulation(
   endpoint: Required<RpcEndpoint>,
   transactionBase64: string,
-  addresses: readonly string[],
 ): Promise<Simulation> {
   const result = await call(endpoint, "simulateTransaction", [
     transactionBase64,
@@ -367,7 +320,6 @@ async function fetchSimulation(
       sigVerify: false,
       replaceRecentBlockhash: true,
       commitment: "confirmed",
-      accounts: { encoding: "base64", addresses },
     },
   ]);
   const value = valueOf(result, "simulateTransaction");
@@ -387,26 +339,14 @@ async function fetchSimulation(
     isRecord(replacement) && isPublicKey(replacement.blockhash)
       ? replacement.blockhash
       : null;
-  // A missing err field is not a clean run, and a clean run must return the
-  // accounts it was asked for: either answer is refused, so the pre-flight
+  // A missing err field is not a clean run: it is refused, so the pre-flight
   // marks the simulation not run instead of showing no changes.
   if (!("err" in value)) {
     throw new RpcError("shape", "simulateTransaction: no err field");
   }
-  const accounts = value.accounts;
-  let states: (AccountState | null)[] = [];
-  if (accounts !== null && accounts !== undefined) {
-    states = listOf(accounts, "simulateTransaction: accounts", accountState);
-    if (states.length !== addresses.length) {
-      throw new RpcError("shape", "simulateTransaction: accounts");
-    }
-  } else if (value.err === null && addresses.length > 0) {
-    throw new RpcError("shape", "simulateTransaction: no accounts");
-  }
   return {
     // Parsed from the answer's text by this client, so it is JSON data.
     err: value.err ?? null,
-    accounts: states,
     slot,
     replacementBlockhash,
     preBalances: balancesOf(
@@ -416,14 +356,6 @@ async function fetchSimulation(
     postBalances: balancesOf(
       value.postBalances,
       "simulateTransaction: postBalances",
-    ),
-    preTokenBalances: tokenBalancesOf(
-      value.preTokenBalances,
-      "simulateTransaction: preTokenBalances",
-    ),
-    postTokenBalances: tokenBalancesOf(
-      value.postTokenBalances,
-      "simulateTransaction: postTokenBalances",
     ),
   };
 }
@@ -480,8 +412,8 @@ export function jsonRpc(endpoint: RpcEndpoint): Rpc {
       return hash;
     },
     getAccounts: (addresses) => fetchAccounts(checked, addresses),
-    simulate: (transactionBase64, addresses) =>
-      fetchSimulation(checked, transactionBase64, addresses),
+    simulate: (transactionBase64) =>
+      fetchSimulation(checked, transactionBase64),
     latestBlockhash: () => fetchLatestBlockhash(checked),
   };
 }

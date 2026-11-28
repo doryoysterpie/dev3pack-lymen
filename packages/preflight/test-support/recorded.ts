@@ -7,11 +7,9 @@ import { decodeBase64 } from "../src/base64.ts";
 import {
   ADDRESS_LOOKUP_TABLE_PROGRAM,
   DEVNET_GENESIS_HASH,
-  TOKEN_2022_PROGRAM,
-  TOKEN_PROGRAM,
 } from "../src/programs.ts";
 import type { Fetch, RpcEndpoint } from "../src/rpc.ts";
-import { parseLookupTable, parseTokenAccount } from "../src/state.ts";
+import { parseLookupTable } from "../src/state.ts";
 import { parseTransaction } from "../src/wire.ts";
 
 /**
@@ -87,45 +85,6 @@ function keysOf(base64: string, map: AccountMap): (string | null)[] {
   ).map((account) => account.address);
 }
 
-const isTokenProgram = (address: string | null): boolean =>
-  address === TOKEN_PROGRAM || address === TOKEN_2022_PROGRAM;
-
-/**
- * The token balances as agave lists them (anza-xyz/agave a64fa73,
- * svm/src/transaction_balances.rs:83 to 104): none unless a token program is
- * among the transaction's accounts, and then one for each token account.
- * agave also leaves out a token account whose mint it cannot read; a
- * recording holds no mints, so it does not.
- */
-function tokenBalances(
-  keys: readonly (string | null)[],
-  stateOf: (address: string) => RecordedAccount | null,
-) {
-  if (!keys.some(isTokenProgram)) return [];
-  return keys.flatMap((address, accountIndex) => {
-    if (address === null) return [];
-    const state = stateOf(address);
-    if (state === null || !isTokenProgram(state.owner)) return [];
-    const data = decodeBase64(state.data[0]);
-    const account = data === null ? null : parseTokenAccount(state.owner, data);
-    if (account === null) return [];
-    return [
-      {
-        accountIndex,
-        mint: account.mint,
-        owner: account.owner,
-        programId: state.owner,
-        uiTokenAmount: {
-          amount: account.amount,
-          decimals: 0,
-          uiAmount: null,
-          uiAmountString: account.amount,
-        },
-      },
-    ];
-  });
-}
-
 const byAddress = (
   map: Readonly<Record<string, RecordedAccount | null>>,
   addresses: readonly string[],
@@ -147,9 +106,6 @@ export function recordedEndpoint(recording: Recording): RpcEndpoint {
         };
         break;
       case "simulateTransaction": {
-        const options = request.params[1] as {
-          accounts: { addresses: string[] };
-        };
         const { slot, replacementBlockhash } = recording.simulation;
         const keys = keysOf(request.params[0] as string, recording.accounts);
         const pre = (address: string) => recording.accounts[address] ?? null;
@@ -166,8 +122,8 @@ export function recordedEndpoint(recording: Recording): RpcEndpoint {
               postBalances: keys.map((k) =>
                 k === null ? 0 : (post(k)?.lamports ?? 0),
               ),
-              preTokenBalances: tokenBalances(keys, pre),
-              postTokenBalances: tokenBalances(keys, post),
+              preTokenBalances: [],
+              postTokenBalances: [],
             };
         result = {
           context: { slot: slot ?? 0 },
@@ -180,7 +136,8 @@ export function recordedEndpoint(recording: Recording): RpcEndpoint {
             logs: recording.simulation.logs ?? [],
             unitsConsumed: recording.simulation.unitsConsumed ?? 0,
             // As the balances above: an address left out is unchanged.
-            accounts: options.accounts.addresses.map(post),
+            // limen asks for no account, so none is returned.
+            accounts: null,
             ...balances,
           },
         };

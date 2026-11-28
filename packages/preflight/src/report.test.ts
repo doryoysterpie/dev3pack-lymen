@@ -105,33 +105,6 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
     });
   }
 
-  it("numbers the wallet's token accounts in the message's account order", async () => {
-    const c = fixture.cases.find((entry) =>
-      entry.name.startsWith("Token-2022"),
-    );
-    assert.ok(c !== undefined);
-    const result = await preflightTransaction(decodeBase64(c.transaction)!, {
-      endpoint: recordedEndpoint({
-        accounts: {
-          [fixture.user]: sol(5_000_000_000),
-          [K.userTokenAccount]: token(TOKEN_PROGRAM, fixture.user, 9),
-          [K.userToken2022Account]: token(TOKEN_2022_PROGRAM, fixture.user, 9),
-        },
-        simulation: { err: null, accounts: {} },
-      }),
-      user: fixture.user,
-    });
-    assert.ok(result.summary.kind === "ready");
-    const effects = result.summary.summary.effects;
-    // The owner change is on the Token-2022 account, the close on the Token
-    // account, which comes later in the message. (The checked transfer on
-    // Token-2022 is not decoded.)
-    assert.ok(effects[0].kind === "authority-changed");
-    assert.deepEqual(effects[0].account, { address: "user token account 1" });
-    assert.ok(effects[1].kind === "account-closed");
-    assert.deepEqual(effects[1].account, { address: "user token account 2" });
-  });
-
   it("with no read, marks a token account the wallet approves from as user-authorized, not as the wallet's", async () => {
     const c = fixture.cases.find((entry) => entry.name.startsWith("drainer:"));
     assert.ok(c !== undefined);
@@ -193,7 +166,9 @@ describe("n3: a report names neither the wallet nor its token accounts", () => {
     assert.ok(limited.summary.kind === "ready");
     assert.deepEqual(limited.summary.simulation, {
       status: "not-run",
-      reason: "getMultipleAccounts: account an address is rate limited",
+      // limen reads no account (ruling 20a), so the first call after the
+      // devnet check is the simulation.
+      reason: "simulateTransaction: account an address is rate limited",
     });
 
     const failed = await preflightTransaction(decodeBase64(c.transaction)!, {

@@ -291,19 +291,22 @@ describe("drainPattern through the simulation, for an instruction limen cannot d
       false,
     ],
     [
+      // Ruling 20a: a simulated token sweep or token-state change is no
+      // longer a drain pattern; the card for this transaction is the flagged
+      // fallback card, since limen cannot decode its instruction.
       "a token account emptied",
       unknownOutcome(4_990_000_000, token(0, null)),
-      true,
+      false,
     ],
     [
       "a new delegate on a token account",
       unknownOutcome(4_990_000_000, token(1000, ATTACKER)),
-      true,
+      false,
     ],
     [
       "a token account given a new owner",
       unknownOutcome(4_990_000_000, token(1000, null, ATTACKER)),
-      true,
+      false,
     ],
     [
       "a delegate set to the wallet itself",
