@@ -92,6 +92,7 @@ Paste the token into the station page.
 
 `src/station-qr.ts` documents the QR's format. `verifyStationQr(text, { allowlist, nowMs, expectedStation?, expectedSession? })` refuses a QR, with a reason, unless all of these hold, and `src/station-qr.test.ts` has a refusal test for each:
 
+- its payload, signer and signature are each canonical unpadded base64url, the one spelling that re-encodes to itself (`malformed` otherwise);
 - its signer is on the allowlist, and its signature verifies;
 - its payload has exactly the five fields;
 - its station and session are those given, when given; a caller that knows its station must pass it;

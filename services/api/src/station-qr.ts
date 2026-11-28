@@ -234,7 +234,11 @@ export function verifyStationQr(
     string,
   ];
   if (version !== STATION_QR_VERSION) return reject("unsupported_version");
-  if (!BASE64URL.test(payload)) return reject("malformed");
+  if (
+    !BASE64URL.test(payload) ||
+    Buffer.from(payload, "base64url").toString("base64url") !== payload
+  )
+    return reject("malformed");
 
   const signerBytes = decodeExact(signer, 32);
   if (signerBytes === null) return reject("malformed");
