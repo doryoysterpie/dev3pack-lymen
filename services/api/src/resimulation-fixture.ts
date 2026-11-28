@@ -1,0 +1,79 @@
+// E-10 done-test fixture: the drainer_device_1 transaction from fixtures/reports/e10-reports.json
+// with an E-09 PreflightReport summary (feePayerSet true, drifted balances) and recorded devnet
+// JSON-RPC responses for local replay with no network access.
+
+export interface ResimulationFixture {
+  readonly bundle: Record<string, unknown>;
+  readonly rpcResponses: Readonly<Record<string, unknown>>;
+}
+
+export const RESIMULATION_FIXTURE: ResimulationFixture = {
+  bundle: {
+    device_id: "fixture-device-01-0123456789",
+    payload: "solana:https%3A%2F%2Fclaim-pass.example%2Fapi%2Ftx",
+    url: "https://claim-pass.example/api/tx",
+    transaction:
+      "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEDMD8Go6Elnc73o16zMn9uJHw3kVqd0oUFhlp6erlfJ+HYYNCT7z+ym4WmN0+eKD76djJoyDkwZ2LXMpPuNrWmwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAbkmlZvivO3x/6Y44LhZgldnToewnHywUVotBnqSB878BAgIAAQwCAAAAAS9oWQAAAAA=",
+    simulation: {
+      slot: 350000001,
+      blockhash: "8RWypr3wHNpUThtiPVXTVa83Pye1BkSj9jthDVsDvwDg",
+    },
+    summary: {
+      kind: "ready",
+      feePayerSet: true,
+      summary: {
+        effects: [
+          {
+            kind: "sol-out",
+            instruction: 0,
+            to: { address: "account 1" },
+            lamports: "1500000001",
+            reason: "transfer",
+          },
+        ],
+        others: [],
+        undecoded: [],
+        signers: {
+          feePayer: "user",
+          others: [],
+          unsigned: true,
+        },
+        unresolvedAccounts: 0,
+      },
+      verdicts: [{ verdict: "other", instruction: 0 }],
+      simulation: {
+        status: "ran",
+        err: null,
+        changes: [
+          {
+            kind: "sol",
+            account: "user",
+            before: "5000000000",
+            after: "3499994999",
+          },
+        ],
+      },
+      blocks: [],
+    },
+    program_ids: ["11111111111111111111111111111111"],
+    recipients: ["FZegoJg97QC3nCnjTqW473XZK2osgy2xX5vRq8zccu2o"],
+    timestamp: 1795000001,
+    app_version: "0.1.0",
+  },
+  rpcResponses: {
+    getGenesisHash: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+    simulateTransaction: {
+      context: { slot: 350000999 },
+      value: {
+        err: null,
+        loadedAddresses: { writable: [], readonly: [] },
+        preBalances: [1600000000, 0, 1],
+        postBalances: [99994999, 1500000001, 1],
+        replacementBlockhash: {
+          blockhash: "8RWypr3wHNpUThtiPVXTVa83Pye1BkSj9jthDVsDvwDg",
+          lastValidBlockHeight: 350001000,
+        },
+      },
+    },
+  },
+};

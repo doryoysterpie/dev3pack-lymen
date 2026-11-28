@@ -9,6 +9,12 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import {
+  parseTransaction,
+  preflightTransaction,
+  type Fetch,
+} from "@limen/preflight";
+
 import { isPublicKey } from "./base58.ts";
 
 /** Solana's maximum transaction size in bytes (the packet data size). */
@@ -392,11 +398,90 @@ export function loadBundle(
 /**
  * What the server needs from the E-09 pre-flight package: simulate the transaction bytes on
  * devnet and decode the result into the summary the app shows, and say whether that summary
- * shows a drain pattern. Bound when the package lands; until then no re-simulation runs.
+ * shows a drain pattern.
  */
 export type Resimulator = (
   transaction: Uint8Array,
 ) => Promise<{ readonly summary: unknown; readonly drainPattern: boolean }>;
+
+/** Devnet JSON-RPC endpoint for server-side re-simulation (D-03). */
+export const DEVNET_RPC_URL = "https://api.devnet.solana.com";
+
+export interface ResimulatorOptions {
+  /** Must be DEVNET_RPC_URL; any other endpoint URL is refused. */
+  readonly url?: string;
+  /** HTTP fetch implementation. Defaults to Node's global fetch. */
+  readonly fetch?: Fetch;
+  /** Per-RPC-call timeout in milliseconds, forwarded to @limen/preflight. */
+  readonly timeoutMs?: number;
+}
+
+const defaultRpcFetch: Fetch = async (url, init) => {
+  const response = await fetch(url, init);
+  return {
+    ok: response.ok,
+    status: response.status,
+    url: response.url,
+    text: await response.text(),
+  };
+};
+
+/**
+ * Builds the E-09 re-simulator for stored evidence bundles. Uses preflightTransaction with
+ * DEVNET_RPC_URL and refuses any other URL. Reads the fee payer from the stored transaction
+ * bytes as `user`. Throws when the endpoint is not devnet or the simulation could not run, so
+ * resimulateBundle records a failure rather than matching an unrun simulation.
+ */
+export function preflightResimulator(
+  options: ResimulatorOptions = {},
+): Resimulator {
+  const url = options.url ?? DEVNET_RPC_URL;
+  if (url !== DEVNET_RPC_URL) {
+    throw new Error(
+      `SOLANA_RPC_URL must be ${DEVNET_RPC_URL}. limen re-simulates on devnet only.`,
+    );
+  }
+  const rpcFetch = options.fetch ?? defaultRpcFetch;
+  return async (transaction) => {
+    if (!(transaction instanceof Uint8Array)) {
+      return {
+        summary: { kind: "malformed", problem: "not-bytes" },
+        drainPattern: false,
+      };
+    }
+    const parsed = parseTransaction(transaction);
+    if (!parsed.ok) {
+      return {
+        summary: { kind: "malformed", problem: parsed.problem },
+        drainPattern: false,
+      };
+    }
+    const user = parsed.transaction.message.staticKeys[0];
+    const endpoint =
+      options.timeoutMs === undefined
+        ? { url, fetch: rpcFetch }
+        : { url, fetch: rpcFetch, timeoutMs: options.timeoutMs };
+    const result = await preflightTransaction(transaction, {
+      endpoint,
+      user,
+    });
+    if (result.summary.kind === "not-devnet") {
+      throw new Error("re-simulator endpoint is not devnet");
+    }
+    if (
+      result.summary.kind === "ready" &&
+      result.summary.simulation.status === "not-run"
+    ) {
+      throw new Error(
+        `re-simulation did not run: ${result.summary.simulation.reason}`,
+      );
+    }
+    return {
+      summary: result.summary,
+      drainPattern: result.drainPattern,
+    };
+  };
+}
 
 /**
  * How long a re-simulation may take before it counts as failed. The report is already stored,

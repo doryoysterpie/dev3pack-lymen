@@ -15,13 +15,18 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { listenUrl, parsePort } from "./index.ts";
+import type { Fetch } from "@limen/preflight";
+
+import { DEVNET_RPC_URL } from "./evidence.ts";
+import { listenUrl, parsePort, start } from "./index.ts";
+import { RESIMULATION_FIXTURE } from "./resimulation-fixture.ts";
 
 const ENTRY = fileURLToPath(new URL("./index.ts", import.meta.url));
 
@@ -398,6 +403,90 @@ test("a port taken between the probe and the start is retried rather than failin
     assert.notEqual(port, held);
   } finally {
     await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("start-up with a non-devnet SOLANA_RPC_URL exits 1 without echoing the URL", () => {
+  withTempDir((dir) => {
+    const keyPath = join(dir, "organizer.json");
+    writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
+    const secretUrl = "https://api.mainnet-beta.solana.com/?api-key=secret-123";
+    const result = runEntry({
+      ORGANIZER_KEYPAIR_PATH: keyPath,
+      SOLANA_RPC_URL: secretUrl,
+    });
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(
+      result.stderr,
+      "limen api: SOLANA_RPC_URL must be https://api.devnet.solana.com. limen re-simulates on devnet only.\n",
+    );
+    assert.equal(result.stderr.includes("secret-123"), false);
+  });
+});
+
+test("start wires the E-09 re-simulator so POST /reports re-simulates stored bundles", async () => {
+  const fixture = RESIMULATION_FIXTURE;
+  const rpcServer = createHttpServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      const request = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        id: number;
+        method: string;
+      };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: fixture.rpcResponses[request.method],
+        }),
+      );
+    });
+  });
+  await new Promise<void>((resolve) =>
+    rpcServer.listen(0, "127.0.0.1", resolve),
+  );
+  const rpcPort = (rpcServer.address() as AddressInfo).port;
+  const localFetch: Fetch = async (url, init) => {
+    assert.equal(url, DEVNET_RPC_URL);
+    const response = await fetch(`http://127.0.0.1:${rpcPort}`, init);
+    return {
+      ok: response.ok,
+      status: response.status,
+      url,
+      text: await response.text(),
+    };
+  };
+  const dir = mkdtempSync(join(tmpdir(), "limen-wire-"));
+  const keyPath = join(dir, "organizer.json");
+  writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
+  const api = await start(
+    {
+      ORGANIZER_KEYPAIR_PATH: keyPath,
+      DATABASE_PATH: join(dir, "limen.db"),
+      API_PORT: String(await freePort()),
+    },
+    localFetch,
+  );
+  try {
+    const res = await fetch(`${api.url}/reports`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(fixture.bundle),
+    });
+    assert.equal(res.status, 201);
+    assert.deepEqual(await res.json(), {
+      sighting_id: 1,
+      resimulation: "matches",
+      case_id: 1,
+      case_status: "held",
+    });
+  } finally {
+    await new Promise<void>((resolve) => api.server.close(() => resolve()));
+    await new Promise<void>((resolve) => rpcServer.close(() => resolve()));
     rmSync(dir, { recursive: true, force: true });
   }
 });

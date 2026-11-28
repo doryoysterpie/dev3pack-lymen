@@ -1,23 +1,30 @@
 // E-10: evidence bundle checks, storage and re-simulation against fixtures/reports.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { test } from "node:test";
+
+import type { Fetch } from "@limen/preflight";
 
 import { decodeBase58 } from "./base58.ts";
 import { openDatabase } from "./db.ts";
 import {
   canonicalJson,
   decodedPart,
+  DEVNET_RPC_URL,
   loadBundle,
   MAX_CLOCK_AHEAD_S,
   MAX_DATE_SECONDS,
   MAX_TRANSACTION_BYTES,
   parseReport,
+  preflightResimulator,
   RESIMULATION_TIMEOUT_MS,
   resimulateBundle,
   storeReport,
   type Report,
 } from "./evidence.ts";
+import { RESIMULATION_FIXTURE } from "./resimulation-fixture.ts";
 
 type Body = Record<string, unknown>;
 
@@ -525,8 +532,161 @@ test("re-simulation of a bundle with no transaction or no bundle runs nothing", 
   });
 });
 
-// The done test needs the E-09 decoder: it re-simulates a stored fixture drainer bundle through
-// packages/preflight against a recorded RPC response and owes the stored summary back.
-test.todo(
-  "E-10 done test: a stored bundle re-simulates to the same summary from the stored bytes (waits on E-09, packages/preflight)",
-);
+/** Serves recorded JSON-RPC responses over loopback HTTP with zero network access. */
+async function withLocalRpcServer<T>(
+  handle: (
+    method: string,
+    params: readonly unknown[],
+  ) => {
+    readonly status?: number;
+    readonly body: Record<string, unknown>;
+  },
+  run: (localFetch: Fetch, seenMethods: string[]) => Promise<T>,
+): Promise<T> {
+  const seenMethods: string[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      const request = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        id: number;
+        method: string;
+        params: unknown[];
+      };
+      seenMethods.push(request.method);
+      const reply = handle(request.method, request.params);
+      const payload = JSON.stringify({
+        jsonrpc: "2.0",
+        id: request.id,
+        ...reply.body,
+      });
+      res.writeHead(reply.status ?? 200, {
+        "content-type": "application/json",
+      });
+      res.end(payload);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  const localFetch: Fetch = async (url, init) => {
+    assert.equal(url, DEVNET_RPC_URL);
+    const response = await fetch(`http://127.0.0.1:${port}`, init);
+    return {
+      ok: response.ok,
+      status: response.status,
+      url,
+      text: await response.text(),
+    };
+  };
+  try {
+    return await run(localFetch, seenMethods);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((err) => (err ? reject(err) : resolve())),
+    );
+  }
+}
+
+test("E-10 done test: a stored bundle re-simulates to the same summary from the stored bytes", async () => {
+  const db = openDatabase(":memory:");
+  const bundleBody = structuredClone(RESIMULATION_FIXTURE.bundle);
+  // The fixture leaves out `wallet`, so the re-simulator must read the fee payer from the bytes.
+  assert.equal(bundleBody.wallet, undefined);
+  const id = storeReport(db, parsed(bundleBody), NOW);
+
+  await withLocalRpcServer(
+    (method) => ({
+      body: { result: RESIMULATION_FIXTURE.rpcResponses[method] },
+    }),
+    async (localFetch, seenMethods) => {
+      const resimulate = preflightResimulator({ fetch: localFetch });
+      const outcome = await resimulateBundle(db, id, resimulate, NOW + 1);
+      assert.equal(outcome.status, "resimulated");
+      assert.equal(outcome.status === "resimulated" && outcome.matches, true);
+      assert.equal(
+        outcome.status === "resimulated" && outcome.drainPattern,
+        true,
+      );
+      assert.deepEqual(seenMethods, ["getGenesisHash", "simulateTransaction"]);
+      assert.deepEqual(loadBundle(db, id)?.resimulation, {
+        at: NOW + 1,
+        matches: true,
+        drainPattern: true,
+      });
+      // Stored feePayerSet was true and simulation balances drifted, yet decodedPart matches.
+      if (outcome.status === "resimulated") {
+        const replayed = JSON.parse(outcome.summaryJson) as Record<
+          string,
+          unknown
+        >;
+        assert.equal(replayed.feePayerSet, false);
+        assert.deepEqual(
+          decodedPart(replayed),
+          decodedPart(bundleBody.summary),
+        );
+      }
+    },
+  );
+});
+
+test("preflightResimulator refuses any RPC URL other than https://api.devnet.solana.com", () => {
+  for (const badUrl of [
+    "",
+    "http://127.0.0.1:8899",
+    "https://api.mainnet-beta.solana.com",
+    "https://devnet.example/?api-key=secret-token",
+  ]) {
+    assert.throws(
+      () => preflightResimulator({ url: badUrl }),
+      (err: unknown) => {
+        assert.ok(err instanceof Error);
+        assert.equal(
+          err.message,
+          "SOLANA_RPC_URL must be https://api.devnet.solana.com. limen re-simulates on devnet only.",
+        );
+        assert.equal(err.message.includes("secret-token"), false);
+        return true;
+      },
+    );
+  }
+});
+
+test("preflightResimulator records failure when the local RPC server reports a non-devnet cluster or outage", async () => {
+  const db = openDatabase(":memory:");
+  const id = storeReport(
+    db,
+    parsed(structuredClone(RESIMULATION_FIXTURE.bundle)),
+    NOW,
+  );
+
+  // Non-devnet genesis hash must fail rather than compare a refusal against the stored bundle.
+  await withLocalRpcServer(
+    () => ({
+      body: { result: "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d" },
+    }),
+    async (localFetch) => {
+      const resimulate = preflightResimulator({ fetch: localFetch });
+      assert.deepEqual(await resimulateBundle(db, id, resimulate, NOW + 1), {
+        status: "failed",
+      });
+      assert.equal(loadBundle(db, id)?.resimulationFailedAt, NOW + 1);
+      assert.equal(loadBundle(db, id)?.resimulation, null);
+    },
+  );
+
+  // HTTP 500 during simulation must fail rather than match an unrun decode.
+  await withLocalRpcServer(
+    (method) =>
+      method === "getGenesisHash"
+        ? { body: { result: RESIMULATION_FIXTURE.rpcResponses.getGenesisHash } }
+        : { status: 500, body: { error: { code: -32000, message: "down" } } },
+    async (localFetch) => {
+      const resimulate = preflightResimulator({ fetch: localFetch });
+      assert.deepEqual(await resimulateBundle(db, id, resimulate, NOW + 2), {
+        status: "failed",
+      });
+      assert.equal(loadBundle(db, id)?.resimulationFailedAt, NOW + 2);
+      assert.equal(loadBundle(db, id)?.resimulation, null);
+    },
+  );
+});

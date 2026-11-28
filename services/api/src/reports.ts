@@ -18,7 +18,7 @@ export const MAX_REPORT_BODY_BYTES = 64 * 1024;
 export interface ReportOptions {
   /** The current Unix time in whole seconds. Defaults to the system clock. */
   readonly now?: () => number;
-  /** Re-simulates stored bundles. Unset until the E-09 package lands; then no re-simulation runs. */
+  /** Re-simulates stored bundles. When unset, no re-simulation runs. */
   readonly resimulator?: Resimulator;
   /** How long a re-simulation may take before it counts as failed. Defaults to 15 s. */
   readonly resimulationTimeoutMs?: number;
