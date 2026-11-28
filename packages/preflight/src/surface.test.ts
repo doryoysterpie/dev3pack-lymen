@@ -119,3 +119,57 @@ describe("re-audit 2, item 1: no RPC surface but the package's own client", () =
     assert.equal(methodsCalled, 0);
   });
 });
+
+describe("ruling 20a, item 8: a fetch's rejection is never read", () => {
+  it("reports a fixed reason, and reads nothing of what the fetch threw", async () => {
+    const touched: string[] = [];
+    const thrown = new Proxy(
+      {},
+      {
+        get: (_target, key) => {
+          touched.push(`get ${String(key)}`);
+          return () => "spoofed";
+        },
+        getPrototypeOf: () => {
+          touched.push("getPrototypeOf");
+          return Error.prototype;
+        },
+        getOwnPropertyDescriptor: (_target, key) => {
+          touched.push(`descriptor ${String(key)}`);
+          return undefined;
+        },
+      },
+    );
+    const result = await preflight(
+      {
+        url: "https://rpc.example/",
+        fetch: () => Promise.reject(thrown),
+      },
+      drainer,
+      USER,
+    );
+    assert.ok(result.kind === "ready");
+    assert.deepEqual(result.simulation, {
+      status: "not-run",
+      reason: "getGenesisHash: the endpoint could not be reached",
+    });
+    assert.deepEqual(touched, []);
+  });
+
+  it("still names a time limit it set itself", async () => {
+    const result = await preflight(
+      {
+        url: "https://rpc.example/",
+        fetch: () => new Promise(() => {}),
+        timeoutMs: 20,
+      },
+      drainer,
+      USER,
+    );
+    assert.ok(result.kind === "ready");
+    assert.deepEqual(result.simulation, {
+      status: "not-run",
+      reason: "the RPC endpoint did not answer within 0.02 seconds",
+    });
+  });
+});

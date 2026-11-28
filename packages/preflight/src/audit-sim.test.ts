@@ -729,7 +729,9 @@ describe("hunt: the public interface refuses what it cannot use, and never throw
       assert.ok(result.kind === "ready");
       assert.deepEqual(result.simulation, {
         status: "not-run",
-        reason: "the RPC failed with an error limen cannot read",
+        // Ruling 20a, item 8: a rejection is never read, so its reason is
+        // fixed.
+        reason: "getGenesisHash: the endpoint could not be reached",
       });
     }
   });
