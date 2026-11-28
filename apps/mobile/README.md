@@ -54,6 +54,10 @@ The app reads its RPC endpoint from `EXPO_PUBLIC_SOLANA_RPC_URL`, or uses the pu
 
 The fixtures in `fixtures/tx/e09-transactions.json` are built by `fixtures/tx/generate-e09.mjs` with `@solana/web3.js` 1.99.0 and `@solana/spl-token` 0.4.15. Each case's owed summary is written from the inputs the generator used, not from the decoder.
 
+### Trust boundary
+
+limen trusts the allowlisted devnet RPC endpoint to report the simulation it ran. It checks the shape of every answer and refuses contradictions it can detect from the transaction and the answer alone. An endpoint that misreports a simulation can still produce a clean card, for example for lookup-table data with invalid metadata, two different answers for one table, an instruction the program always refuses that limen's verdicts do not model, a transaction over 1,232 bytes, a failure at an instruction the transaction does not contain, or a wallet SOL gain on a self-transfer. Checking each simulation against a second endpoint or a light client is H-14, for mainnet (ruling 23a).
+
 ## Run
 
 The wallet adapter is a native module, so the app runs as a development build, not in Expo Go.

@@ -90,6 +90,10 @@ The script typechecks the package with no Node or DOM types, typechecks the test
 
 Layouts and rules come from the program sources at pinned commits, named at the top of each file: anza-xyz/solana-sdk `7b382f6`, solana-program/token `38de8d1`, solana-program/token-2022 `efe55b4`, solana-program/associated-token-account `34509e4`, anza-xyz/agave `a64fa73` for the priority fee (`src/fee.ts`), the System program and the fee payer (`src/effect.ts`), and the RPC's answers (`src/rpc.ts`, `src/failure.ts`), solana-transaction-error 4.1.0 (anza-xyz/solana-sdk `40b9883`), solana-instruction-error 3.1.0 (`13ec001`) and solana-program-pack 3.1.0 (`f5f84f3`), and the Solana Pay specification at solana-foundation/pay `8e1b87c`.
 
+## Trust boundary
+
+limen trusts the allowlisted devnet RPC endpoint to report the simulation it ran. It checks the shape of every answer and refuses contradictions it can detect from the transaction and the answer alone. An endpoint that misreports a simulation can still produce a clean card, for example for lookup-table data with invalid metadata, two different answers for one table, an instruction the program always refuses that limen's verdicts do not model, a transaction over 1,232 bytes, a failure at an instruction the transaction does not contain, or a wallet SOL gain on a self-transfer. Checking each simulation against a second endpoint or a light client is H-14, for mainnet (ruling 23a).
+
 ## Not verified
 
 - Other signers' signatures are not checked cryptographically; `signatureFilled` says only that a slot is not empty.
