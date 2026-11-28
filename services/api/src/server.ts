@@ -46,13 +46,12 @@ export interface ApiContext {
    * (station-token.ts). A display sends its own station's token, never this secret.
    */
   readonly stationDisplayToken: string;
-  /** The current Unix time in whole seconds. */
-  readonly now: () => number;
   /**
-   * The current Unix time in milliseconds, for checks that must not round to the second, such
-   * as a station QR's 60 s window (E-05). Unset: now() * 1000.
+   * The current Unix time in milliseconds: the one clock the API reads. A time in whole seconds
+   * is floor(nowMs() / 1000), never a second clock, so a station QR's 60 s window is checked to
+   * the millisecond. createApiServer refuses a context without it.
    */
-  readonly nowMs?: () => number;
+  readonly nowMs: () => number;
   /**
    * Check-in dependencies (E-05): registration binding from E-07 and minting from E-06. Unset
    * until those land and are wired in; POST /checkins then answers 503.
@@ -121,7 +120,7 @@ async function postCheckin(
       minter: ctx.checkin.minter,
     },
     body,
-    ctx.nowMs?.() ?? ctx.now() * 1000,
+    ctx.nowMs(),
   );
   sendJson(res, outcome.status, outcome.body);
 }
@@ -188,7 +187,7 @@ function stationQr(
     return;
   }
   // One reading of the clock serves the session choice, the QR and its remaining time.
-  const nowMs = ctx.nowMs?.() ?? ctx.now() * 1000;
+  const nowMs = ctx.nowMs();
   const now = Math.floor(nowMs / 1000);
   const session = ctx.db
     .prepare(
@@ -223,6 +222,12 @@ function stationQr(
 }
 
 export function createApiServer(ctx: ApiContext): Server {
+  // A JavaScript caller is not held to the type, so the clock is checked here too.
+  if (typeof ctx.nowMs !== "function") {
+    throw new TypeError(
+      "createApiServer needs nowMs, the API's millisecond clock",
+    );
+  }
   return createServer((req, res) => {
     try {
       const { pathname } = new URL(req.url ?? "/", "http://localhost");

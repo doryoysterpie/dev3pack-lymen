@@ -49,7 +49,7 @@ const server = createApiServer({
   version: API_VERSION,
   stationSigner: SIGNER,
   stationDisplayToken: TOKEN,
-  now: () => clock,
+  nowMs: () => clock * 1000,
 });
 let base = "";
 
@@ -283,7 +283,6 @@ test("with a millisecond clock the QR's time left is exact, so a QR issued 100 m
     version: API_VERSION,
     stationSigner: SIGNER,
     stationDisplayToken: TOKEN,
-    now: () => T - 1,
     nowMs: () => (T - 1) * 1000 + 900,
   });
   await new Promise<void>((resolve) =>

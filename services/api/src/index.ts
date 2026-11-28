@@ -75,7 +75,6 @@ export async function start(
     version: API_VERSION,
     stationSigner: organizerKey,
     stationDisplayToken,
-    now: () => Math.floor(Date.now() / 1000),
     nowMs: () => Date.now(),
     checkin:
       salt === undefined

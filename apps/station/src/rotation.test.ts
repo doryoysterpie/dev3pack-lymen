@@ -317,7 +317,7 @@ test("a station link from the link tool reaches the real API and gets that stati
     version: API_VERSION,
     stationSigner: signer,
     stationDisplayToken: secret,
-    now: () => 1795000100,
+    nowMs: () => 1795000100 * 1000,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {

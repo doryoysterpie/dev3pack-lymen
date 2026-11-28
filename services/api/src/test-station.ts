@@ -29,5 +29,5 @@ export const TEST_STATION_DISPLAY_SECRET =
 export const TEST_STATION_SETTINGS = {
   stationSigner: SIGNER,
   stationDisplayToken: TEST_STATION_DISPLAY_SECRET,
-  now: (): number => 1_795_000_000,
+  nowMs: (): number => 1_795_000_000_000,
 } as const;

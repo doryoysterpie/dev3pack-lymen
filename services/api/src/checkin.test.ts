@@ -437,7 +437,7 @@ test("POST /checkins runs the check-in end to end, and answers 503 on a server b
     version: API_VERSION,
     stationSigner: ORGANIZER,
     stationDisplayToken: "test-display-token-0123456789abcdef",
-    now: () => clock.now,
+    nowMs: () => clock.now * 1000,
   };
   const wired = createApiServer({
     ...base,
@@ -487,15 +487,29 @@ test("POST /checkins runs the check-in end to end, and answers 503 on a server b
   }
 });
 
-test("POST /checkins checks the QR window against the millisecond clock, not the whole second", async () => {
-  const { db, deps, alice } = setup();
-  // The whole-second clock reads T + 60, still inside the window; the real time is 500 ms later.
-  const server = createApiServer({
+test("the API reads one millisecond clock: a server built without nowMs is refused", () => {
+  const { db, deps } = setup();
+  // A JavaScript caller could pass only a whole-second clock; at 60.500 s that read 60.000 s.
+  const secondsOnly = {
     db,
     version: API_VERSION,
     stationSigner: ORGANIZER,
     stationDisplayToken: "test-display-token-0123456789abcdef",
     now: () => T + 60,
+    checkin: { registrations: deps.registrations, minter: deps.minter },
+  } as unknown as Parameters<typeof createApiServer>[0];
+  assert.throws(() => createApiServer(secondsOnly), {
+    message: "createApiServer needs nowMs, the API's millisecond clock",
+  });
+});
+
+test("POST /checkins checks the QR window against the millisecond clock: at 60.500 s a QR is refused", async () => {
+  const { db, deps, alice } = setup();
+  const server = createApiServer({
+    db,
+    version: API_VERSION,
+    stationSigner: ORGANIZER,
+    stationDisplayToken: "test-display-token-0123456789abcdef",
     nowMs: () => (T + 60) * 1000 + 500,
     checkin: { registrations: deps.registrations, minter: deps.minter },
   });

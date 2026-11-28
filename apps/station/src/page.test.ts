@@ -257,7 +257,6 @@ test("with a 2 s response delay, a QR that expires in transit is never drawn, an
     version: API_VERSION,
     stationSigner: SIGNER,
     stationDisplayToken: secret,
-    now: () => Math.floor(apiMs() / 1000),
     nowMs: apiMs,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
