@@ -66,6 +66,7 @@ export async function start(
     stationSigner: organizerKey,
     stationDisplayToken,
     now: () => Math.floor(Date.now() / 1000),
+    nowMs: () => Date.now(),
     reports: {
       triageToken: env.TRIAGE_TOKEN || undefined,
       lists,

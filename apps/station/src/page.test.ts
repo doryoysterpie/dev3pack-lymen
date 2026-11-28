@@ -4,7 +4,15 @@ import assert from "node:assert/strict";
 import { createPrivateKey } from "node:crypto";
 import { test } from "node:test";
 
+import type { AddressInfo } from "node:net";
+
+import { openDatabase } from "../../../services/api/src/db.ts";
+import {
+  API_VERSION,
+  createApiServer,
+} from "../../../services/api/src/server.ts";
 import { issueStationQr } from "../../../services/api/src/station-qr.ts";
+import { stationDisplayToken } from "../../../services/api/src/station-token.ts";
 
 // RFC 8032 section 7.1, TEST 1: a published Ed25519 test vector, not a real key.
 const SIGNER = {
@@ -212,4 +220,73 @@ test("the caption comes from the signed QR and states the server's interval", as
     elements.caption.textContent,
     "Station st-front, session day-2. Next QR in 7 s.",
   );
+});
+
+test("with a 2 s response delay, a QR that expires in transit is never drawn, and changeover follows the server's expiry", async () => {
+  // day-1 ends at T and day-2 begins there. The API's clock runs with the page's fake clock,
+  // starting 900 ms into day-1's last second, so the first QR has 100 ms left when issued.
+  const clock = fakeClock();
+  const apiMs = () => (T - 1) * 1000 + 900 + clock.now;
+  const secret = "test-display-token-0123456789abcdef";
+  const db = openDatabase(":memory:");
+  db.exec(`
+    INSERT INTO stations (id, name, created_at) VALUES ('st-front', 'Front desk', ${T});
+    INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('day-1', 'Day 1', ${T - 86400}, ${T});
+    INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('day-2', 'Day 2', ${T}, ${T + 86400});
+  `);
+  const server = createApiServer({
+    db,
+    version: API_VERSION,
+    stationSigner: SIGNER,
+    stationDisplayToken: secret,
+    now: () => Math.floor(apiMs() / 1000),
+    nowMs: apiMs,
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const api = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  // The real API answers at once; the page gets each answer 2 s later on its own clock.
+  const fetchedAt: number[] = [];
+  const delayed = (url: string, init?: RequestInit): Promise<Response> => {
+    fetchedAt.push(clock.now);
+    const answer = fetch(`${api}${url.replace(/^\/api/, "")}`, init).then(
+      async (r) => ({ status: r.status, body: await r.text() }),
+    );
+    return new Promise((resolve) => {
+      clock.setTimeout(() => {
+        void answer.then((a) =>
+          resolve(
+            new Response(a.body, {
+              status: a.status,
+              headers: { "content-type": "application/json" },
+            }),
+          ),
+        );
+      }, 2000);
+    });
+  };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 100));
+  try {
+    const { log } = await loadPage(
+      `http://127.0.0.1:5173/?station=st-front#token=${stationDisplayToken(secret, "st-front")}`,
+      delayed,
+      clock,
+    );
+    await settle();
+    await clock.advance(2000);
+    await settle();
+    await clock.advance(2000);
+    await settle();
+    await clock.advance(30_000);
+    const captions = log.filter((l) => l.startsWith("caption: Station"));
+    assert.ok(
+      !captions.some((c) => c.includes("session day-1")),
+      `day-1's QR, expired on arrival, is never drawn: ${captions.join(" | ")}`,
+    );
+    assert.ok(captions.some((c) => c.includes("session day-2")));
+    // The next fetch starts on day-1's arrival, and day-2's refresh comes 30 s after it was
+    // issued, at 32 s, not 30 s after it arrived.
+    assert.deepEqual(fetchedAt, [0, 2000, 32_000]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
