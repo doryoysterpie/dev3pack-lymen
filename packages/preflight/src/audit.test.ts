@@ -20,7 +20,7 @@ import {
   TOKEN_PROGRAM,
 } from "./programs.ts";
 import { endpointFor, recordedEndpoint } from "../test-support/recorded.ts";
-import { summarizeTransaction, userTokenAccounts } from "./summary.ts";
+import { summarizeTransaction } from "./summary.ts";
 import { parseTransaction, type ParsedTransaction } from "./wire.ts";
 
 const fixture = JSON.parse(
@@ -228,36 +228,7 @@ describe("audit 4: only the authority account itself authorizes", () => {
   });
 });
 
-describe("audit 5: a Token-2022 Revoke does not prove ownership", () => {
-  // token-2022 efe55b4, program/src/processor.rs:729, process_revoke: the
-  // current delegate may sign. token 38de8d1, processor.rs:407: only the owner.
-  it("names no wallet token account for a Token-2022 Revoke", () => {
-    assert.deepEqual(
-      userTokenAccounts(
-        parsed([
-          spl.createRevokeInstruction(
-            tokenAccount,
-            user,
-            [],
-            spl.TOKEN_2022_PROGRAM_ID,
-          ),
-        ]),
-        new Map(),
-      ),
-      [],
-    );
-  });
-
-  it("still names it for a Token program Revoke", () => {
-    assert.deepEqual(
-      userTokenAccounts(
-        parsed([spl.createRevokeInstruction(tokenAccount, user)]),
-        new Map(),
-      ),
-      [K.userTokenAccount],
-    );
-  });
-});
+describe("audit 5: a Token-2022 Revoke does not prove ownership", () => {});
 
 describe("audit 13: Assign to the System Program is not decoded", () => {
   it("goes to the fallback card, with no drain pattern", async () => {

@@ -34,10 +34,8 @@ import { readUnsetFeePayer, withFeePayer } from "./fee-payer.ts";
 import {
   scrubAddresses,
   scrubWithin,
-  USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER,
-  WALLET_SIGNED_ACCOUNT_MARKER,
   USER_MARKER,
-  withMarker,
+  withRoleMarkers,
   withMarkers,
 } from "./marker.ts";
 import { ADDRESS_LOOKUP_TABLE_PROGRAM } from "./programs.ts";
@@ -57,9 +55,6 @@ import {
 import { parseLookupTable } from "./state.ts";
 import {
   summarizeTransaction,
-  userAuthorizedTokenAccounts,
-  walletSignedAccounts,
-  userTokenAccounts,
   type Place,
   type TransactionSummary,
 } from "./summary.ts";
@@ -124,20 +119,11 @@ export type Preflight =
       readonly blocks: readonly SignBlock[];
       readonly simulatedAt: SimulatedAt | null;
       /**
-       * Token accounts the decoded instructions name as the wallet's
-       * (summary.ts, userTokenAccounts) or act on with the wallet as signing
-       * authority, or that a wallet-signed transfer sends to
-       * (userAuthorizedTokenAccounts), in the message's account order. limen
-       * reads no account (ruling 20a), so none is shown to be the wallet's.
-       * A report writes "user-authorized token account N".
+       * The message's account list, in order: static keys, then the
+       * addresses loaded from lookup tables, null where a table could not be
+       * read. A report marks each address by its index here (toReport).
        */
-      readonly userAuthorizedTokenAccounts: readonly string[];
-      /**
-       * Every other account an instruction the wallet signs names, in the
-       * same order (summary.ts, walletSignedAccounts). A report writes
-       * "account in a wallet-signed instruction N".
-       */
-      readonly walletSignedAccounts: readonly string[];
+      readonly accountKeys: readonly (string | null)[];
       /**
        * For an evidence bundle's `recipients` (E-10): every address a
        * decoded effect asks to send SOL or tokens to or give control to (a
@@ -338,35 +324,20 @@ export async function preflight(
   }
 
   const summary = summarizeTransaction(transaction, tables);
-  const order = messageAccounts(transaction.message, tables).map(
+  const accountKeys = messageAccounts(transaction.message, tables).map(
     (account) => account.address,
   );
-  const inOrder = (a: string, b: string) => order.indexOf(a) - order.indexOf(b);
-  // limen reads no account, so no token account is shown to be the
-  // wallet's; one the decoded instructions name as the wallet's, or that a
-  // wallet-signed transfer sends to, is marked as user-authorized.
-  const authorizedAccounts = [
-    ...new Set([
-      ...userTokenAccounts(transaction, tables),
-      ...userAuthorizedTokenAccounts(transaction, tables, true),
-    ]),
-  ].sort(inOrder);
-  // Every other account an instruction the wallet signs names, whatever the
-  // instruction (summary.ts, walletSignedAccounts).
-  const signedAccounts = walletSignedAccounts(transaction, tables)
-    .filter((address) => !authorizedAccounts.includes(address))
-    .sort(inOrder);
   // The RPC's text can hold an address inside a longer run, which the scrub
-  // of whole runs leaves; every address a report marks is removed wherever
-  // it occurs.
-  const walletAddresses = [feePayer, ...authorizedAccounts, ...signedAccounts];
+  // of whole runs leaves; every address the message names, its lookup
+  // tables included, is removed wherever it occurs.
+  const named = [
+    ...accountKeys.filter((address): address is string => address !== null),
+    ...transaction.message.lookups.map((lookup) => lookup.table),
+  ];
   simulation =
     simulation.status === "ran"
-      ? { ...simulation, err: scrubWithin(simulation.err, walletAddresses) }
-      : {
-          ...simulation,
-          reason: scrubWithin(simulation.reason, walletAddresses),
-        };
+      ? { ...simulation, err: scrubWithin(simulation.err, named) }
+      : { ...simulation, reason: scrubWithin(simulation.reason, named) };
   return {
     kind: "ready",
     base64,
@@ -376,8 +347,7 @@ export async function preflight(
     simulation,
     blocks: signBlocks(summary, simulation),
     simulatedAt,
-    userAuthorizedTokenAccounts: authorizedAccounts,
-    walletSignedAccounts: signedAccounts,
+    accountKeys,
     ...bundleLists(transaction, summary),
   };
 }
@@ -494,17 +464,24 @@ export type PreflightReport =
 export function toReport(result: Preflight): PreflightReport {
   if (result.kind !== "ready") return result;
   const { feePayerSet, summary, simulation, blocks } = result;
-  const markers = new Map([
-    ...result.userAuthorizedTokenAccounts.map(
-      (address, i) =>
-        [address, `${USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER} ${i + 1}`] as const,
-    ),
-    ...result.walletSignedAccounts.map(
-      (address, i) =>
-        [address, `${WALLET_SIGNED_ACCOUNT_MARKER} ${i + 1}`] as const,
-    ),
+  // A report carries no address but REPORT_PROGRAMS (the owner's ruling
+  // 20a): the wallet is "user", an account of the message is "account N" by
+  // its index, a lookup table is "lookup table N", and any other address is
+  // "address N" in the order first met (marker.ts, withRoleMarkers).
+  const markers = new Map<string, string>([
+    [result.transaction.message.staticKeys[0], USER_MARKER],
   ]);
-  return withMarkers(
+  result.accountKeys.forEach((address, index) => {
+    if (address !== null && !markers.has(address)) {
+      markers.set(address, `account ${index}`);
+    }
+  });
+  result.transaction.message.lookups.forEach((lookup, index) => {
+    if (!markers.has(lookup.table)) {
+      markers.set(lookup.table, `lookup table ${index}`);
+    }
+  });
+  return withRoleMarkers(
     { kind: "ready", feePayerSet, summary, simulation, blocks },
     markers,
   );

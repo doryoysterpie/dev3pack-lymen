@@ -580,26 +580,6 @@ describe("re-audit A4: the report names no address of the wallet's", () => {
       }),
     ]);
 
-  it("(i) with no read, a wallet-signed transfer's destination is marked too", async () => {
-    const result = await preflightTransaction(between(), {
-      endpoint: offline(),
-      user: USER,
-    });
-    assert.ok(result.summary.kind === "ready");
-    assert.equal(result.summary.simulation.status, "not-run");
-    const json = JSON.stringify(result);
-    assert.equal(json.includes(K.userTokenAccount), false);
-    assert.equal(json.includes(K.userToken2022Account), false);
-    const out = result.summary.summary.effects[0];
-    assert.ok(out.kind === "token-out");
-    assert.deepEqual(out.source, {
-      address: "user-authorized token account 1",
-    });
-    assert.deepEqual(out.destination, {
-      address: "user-authorized token account 2",
-    });
-  });
-
   it("(ii) an address of the wallet's inside a longer run of RPC text is scrubbed", async () => {
     const approve = build([
       new web3.TransactionInstruction({
@@ -823,33 +803,6 @@ describe("audit 9: the report JSON and the blockhash", () => {
     endpointFor(async () => {
       throw new Error("offline");
     }, "x");
-
-  it("an offline token transfer the wallet signs does not name its source account", async () => {
-    const result = await preflightTransaction(
-      build([
-        new web3.TransactionInstruction({
-          programId: new web3.PublicKey(TOKEN_PROGRAM),
-          keys: [
-            { pubkey: tokenAccount, isSigner: false, isWritable: true },
-            { pubkey: attacker, isSigner: false, isWritable: true },
-            { pubkey: user, isSigner: true, isWritable: false },
-          ],
-          data: Buffer.from([3, 5, 0, 0, 0, 0, 0, 0, 0]),
-        }),
-      ]),
-      { endpoint: offline(), user: USER },
-    );
-    assert.ok(result.summary.kind === "ready");
-    assert.equal(result.summary.simulation.status, "not-run");
-    const json = JSON.stringify(result);
-    assert.equal(json.includes(K.userTokenAccount), false);
-    assert.equal(json.includes(USER), false);
-    const out = result.summary.summary.effects[0];
-    assert.ok(out.kind === "token-out");
-    assert.deepEqual(out.source, {
-      address: "user-authorized token account 1",
-    });
-  });
 
   it("an error keyed by the wallet's address loses the address", async () => {
     const result = await preflightTransaction(build([transfer()]), {

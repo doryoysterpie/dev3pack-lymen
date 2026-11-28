@@ -11,7 +11,9 @@ import * as spl from "@solana/spl-token";
 import * as web3 from "@solana/web3.js";
 
 import { endpointFor, recordedEndpoint } from "../test-support/recorded.ts";
+import { decodePublicKey } from "./base58.ts";
 import { decodeInstruction } from "./decode.ts";
+import { REPORT_PROGRAMS } from "./marker.ts";
 import { messageAccounts } from "./accounts.ts";
 import { preflightTransaction } from "./preflight.ts";
 import {
@@ -307,6 +309,11 @@ describe("re-audit 2, item 4: every account an instruction the wallet signs name
         for (const address of named) {
           assert.equal(json.includes(address), false, `${name}: ${address}`);
         }
+        // Ruling 20a, item 3: no address at all but the six known programs.
+        const others = (json.match(/[1-9A-HJ-NP-Za-km-z]{32,}/g) ?? []).filter(
+          (run) => decodePublicKey(run) !== null && !REPORT_PROGRAMS.has(run),
+        );
+        assert.deepEqual(others, [], name);
       }
     });
   }
