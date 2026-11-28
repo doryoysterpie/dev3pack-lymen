@@ -240,6 +240,43 @@ test("a QR issued in a session's last second expires when the session ends", asy
   assert.equal(next.session, "day-2");
 });
 
+test("no QR issued in a session verifies at or after its end, the instant the API moves to the next session", async () => {
+  // day-1 ends at T and day-2 starts at T. A QR is fetched in each of day-1's last 61 seconds.
+  const at = (qr: string, nowMs: number) => {
+    const r = verifyStationQr(qr, {
+      allowlist: stationAllowlist([SIGNER.publicKey]),
+      nowMs,
+    });
+    return r.ok ? "ok" : r.reason;
+  };
+  for (let second = T - 61; second < T; second++) {
+    clock = second;
+    const body = (await (await getQr("st-front")).json()) as {
+      qr: string;
+      session: string;
+    };
+    assert.equal(body.session, "day-1");
+    assert.equal(
+      at(body.qr, T * 1000),
+      "expired",
+      `issued at T - ${T - second}`,
+    );
+  }
+  clock = T;
+  const next = (await (await getQr("st-front")).json()) as { session: string };
+  assert.equal(next.session, "day-2");
+  // A QR whose 60 s end before its session does keeps them: it verifies at exactly 60,000 ms
+  // after issue and is refused 1 ms later.
+  clock = T - 61;
+  const full = (await (await getQr("st-front")).json()) as {
+    qr: string;
+    expires_at: number;
+  };
+  assert.equal(full.expires_at, T - 1);
+  assert.equal(at(full.qr, (T - 61) * 1000 + 60_000), "ok");
+  assert.equal(at(full.qr, (T - 61) * 1000 + 60_001), "expired");
+});
+
 test("with a millisecond clock the QR's time left is exact, so a QR issued 100 ms before its session ends says so", async () => {
   const msServer = createApiServer({
     db,
