@@ -15,7 +15,7 @@ import {
   fragmentParam,
   readStationConfig,
   startRotation,
-  type StationQrResponse,
+  type StationQr,
   type StationView,
 } from "./rotation.ts";
 
@@ -56,14 +56,36 @@ function fakeClock() {
 const flush = (): Promise<void> =>
   new Promise((resolve) => setImmediate(resolve));
 
-function response(n: number): StationQrResponse {
+function response(n: number): StationQr {
   return {
     qr: `limen:station:v1.payload-${n}.signer.signature`,
     station: "st-front",
     session: "day-2",
-    issued_at: 1000 + 30 * n,
-    expires_at: 1060 + 30 * n,
-    refresh_after_s: 30,
+    issuedAt: 1000 + 30 * n,
+    expiresAt: 1060 + 30 * n,
+    refreshAfterS: 30,
+  };
+}
+
+/** The API's answer for response(n): its QR text carries the payload the page reads. */
+function wireBody(n: number, station = "st-front") {
+  const r = response(n);
+  const payload = Buffer.from(
+    JSON.stringify({
+      station,
+      session: r.session,
+      nonce: "AAAAAAAAAAAAAAAAAAAAAA",
+      issued_at: r.issuedAt,
+      expires_at: r.expiresAt,
+    }),
+  ).toString("base64url");
+  return {
+    qr: `limen:station:v1.${payload}.signer.signature`,
+    station: "st-front",
+    session: r.session,
+    issued_at: r.issuedAt,
+    expires_at: r.expiresAt,
+    refresh_after_s: r.refreshAfterS,
   };
 }
 
@@ -97,7 +119,9 @@ test("the display shows a fresh QR from the API at 0 s, 30 s and 60 s", async ()
     qr: response(3).qr,
     station: "st-front",
     session: "day-2",
+    issuedAt: 1090,
     expiresAt: 1150,
+    refreshAfterS: 30,
   });
 });
 
@@ -174,16 +198,38 @@ test("one fetch asks the API for the station's QR with the token and returns its
   const seen: { url: string; auth: string | null }[] = [];
   const fakeFetch = (async (url: string, init?: RequestInit) => {
     seen.push({ url, auth: new Headers(init?.headers).get("authorization") });
-    return new Response(JSON.stringify(response(1)), { status: 200 });
+    return new Response(JSON.stringify(wireBody(1)), { status: 200 });
   }) as typeof fetch;
   const got = await fetchStationQr(fakeFetch, "/api", {
     station: "st-front",
     token: "tok",
   });
-  assert.deepEqual(got, response(1));
+  // What the page shows is read from the QR's payload, not the answer's other fields.
+  assert.deepEqual(got, { ...response(1), qr: wireBody(1).qr });
   assert.deepEqual(seen, [
     { url: "/api/stations/st-front/qr", auth: "Bearer tok" },
   ]);
+});
+
+test("an answer whose QR is signed for another station, or carries no payload, is refused", async () => {
+  const config = { station: "st-front", token: "tok" };
+  const answering = (body: unknown) =>
+    (async () =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+      })) as unknown as typeof fetch;
+  await assert.rejects(
+    fetchStationQr(answering(wireBody(1, "st-side")), "/api", config),
+    { message: "The API sent a QR for another station." },
+  );
+  await assert.rejects(
+    fetchStationQr(
+      answering({ ...wireBody(1), qr: response(1).qr }),
+      "/api",
+      config,
+    ),
+    { message: "The API answered with something that is not a station QR." },
+  );
 });
 
 test("each failed fetch becomes the owed message for the screen", async () => {
@@ -298,7 +344,7 @@ test("a fetch that never answers is abandoned after 10 s, shown as a failure, an
       calls++;
       if (calls === 2) {
         // Never settles on its own; only the rotation's abort ends the wait.
-        return new Promise<StationQrResponse>((_, reject) =>
+        return new Promise<StationQr>((_, reject) =>
           signal.addEventListener("abort", () => reject(new Error("aborted"))),
         );
       }
@@ -332,8 +378,8 @@ test("a QR that outlives its lifetime on screen is cleared and the page says it 
     fetchQr: (signal) => {
       calls++;
       if (calls === 1)
-        return Promise.resolve({ ...response(1), refresh_after_s: 60 });
-      return new Promise<StationQrResponse>((_, reject) =>
+        return Promise.resolve({ ...response(1), refreshAfterS: 60 });
+      return new Promise<StationQr>((_, reject) =>
         signal.addEventListener("abort", () => reject(new Error("aborted"))),
       );
     },

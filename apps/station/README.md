@@ -1,6 +1,6 @@
 # apps/station
 
-The Vite page for the station display (D-02). It shows the signed station QR from E-03 and replaces it every 30 s.
+The Vite page for the station display (D-02). It shows the signed station QR from E-03 and replaces it when the API says, every 30 s or sooner near a session's end. The caption under the QR names the station and session signed into the QR and the API's refresh interval. A QR signed for another station than the page's is refused, not drawn.
 
 ## Run
 
@@ -20,4 +20,4 @@ If a fetch fails, or gets no answer within 10 s, the page clears the QR, shows t
 npm test -w @limen/station
 ```
 
-`src/page.test.ts` loads the page itself, `src/main.ts`, with a stand-in document and window, and checks that the token leaves the address bar before a station error or the first fetch. `src/rotation.test.ts` drives the rotation with a fake clock: it checks that the page fetches and shows a QR at 0 s, 30 s and 60 s and not before, that a failed fetch clears the QR and retries after 5 s, that a fetch with no answer is abandoned at 10 s and retried, that an outlived QR gives way to the refreshing state, that each API failure becomes the owed message, and that a link from the link tool reaches the real API and gets that station's QR while the secret itself is refused. It does not draw a QR; drawing was checked by hand in a browser (see the E-03 pull request).
+`src/page.test.ts` loads the page itself, `src/main.ts`, with a stand-in document and window, and checks that the token leaves the address bar before a station error or the first fetch, that another station's genuine QR is refused rather than drawn, and that the caption comes from the signed QR and states the API's interval. `src/rotation.test.ts` drives the rotation with a fake clock: it checks that the page fetches and shows a QR at 0 s, 30 s and 60 s and not before, that a failed fetch clears the QR and retries after 5 s, that a fetch with no answer is abandoned at 10 s and retried, that an outlived QR gives way to the refreshing state, that each API failure becomes the owed message, and that a link from the link tool reaches the real API and gets that station's QR while the secret itself is refused. It does not draw a QR; drawing was checked by hand in a browser (see the E-03 pull request).

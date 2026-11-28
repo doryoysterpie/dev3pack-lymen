@@ -14,14 +14,21 @@ export interface StationQrResponse {
   readonly refresh_after_s: number;
 }
 
+/**
+ * One QR as the page shows it: the QR text, the station, session and times read from the
+ * payload it carries, and the server's refresh interval.
+ */
+export interface StationQr {
+  readonly qr: string;
+  readonly station: string;
+  readonly session: string;
+  readonly issuedAt: number;
+  readonly expiresAt: number;
+  readonly refreshAfterS: number;
+}
+
 export type StationView =
-  | {
-      readonly kind: "qr";
-      readonly qr: string;
-      readonly station: string;
-      readonly session: string;
-      readonly expiresAt: number;
-    }
+  | ({ readonly kind: "qr" } & StationQr)
   | { readonly kind: "error"; readonly message: string }
   | { readonly kind: "refreshing" };
 
@@ -31,7 +38,7 @@ export const FETCH_TIMEOUT_MS = 10_000;
 
 export interface RotationDeps {
   /** Fetches one QR. The rotation aborts `signal` when the fetch runs past FETCH_TIMEOUT_MS. */
-  readonly fetchQr: (signal: AbortSignal) => Promise<StationQrResponse>;
+  readonly fetchQr: (signal: AbortSignal) => Promise<StationQr>;
   readonly render: (view: StationView) => void;
   readonly setTimeout: (fn: () => void, ms: number) => unknown;
   readonly clearTimeout: (handle: unknown) => void;
@@ -66,7 +73,7 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
         () => controller.abort(),
         FETCH_TIMEOUT_MS,
       );
-      let res: StationQrResponse;
+      let res: StationQr;
       try {
         res = await Promise.race([deps.fetchQr(controller.signal), timedOut]);
       } finally {
@@ -74,22 +81,16 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
       }
       if (stopped) return;
       clearStale();
-      deps.render({
-        kind: "qr",
-        qr: res.qr,
-        station: res.station,
-        session: res.session,
-        expiresAt: res.expires_at,
-      });
+      deps.render({ kind: "qr", ...res });
       // Once this QR's lifetime has run out on screen, it can no longer check anyone in.
       staleTimer = deps.setTimeout(
         () => {
           staleTimer = null;
           if (!stopped) deps.render({ kind: "refreshing" });
         },
-        (res.expires_at - res.issued_at) * 1000,
+        (res.expiresAt - res.issuedAt) * 1000,
       );
-      next = res.refresh_after_s * 1000;
+      next = res.refreshAfterS * 1000;
     } catch (err) {
       if (stopped) return;
       clearStale();
@@ -146,6 +147,54 @@ export function readStationConfig(
   return { station, token };
 }
 
+const ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * The signed payload inside a station QR's text, or null when the text is not a station QR.
+ * The page has no key and does not check the signature; it reads what was signed, so what it
+ * shows under the QR cannot drift from the QR itself.
+ */
+export function stationPayloadOf(qr: string): {
+  station: string;
+  session: string;
+  issued_at: number;
+  expires_at: number;
+} | null {
+  const m =
+    /^limen:station:v1\.([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.exec(
+      qr,
+    );
+  if (m?.[1] === undefined) return null;
+  let p: unknown;
+  try {
+    p = JSON.parse(atob(m[1].replace(/-/g, "+").replace(/_/g, "/")));
+  } catch {
+    return null;
+  }
+  if (typeof p !== "object" || p === null) return null;
+  const v = p as Record<string, unknown>;
+  if (
+    typeof v.station !== "string" ||
+    !ID.test(v.station) ||
+    typeof v.session !== "string" ||
+    !ID.test(v.session) ||
+    !Number.isSafeInteger(v.issued_at) ||
+    !Number.isSafeInteger(v.expires_at)
+  )
+    return null;
+  return {
+    station: v.station,
+    session: v.session,
+    issued_at: v.issued_at as number,
+    expires_at: v.expires_at as number,
+  };
+}
+
+/** The caption under a shown QR: its signed station and session, and the server's interval. */
+export function captionFor(view: StationQr): string {
+  return `Station ${view.station}, session ${view.session}. Next QR in ${view.refreshAfterS} s.`;
+}
+
 function isQrResponse(value: unknown): value is StationQrResponse {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
@@ -177,7 +226,7 @@ export async function fetchStationQr(
   apiBase: string,
   config: { station: string; token: string },
   signal?: AbortSignal,
-): Promise<StationQrResponse> {
+): Promise<StationQr> {
   let res: Response;
   try {
     res = await fetchFn(`${apiBase}/stations/${config.station}/qr`, {
@@ -198,9 +247,20 @@ export async function fetchStationQr(
         `The API answered with status ${res.status}.`,
     );
   const body: unknown = await res.json().catch(() => null);
-  if (!isQrResponse(body))
+  const payload = isQrResponse(body) ? stationPayloadOf(body.qr) : null;
+  if (!isQrResponse(body) || payload === null)
     throw new Error(
       "The API answered with something that is not a station QR.",
     );
-  return body;
+  // A QR signed for another station is refused, whatever the response's other fields say.
+  if (payload.station !== config.station)
+    throw new Error("The API sent a QR for another station.");
+  return {
+    qr: body.qr,
+    station: payload.station,
+    session: payload.session,
+    issuedAt: payload.issued_at,
+    expiresAt: payload.expires_at,
+    refreshAfterS: body.refresh_after_s,
+  };
 }
