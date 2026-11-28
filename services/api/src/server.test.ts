@@ -147,6 +147,7 @@ test("the station display gets a QR for its station in the active session that v
   assert.equal(body.expires_in_ms, 60_000);
   const result = verifyStationQr(String(body.qr), {
     allowlist: stationAllowlist([SIGNER.publicKey]),
+    expectedStation: "st-front",
     nowMs: (T + 100) * 1000,
   });
   assert.ok(result.ok);
@@ -161,6 +162,7 @@ test("two fetches return QRs with different nonces", async () => {
     const { qr } = (await (await getQr("st-front")).json()) as { qr: string };
     const result = verifyStationQr(qr, {
       allowlist: stationAllowlist([SIGNER.publicKey]),
+      expectedStation: "st-front",
       nowMs: clock * 1000,
     });
     assert.ok(result.ok);
@@ -226,6 +228,7 @@ test("a QR issued in a session's last second expires when the session ends", asy
   const at = (nowMs: number) => {
     const r = verifyStationQr(body.qr, {
       allowlist: stationAllowlist([SIGNER.publicKey]),
+      expectedStation: "st-front",
       nowMs,
     });
     return r.ok ? "ok" : r.reason;
@@ -245,6 +248,7 @@ test("no QR issued in a session verifies at or after its end, the instant the AP
   const at = (qr: string, nowMs: number) => {
     const r = verifyStationQr(qr, {
       allowlist: stationAllowlist([SIGNER.publicKey]),
+      expectedStation: "st-front",
       nowMs,
     });
     return r.ok ? "ok" : r.reason;
