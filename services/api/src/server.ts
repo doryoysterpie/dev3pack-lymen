@@ -111,8 +111,9 @@ function stationQr(
       "SELECT id, starts_at, ends_at FROM sessions ORDER BY starts_at DESC, id",
     )
     .all() as { id: string; starts_at: number; ends_at: number }[];
-  // The clock is read once, after the last database read and just before issueStationQr signs.
-  // The session choice and issued_at both come from this reading.
+  // The clock is read once, after the last database read. The session choice and issued_at both
+  // come from this reading, and issueStationQr signs after it; nothing bounds the time between
+  // the reading and the signature.
   const nowMs = ctx.nowMs?.() ?? ctx.now() * 1000;
   const now = Math.floor(nowMs / 1000);
   const session = sessions.find((s) => s.starts_at <= now && now < s.ends_at);
