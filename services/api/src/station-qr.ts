@@ -12,19 +12,17 @@
 //   <signature>  base64url, unpadded, of the 64-byte Ed25519 signature over the ASCII text
 //                "limen:station:v1.<payload>", everything before the second dot.
 //
-// The signature covers the encoded payload text, so changing any character of it, even one
-// that decodes to the same bytes, breaks the signature. The station page shows a fresh QR
-// every 30 s and each QR lives 60 s, so a participant who scans just before a rotation has at
-// most 30 s left to finish: less by the page's round trip, by issued_at's rounding down to a
-// whole second, and near a session's end. A QR whose 60 s would reach its session's end is cut
-// short: it expires at that end, or one second before it when the 60 s would end exactly there,
-// so that every QR that reaches its session's end carries expires_at < issued_at + 60 and reads
-// as cut short.
+// The signature covers the encoded payload text, not the bytes it decodes to. The verifier
+// refuses a signer or signature that is not in canonical base64url as malformed, even when it
+// decodes to the same bytes.
+// A QR's window is 60 s from issued_at, unless those 60 s would reach its session's end. Then
+// it is cut short: it expires at that end, or one second before it when the 60 s would end
+// exactly there, so its expires_at is less than issued_at + 60 and it reads as cut short.
 //
-// The verifier measures time in milliseconds: a QR is refused at any instant more than 60 s
-// after issued_at, or after expires_at, not only from the next whole second. A cut-short QR is
-// refused from its expires_at on, at or before its session's end. A session's end is exclusive:
-// from that instant the API issues for the next session, or answers 409 if none follows.
+// The verifier measures time in milliseconds. It refuses a QR more than 60,000 ms after
+// issued_at or after expires_at, and a cut-short QR from its expires_at on. A session's end is
+// exclusive: from that instant the API issues for the next session, or answers 409 if none
+// follows.
 import {
   createPublicKey,
   randomBytes,
@@ -37,8 +35,6 @@ export const STATION_QR_PREFIX = "limen:station:";
 export const STATION_QR_VERSION = "v1";
 /** Longest window a QR may carry, and the oldest a QR may be when verified. */
 export const STATION_QR_LIFETIME_S = 60;
-/** How often the station page fetches a fresh QR. */
-export const STATION_QR_ROTATION_S = 30;
 /** How far ahead of the verifier's clock issued_at may be before the QR counts as not yet valid. */
 export const STATION_QR_CLOCK_SKEW_S = 5;
 
@@ -155,8 +151,8 @@ function parsePayload(encoded: string): StationPayload | null {
  * Issues a station QR for `station` in `session` at Unix time `now` (whole seconds), valid for
  * 60 s, or cut short when those 60 s would reach `notAfter`. Pass the session's end as
  * `notAfter` so no QR outlives its session. A cut-short QR expires at `notAfter`, or one second
- * before it when the full 60 s would end exactly at `notAfter`, so its expires_at is always less
- * than issued_at + 60 and the verifier refuses it from expires_at on.
+ * before it when the full 60 s would end exactly at `notAfter`, so its expires_at is less than
+ * issued_at + 60 and the verifier refuses it from expires_at on.
  */
 export function issueStationQr(input: {
   station: string;
@@ -179,7 +175,7 @@ export function issueStationQr(input: {
     (!isUnixSeconds(notAfter) || notAfter <= input.now)
   )
     throw new Error("notAfter must be a Unix time in whole seconds after now");
-  // Cut short whenever the full 60 s would reach notAfter, and always to under 60 s.
+  // Cut short when the full 60 s would reach notAfter, to under 60 s.
   const expiresAt =
     notAfter === undefined || full < notAfter
       ? full
@@ -214,7 +210,7 @@ export function issueStationQr(input: {
  * Verifies a station QR at Unix time `nowMs`, in milliseconds, against `allowlist`. Checks run
  * in this order and the first failure is the reason: a usable clock (a finite `nowMs`; missing,
  * NaN or infinite gives invalid_clock), prefix, shape, version, signer encoding, allowlist,
- * signature, payload fields and window, then time.
+ * signature, payload fields and window, the expected station and session, then time.
  */
 export function verifyStationQr(
   text: string,

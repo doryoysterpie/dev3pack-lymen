@@ -19,7 +19,7 @@ import {
   type StationView,
 } from "./rotation.ts";
 
-/** A fake clock: timers run only when the test advances time. */
+/** A fake clock: its timers run when the test advances time. */
 function fakeClock() {
   let now = 0;
   let nextId = 1;
@@ -345,7 +345,7 @@ test("a station link from the link tool reaches the real API and gets that stati
   }
 });
 
-test("a fetch that never answers is abandoned after 10 s, shown as a failure, and retried", async () => {
+test("a fetch that does not answer is abandoned after 10 s, shown as a failure, and retried", async () => {
   const clock = fakeClock();
   const fetchedAt: number[] = [];
   const shown: StationView[] = [];
@@ -355,7 +355,7 @@ test("a fetch that never answers is abandoned after 10 s, shown as a failure, an
       fetchedAt.push(clock.now);
       calls++;
       if (calls === 2) {
-        // Never settles on its own; only the rotation's abort ends the wait.
+        // Rejects when the rotation aborts it, and does not settle otherwise.
         return new Promise<StationQr>((_, reject) =>
           signal.addEventListener("abort", () => reject(new Error("aborted"))),
         );
@@ -474,7 +474,7 @@ test("with a 2 s response delay, a shown QR is cleared by its signed expiry, cou
   ]);
 });
 
-test("the deadline and the next fetch come from the signed times, never from the answer's other fields", async () => {
+test("the deadline and the next fetch come from the signed times, not from the answer's other fields", async () => {
   // The answer says 60 s left and a 30 s refresh; the QR itself is signed for 2 s.
   const clock = fakeClock();
   const fetchedAt: number[] = [];
@@ -506,7 +506,7 @@ test("the deadline and the next fetch come from the signed times, never from the
   assert.deepEqual(fetchedAt, [0, 1_001]);
 });
 
-test("a QR whose signed window has passed when it arrives is never drawn, whatever the answer says is left", async () => {
+test("a QR whose signed window has passed when it arrives is not drawn, whatever the answer's other fields say", async () => {
   // Signed for 1 s, arriving 2 s after the request left; the answer claims 60 s left.
   const clock = fakeClock();
   const shown: { at: number; kind: string }[] = [];

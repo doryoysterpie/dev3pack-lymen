@@ -46,7 +46,7 @@ export interface RotationDeps {
   /** Fetches one QR. The rotation aborts `signal` when the fetch runs past FETCH_TIMEOUT_MS. */
   readonly fetchQr: (signal: AbortSignal) => Promise<StationQr>;
   readonly render: (view: StationView) => void;
-  /** A clock in milliseconds that only moves forward, such as performance.now(). */
+  /** A monotonic clock in milliseconds, such as performance.now(). */
   readonly now: () => number;
   readonly setTimeout: (fn: () => void, ms: number) => unknown;
   readonly clearTimeout: (handle: unknown) => void;
@@ -208,7 +208,7 @@ export function stationPayloadOf(qr: string): {
 }
 
 /**
- * The caption under a shown QR, from its signed fields only. It is a statement, not a countdown,
+ * The caption under a shown QR, from its signed fields. It is a statement, not a countdown,
  * since it does not change while the QR is shown. A QR signed for less than 60 s was cut short
  * by its session's end.
  */

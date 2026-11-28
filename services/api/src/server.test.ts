@@ -143,8 +143,14 @@ test("the station display gets a QR for its station in the active session that v
   assert.equal(body.session, "day-2");
   assert.equal(body.issued_at, T + 100);
   assert.equal(body.expires_at, T + 160);
-  assert.equal(body.refresh_after_s, 30);
-  assert.equal(body.expires_in_ms, 60_000);
+  // The answer carries the QR and its signed fields, and no other field.
+  assert.deepEqual(Object.keys(body).sort(), [
+    "expires_at",
+    "issued_at",
+    "qr",
+    "session",
+    "station",
+  ]);
   const result = verifyStationQr(String(body.qr), {
     allowlist: stationAllowlist([SIGNER.publicKey]),
     expectedStation: "st-front",
@@ -281,7 +287,7 @@ test("no QR issued in a session verifies at or after its end, the instant the AP
   assert.equal(at(full.qr, (T - 61) * 1000 + 60_001), "expired");
 });
 
-test("with a millisecond clock the QR's time left is exact, so a QR issued 100 ms before its session ends says so", async () => {
+test("with a millisecond clock, a QR issued 100 ms before its session ends is that session's and expires at its end", async () => {
   const msServer = createApiServer({
     db,
     version: API_VERSION,
@@ -300,8 +306,8 @@ test("with a millisecond clock the QR's time left is exact, so a QR issued 100 m
     });
     const body = (await res.json()) as Record<string, unknown>;
     assert.deepEqual(
-      [body.session, body.expires_at, body.refresh_after_s, body.expires_in_ms],
-      ["day-1", T, 1, 100],
+      [body.session, body.issued_at, body.expires_at],
+      ["day-1", T - 1, T],
     );
   } finally {
     await new Promise<void>((resolve) => msServer.close(() => resolve()));
@@ -317,29 +323,79 @@ test("the QR endpoint refuses methods other than GET", async () => {
   assert.equal(res.headers.get("allow"), "GET");
 });
 
-test("between back-to-back sessions the page is told to refresh when the old QR expires, not 30 s later", async () => {
+test("between back-to-back sessions, a QR issued 10 s before the end expires at the end, and from the end the next session's QR is served", async () => {
   // day-1 ends at T and day-2 starts at T.
   clock = T - 10;
   const before = (await (await getQr("st-front")).json()) as {
     session: string;
     expires_at: number;
-    refresh_after_s: number;
   };
   assert.equal(before.session, "day-1");
   assert.equal(before.expires_at, T);
-  assert.equal(before.refresh_after_s, 10);
-  clock = T - 1;
-  assert.equal(
-    ((await (await getQr("st-front")).json()) as { refresh_after_s: number })
-      .refresh_after_s,
-    1,
-  );
-  // When that refresh comes, the next session's QR is there, with the full 30 s.
   clock = T;
   const after = (await (await getQr("st-front")).json()) as {
     session: string;
-    refresh_after_s: number;
+    expires_at: number;
   };
   assert.equal(after.session, "day-2");
-  assert.equal(after.refresh_after_s, 30);
+  assert.equal(after.expires_at, T + 60);
+});
+
+test("the QR endpoint reads the clock once, after its database reads, and signs with that reading", async () => {
+  // Each database read moves this clock on by 2 s, so a reading taken before a read differs
+  // from one taken after it.
+  let ms = (T + 100) * 1000;
+  let readings = 0;
+  const statement = (inner: object): object =>
+    new Proxy(inner, {
+      get(target, key) {
+        const value = Reflect.get(target, key) as unknown;
+        if (typeof value !== "function") return value;
+        return (...args: unknown[]) => {
+          if (key === "get" || key === "all") ms += 2000;
+          return (value as (...a: unknown[]) => unknown).apply(target, args);
+        };
+      },
+    });
+  const timedDb = new Proxy(db, {
+    get(target, key) {
+      const value = Reflect.get(target, key) as unknown;
+      if (typeof value !== "function") return value;
+      if (key === "prepare")
+        return (sql: string) => statement(target.prepare(sql));
+      return (value as (...a: unknown[]) => unknown).bind(target);
+    },
+  });
+  const timed = createApiServer({
+    db: timedDb,
+    version: API_VERSION,
+    stationSigner: SIGNER,
+    stationDisplayToken: TOKEN,
+    now: () => {
+      readings += 1;
+      return Math.floor(ms / 1000);
+    },
+    nowMs: () => {
+      readings += 1;
+      return ms;
+    },
+  });
+  await new Promise<void>((resolve) => timed.listen(0, "127.0.0.1", resolve));
+  try {
+    const url = `http://127.0.0.1:${(timed.address() as AddressInfo).port}`;
+    const res = await fetch(`${url}/stations/st-front/qr`, {
+      headers: { authorization: `Bearer ${displayCredential("st-front")}` },
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as {
+      issued_at: number;
+      expires_at: number;
+    };
+    // Two reads (the station, then the sessions) moved the clock to T + 104 before it was read.
+    assert.equal(ms, (T + 104) * 1000);
+    assert.equal(readings, 1);
+    assert.deepEqual([body.issued_at, body.expires_at], [T + 104, T + 164]);
+  } finally {
+    await new Promise<void>((resolve) => timed.close(() => resolve()));
+  }
 });

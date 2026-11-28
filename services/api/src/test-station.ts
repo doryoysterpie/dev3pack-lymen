@@ -1,6 +1,5 @@
-// Test support only, imported by tests and never by the API. E-03 makes every API server take
-// station QR settings. The E-10, E-12 and E-13 tests start servers that never fetch a station
-// QR, so they take these.
+// Test support. E-03 makes every API server take station QR settings. The E-10, E-12 and E-13
+// tests start servers that do not fetch a station QR, so they take these.
 import { createPrivateKey } from "node:crypto";
 
 import type { StationSigner } from "./station-qr.ts";

@@ -196,7 +196,7 @@ test("a QR issued near the end of its session expires when the session ends", ()
   });
   assert.equal(payload.expires_at, sessionEnd);
   // A session's end is exclusive: from that instant the API issues for the next session, so a
-  // QR cut short by the end is refused at the end itself, and accepted only before it.
+  // QR cut short by the end is accepted 1 ms before the end and refused at the end itself.
   assert.equal(reasonOf(text, sessionEnd - 0.001), "ok");
   assert.equal(reasonOf(text, sessionEnd), "expired");
   assert.equal(reasonOf(text, sessionEnd + 0.001), "expired");
@@ -340,7 +340,7 @@ test("a signer or signature re-spelled in non-canonical base64url is rejected as
         !Buffer.from(variant, "base64url").equals(bytes)
       )
         continue;
-      // Same bytes, different spelling: only the canonical spelling is accepted.
+      // Same bytes, different spelling: the non-canonical spelling is refused.
       const parts = [head, payload, signer, signature];
       parts[index] = variant;
       assert.equal(

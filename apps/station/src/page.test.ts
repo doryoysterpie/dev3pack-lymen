@@ -46,7 +46,7 @@ const answering = (body: unknown) => (): Promise<Response> =>
     }),
   );
 
-/** A fake clock: timers run only when the test advances time. */
+/** A fake clock: its timers run when the test advances time. */
 function fakeClock() {
   let now = 0;
   let nextId = 1;
@@ -180,7 +180,7 @@ test("index.html's first element in <head> is an inline script, not a module", (
   assert.notEqual(headScript(), null, "<head> opens with <script>");
 });
 
-test("the inline script takes the address and removes the token from the address bar, so it is gone even if the page module never runs", () => {
+test("the inline script takes the address and removes the token from the address bar, so it is gone even if the page module does not run", () => {
   const log: string[] = [];
   const href =
     "http://127.0.0.1:5173/?station=st-front#token=station-token-0123456789";
@@ -241,11 +241,11 @@ test("a response carrying another station's genuine QR is refused, not drawn und
   assert.ok(!log.some((l) => l.startsWith("caption: Station")));
 });
 
-test("the caption comes from the signed QR's fields only, and states the interval as a fact, not a countdown", async () => {
+test("the caption comes from the signed QR's fields, whatever the answer's other fields say, and states the interval, not a countdown", async () => {
   const href =
     "http://127.0.0.1:5173/?station=st-front#token=station-token-0123456789";
   // A full 60 s QR, while the answer's own fields name another station, another session and a
-  // 7 s refresh: only the signed fields count.
+  // 7 s refresh; the caption follows the signed fields.
   const full = signedQr("st-front");
   const first = await loadPage(
     href,
@@ -324,7 +324,7 @@ test("a QR whose deadline passes while it is being drawn is not revealed", async
   assert.equal(elements.caption.textContent, "Refreshing the QR. Please wait.");
 });
 
-test("with a 2 s response delay, a QR that expires in transit is never drawn, and changeover follows the server's expiry", async () => {
+test("with a 2 s response delay, a QR that expires in transit is not drawn, and changeover follows the server's expiry", async () => {
   // day-1 ends at T and day-2 begins there. The API's clock runs with the page's fake clock,
   // starting 900 ms into day-1's last second, so the first QR has 100 ms left when issued.
   const clock = fakeClock();
@@ -382,7 +382,7 @@ test("with a 2 s response delay, a QR that expires in transit is never drawn, an
     const captions = log.filter((l) => l.startsWith("caption: Station"));
     assert.ok(
       !captions.some((c) => c.includes("session day-1")),
-      `day-1's QR, expired on arrival, is never drawn: ${captions.join(" | ")}`,
+      `day-1's QR, expired on arrival, is not drawn: ${captions.join(" | ")}`,
     );
     assert.ok(captions.some((c) => c.includes("session day-2")));
     // The next fetch starts on day-1's arrival, and day-2's refresh comes 30 s after its request

@@ -73,9 +73,9 @@ test("the dev server does not serve a link file in the repository's .station-lin
   }
 });
 
-test("the dev server serves nothing outside the station app and its dependencies: no key, database or repository file", async () => {
-  // Uniquely named stand-ins where the repository keeps secrets and data, each written only if
-  // absent (flag "wx") and removed afterwards; a real key file is never read, written or removed.
+test("the dev server refuses a key, database or repository file outside the station app", async () => {
+  // Uniquely named stand-ins where the repository keeps secrets and data, each created with flag
+  // "wx", so an existing file is not overwritten, and removed afterwards.
   const tag = `dev-server-test-${process.pid}`;
   const keysDir = join(REPO, "keys");
   const hadKeysDir = existsSync(keysDir);
@@ -130,8 +130,9 @@ test("the dev server serves nothing outside the station app and its dependencies
   }
 });
 
-test("the dev and preview servers serve no key or database through a workspace link, the station folder or the build, and send no CORS header", async () => {
-  // Stand-ins, each written only if absent and removed afterwards; no real key is touched.
+test("the dev and preview servers serve no key or database through a workspace link, the station folder or the build, send no CORS header, and open <head> with the inline script, after Vite's client in development", async () => {
+  // Stand-ins, each created with flag "wx", so an existing file is not overwritten, and removed
+  // afterwards.
   const tag = `dev-server-test-${process.pid}`;
   const api = join(REPO, "services", "api");
   const files = {
@@ -186,6 +187,11 @@ test("the dev and preview servers serve no key or database through a workspace l
     const page = await get(devPort, "/src/main.ts");
     assert.equal(page.status, 200);
     assert.equal(page.headers.get("access-control-allow-origin"), null);
+    // In development Vite puts its client module ahead of the inline script, and nothing else.
+    assert.match(
+      await (await get(devPort, "/")).text(),
+      /<head>\s*<script type="module" src="\/@vite\/client"><\/script>\s*<script>\s*\/\/ E-03:/,
+    );
 
     await build({ ...config, build: { outDir, emptyOutDir: true } });
     previewServer = await preview({
@@ -204,6 +210,8 @@ test("the dev and preview servers serve no key or database through a workspace l
     const built = await get(previewPort, "/");
     assert.equal(built.status, 200);
     assert.equal(built.headers.get("access-control-allow-origin"), null);
+    // In the build the inline script is the first element in <head>.
+    assert.match(await built.text(), /<head>\s*<script>\s*\/\/ E-03:/);
   } finally {
     await dev.close();
     if (previewServer !== null)
