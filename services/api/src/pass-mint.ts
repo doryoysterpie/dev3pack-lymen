@@ -9,8 +9,9 @@
 // everything. Devnet only (D-03): the module has one connection, to DEVNET_URL, made by a private
 // factory with a fetch that fails on any redirect, and no helper takes a connection or an
 // endpoint. mintPass, revokePass and passMintState each refuse a cluster whose genesis hash is not
-// devnet's before anything else, and a send is confirmed by polling over HTTP, so no WebSocket is
-// opened.
+// devnet's with their first request, before anything is sent (mintPass refuses an over-long
+// station or session ID even before that request), and a send is confirmed by polling over HTTP,
+// so no WebSocket is opened.
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   createBurnCheckedInstruction,

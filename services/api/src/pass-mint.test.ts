@@ -528,7 +528,7 @@ const accountsAnswer =
     );
   };
 
-test("passMintState says minted only for the holder's one token of that mint; any other account there is unheld, and a failed request is an error", async () => {
+test("passMintState says minted only for the holder's one token of that mint; any other initialized Token-2022 mint or unheld token account there is unheld, and a failed request is an error", async () => {
   const passMint = Keypair.generate().publicKey;
   const account = passTokenAccount(passMint, holder);
   const accounts = new Map([

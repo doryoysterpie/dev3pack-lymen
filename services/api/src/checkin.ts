@@ -83,7 +83,7 @@ export interface PassMinter {
       readonly checkedInAt: number;
     },
   ): Promise<{ readonly signature: string }>;
-  /** Reads the chain at `mint`: no account, the pass held by `wallet`, or a pass it does not hold. */
+  /** Reads the chain at `mint`: absent (empty or funded-only), minted to `wallet`, an unheld pass, or occupied by another account. */
   state(
     wallet: string,
     mint: string,
