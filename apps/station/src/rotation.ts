@@ -197,9 +197,8 @@ const STATUS_MESSAGES: Record<number, string> = {
   401: "The API refused the display token.",
   404: "The API does not know this station.",
   409: "No session is open right now.",
-  // The Vite proxy answers 502 to 504 when the API behind it is down or slow.
+  // A reverse proxy in front of the API answers 502 or 504 when the API behind it is down or slow.
   502: "The API cannot be reached.",
-  503: "The API cannot be reached.",
   504: "The API cannot be reached.",
 };
 
@@ -224,11 +223,22 @@ export async function fetchStationQr(
         : "The API cannot be reached.",
     );
   }
-  if (!res.ok)
+  if (!res.ok) {
+    // The API itself answers 503 {"error":"busy"} while a seed holds the database's write lock.
+    if (res.status === 503) {
+      const errBody: unknown = await res.json().catch(() => null);
+      if (
+        typeof errBody === "object" &&
+        errBody !== null &&
+        (errBody as Record<string, unknown>).error === "busy"
+      )
+        throw new Error("The API is busy right now.");
+    }
     throw new Error(
       STATUS_MESSAGES[res.status] ??
         `The API answered with status ${res.status}.`,
     );
+  }
   const body: unknown = await res.json().catch(() => null);
   const qr = qrOf(body);
   const payload = qr === null ? null : stationPayloadOf(qr);

@@ -1,4 +1,4 @@
-// Station display page (E-03), opened as /?station=<station ID>. It asks for the station's
+// Station display page (E-03), opened as /station?station=<station ID>. It asks for the station's
 // display token in a password field, keeps it in memory, and sends it in the Authorization
 // header of its requests to /api.
 import QRCode from "qrcode";
