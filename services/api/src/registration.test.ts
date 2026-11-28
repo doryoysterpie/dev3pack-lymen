@@ -205,11 +205,11 @@ test("REGISTRATION_SALT must be set to at least 32 characters, and the error nev
   assert.equal(loadRegistrationSalt(SALT), SALT);
   assert.throws(() => loadRegistrationSalt(undefined), {
     message:
-      "REGISTRATION_SALT must be set to at least 32 characters (it is not set). To add one to .env without printing it, run from the repository root: printf '\\nREGISTRATION_SALT=%s\\n' \"$(openssl rand -base64 32)\" >> .env",
+      "REGISTRATION_SALT must be set to at least 32 characters (it is not set). To add one to .env without printing it, run from the repository root: { echo; openssl rand -base64 32 | sed 's/^/REGISTRATION_SALT=/'; } >> .env",
   });
   assert.throws(() => loadRegistrationSalt("short-salt-marker"), {
     message:
-      "REGISTRATION_SALT must be set to at least 32 characters (it is too short). To add one to .env without printing it, run from the repository root: printf '\\nREGISTRATION_SALT=%s\\n' \"$(openssl rand -base64 32)\" >> .env",
+      "REGISTRATION_SALT must be set to at least 32 characters (it is too short). To add one to .env without printing it, run from the repository root: { echo; openssl rand -base64 32 | sed 's/^/REGISTRATION_SALT=/'; } >> .env",
   });
 });
 

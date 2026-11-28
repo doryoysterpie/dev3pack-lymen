@@ -58,7 +58,7 @@ export type BindingResult =
 export function loadRegistrationSalt(value: string | undefined): string {
   if (value === undefined || value.length < MIN_SALT_LENGTH) {
     throw new Error(
-      `REGISTRATION_SALT must be set to at least ${MIN_SALT_LENGTH} characters (${value === undefined || value === "" ? "it is not set" : "it is too short"}). To add one to .env without printing it, run from the repository root: printf '\\nREGISTRATION_SALT=%s\\n' "$(openssl rand -base64 32)" >> .env`,
+      `REGISTRATION_SALT must be set to at least ${MIN_SALT_LENGTH} characters (${value === undefined || value === "" ? "it is not set" : "it is too short"}). To add one to .env without printing it, run from the repository root: { echo; openssl rand -base64 32 | sed 's/^/REGISTRATION_SALT=/'; } >> .env`,
     );
   }
   return value;
