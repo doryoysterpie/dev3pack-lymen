@@ -547,8 +547,11 @@ export function toReport(result: Preflight): PreflightReport {
  * For a server holding transaction bytes, such as a stored evidence bundle:
  * simulates on devnet through the Rpc given and decodes the result into the
  * same report the app's card shows, with drainPattern (drain.ts) applied to
- * it, and where the simulation ran. user is the wallet the report is for: the
- * transaction's fee payer, or the report is a refusal with no summary.
+ * it, and the slot the simulation ran at. It keeps no blockhash from the
+ * RPC: limen can check it only against the message's accounts, and an RPC
+ * could make it one of the wallet's other accounts (the PM's ruling on the
+ * re-audit's A4). user is the wallet the report is for: the transaction's
+ * fee payer, or the report is a refusal with no summary.
  */
 export async function preflightTransaction(
   transaction: Uint8Array,
@@ -556,7 +559,7 @@ export async function preflightTransaction(
 ): Promise<{
   summary: PreflightReport;
   drainPattern: boolean;
-  simulatedAt: SimulatedAt | null;
+  simulatedAt: Pick<SimulatedAt, "slot"> | null;
 }> {
   // A JavaScript caller can pass anything; only bytes are a transaction.
   if (!(transaction instanceof Uint8Array)) {
@@ -575,6 +578,9 @@ export async function preflightTransaction(
   return {
     summary,
     drainPattern: drainPattern(summary),
-    simulatedAt: result.kind === "ready" ? result.simulatedAt : null,
+    simulatedAt:
+      result.kind === "ready" && result.simulatedAt !== null
+        ? { slot: result.simulatedAt.slot }
+        : null,
   };
 }
