@@ -1,4 +1,4 @@
-// E-03: the station page renders a fresh QR every 30 s.
+// E-03: the station page's rotation, driven with a fake clock and fake fetches.
 import assert from "node:assert/strict";
 import { createPrivateKey } from "node:crypto";
 import type { AddressInfo } from "node:net";
@@ -71,9 +71,9 @@ function response(n: number): StationQr {
 
 /**
  * An answer for response(n), shaped like the API's but not one it would send: the QR's signer and
- * signature are placeholders, since the page reads the signed payload and does not check the
- * signature. Beside the QR it carries the payload's station, session, issued_at and expires_at,
- * as the API does; the page does not read them.
+ * signature are placeholders, since the page does not check the signature. Its station, session,
+ * issued_at and expires_at fields beside the QR may differ from the payload's; the page reads the
+ * payload.
  */
 function wireBody(
   n: number,
@@ -190,7 +190,7 @@ test("stop ends the rotation", async () => {
 
 test("the page reads its station from the query string's ?station=", () => {
   assert.deepEqual(readStationId("?station=st-front"), { station: "st-front" });
-  // A token in the query, as an earlier version took it in the fragment, is not read.
+  // A token in the query is not read.
   assert.deepEqual(readStationId("?station=st-front&token=abc"), {
     station: "st-front",
   });
@@ -369,17 +369,20 @@ test("a fetch that does not answer is abandoned after 10 s, shown as a failure, 
   assert.equal(shown.at(-1)?.kind, "qr");
 });
 
-/** A fetch that answers after `delayMs` on the fake clock with a QR signed for `window` seconds. */
+/**
+ * A fetch that answers after `delayMs` on the fake clock with a QR signed for `windowS` seconds,
+ * while the answer's own expires_at field claims 60 s.
+ */
 function signedAnswer(
   clock: ReturnType<typeof fakeClock>,
   delayMs: number,
   windowS: number,
 ) {
   return (async () => {
-    const body = wireBody(1, "st-front", {
-      issuedAt: 1000,
-      expiresAt: 1000 + windowS,
-    });
+    const body = {
+      ...wireBody(1, "st-front", { issuedAt: 1000, expiresAt: 1000 + windowS }),
+      expires_at: 1060,
+    };
     await new Promise<void>((resolve) => clock.setTimeout(resolve, delayMs));
     return new Response(JSON.stringify(body), { status: 200 });
   }) as unknown as typeof fetch;
@@ -484,7 +487,7 @@ test("a genuine full-length QR issued 2 minutes ago is not drawn: its signed exp
 });
 
 test("the deadline and the next fetch come from the signed times, not from the answer's other fields", async () => {
-  // The answer says 60 s left and a 30 s refresh; the QR itself is signed for 8 s.
+  // The answer's expires_at claims 60 s; the QR itself is signed for 8 s.
   const clock = fakeClock();
   const fetchedAt: number[] = [];
   const shown: { at: number; kind: string }[] = [];
@@ -517,7 +520,7 @@ test("the deadline and the next fetch come from the signed times, not from the a
 });
 
 test("a QR whose signed window has passed when it arrives is not drawn, whatever the answer's other fields say", async () => {
-  // Signed for 1 s, arriving 2 s after the request left; the answer claims 60 s left.
+  // Signed for 1 s, arriving 2 s after the request left; the answer's expires_at claims 60 s.
   const clock = fakeClock();
   const shown: { at: number; kind: string }[] = [];
   let calls = 0;

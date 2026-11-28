@@ -1,34 +1,35 @@
 # apps/station
 
-The Vite page for the station display (D-02). It shows the signed station QR from E-03, and fetches a fresh one 30 s after the request for the last one left, or sooner at that QR's deadline. The caption under the QR names the station and session signed into the QR, then says "A new QR every 30 s." For a QR signed for less than 60 s, because its session ends first, it says "This QR expires by the session's end." instead. It is a statement, not a countdown: it does not change while a QR is shown. A QR signed for another station than the page's is refused, not drawn.
+The Vite page for the station display (D-02). It shows the station QR the API signs (E-03), with a caption naming the station and session signed into it, and refuses a QR signed for another station.
 
 ## Run
 
-Start the API first (see `services/api/README.md`), with `STATION_DISPLAY_TOKEN` set and a station and session seeded. Then:
+Start the API (see `services/api/README.md`) with `STATION_DISPLAY_TOKEN` set and a station and session seeded, then:
 
 ```bash
 npm run dev -w @limen/station
 ```
 
-Copy the station's display token with `npm run station-token -w @limen/api -- st-front`, on macOS (see `services/api/README.md`). Then open `http://127.0.0.1:5173/?station=st-front` and paste the token into the page's password field. Each station's token is its own, not `STATION_DISPLAY_TOKEN`, and the API refuses it any other station's QR. The page sends its requests to `/api`, and the Vite dev and preview servers forward them to the API at `http://127.0.0.1:8787`, or at `STATION_API_URL` if set.
+On macOS, copy the station's display token with `npm run station-token -w @limen/api -- st-front`, open `http://127.0.0.1:5173/?station=st-front`, and paste the token into the password field. The dev and preview servers forward `/api` to the API at `STATION_API_URL`, or `http://127.0.0.1:8787`.
 
-The page keeps the token in memory and sends it in the `Authorization` header of its requests. It does not put it in the address, the history, a cookie or storage (`src/page.test.ts`). So a reload asks for it again, whether by hand or the one the Vite dev server makes when a source file changes. Two copies remain outside the page:
+The page keeps the token in memory and sends it in the `Authorization` header. It puts it in no address, history entry, cookie or storage, so a reload asks again (`src/page.test.ts`). The token stays on the clipboard until something else is copied over it, and a browser may offer to save the field; decline it.
 
-- **The clipboard,** until something else is copied over it.
-- **The browser's password manager,** if the browser offers to save the field and the offer is accepted. Decline it.
+**Upgrading from link files.** An earlier version wrote each station's address, token included, to link files in `~/limen-station-links` or `.station-links/`. Delete any, and set a new `STATION_DISPLAY_TOKEN`, from which every station's token derives. The page drops any fragment from its address on load without reading it, and `.gitignore` still ignores `*.url` files and `.station-links/`.
 
-**Upgrading from link files.** An earlier version wrote each station's address, token included, to a link file in `~/limen-station-links`, or in `.station-links/` in the repository. If any exist, delete them and set a new `STATION_DISPLAY_TOKEN`: every station's token derives from it, so the old tokens stop working. The page clears any fragment from its address on load, without reading it, and `.gitignore` still ignores `*.url` files and `.station-links/`.
+## Timing
 
-If a fetch fails, or gets no answer within 10 s, the page clears the QR, shows the reason, and tries again after 5 s. The page times each QR on its own clock against the signed `issued_at` and `expires_at`, and none of the answer's other fields. It assumes the station's clock agrees with the API's within the verifier's 5 s skew, and does not check it, so it stops showing a QR 5 s early: its deadline is `min(expires_at * 1000, sentAt + (expires_at - issued_at) * 1000) - 5000` ms, where `sentAt` is when the request left. A QR past its deadline on arrival is not drawn, and the next is fetched at once. After drawing a QR the page reads its clock again: it shows the QR only if the deadline is still ahead, and arms a timer for the time left to clear it. A busy browser may run that timer late. The next fetch is timed from the clock after the draw.
+The page times each QR on its own clock against the signed `issued_at` and `expires_at`. It assumes the station's clock agrees with the API's within the verifier's 5 s skew, and does not check it, so it stops 5 s early: the deadline is `min(expires_at * 1000, sentAt + (expires_at - issued_at) * 1000) - 5000` ms, where `sentAt` is when the request left. A QR past its deadline on arrival is not drawn. After drawing a QR, the page reads its clock again, shows the QR only with time left, and arms a timer for that time to clear it; a busy browser may run the timer late. The next fetch comes 30 s after the request left, or at the deadline if sooner, timed from the clock after the draw. A failed fetch, or one with no answer in 10 s, shows why and is retried after 5 s.
 
-What the servers serve (`vite.config.ts`):
+## What the servers serve
 
-- **The dev server.** In this folder it serves `index.html`, the `.ts` and `.css` files under `src`, and Vite's dependency cache, where `qrcode` is bundled. Any other file here gets 403, by its path or by `/@fs/`, a key named `organizer.json` in `src` included.
-- **The preview server.** It answers `/` and the files Vite's manifest names, and 403 to any other path outside `/api`.
-- **Both.** They refuse, by name, key and certificate files, keypair files, databases, `.env` files and the `node_modules/@limen` workspace links, except under `/api`, which they forward to the API, so a station named `keys` still works. They send no CORS header.
-- **The build.** It copies no public folder, and it fails when its output holds a file Vite's manifest does not name.
+See `vite.config.ts` and `src/dev-server.test.ts`.
 
-The API also refuses to start with an organizer key file inside this folder (see `services/api/README.md`).
+- **Dev:** in this folder, `index.html`, the `.ts` and `.css` files under `src`, and Vite's dependency cache. Any other file here gets 403.
+- **Preview:** `/` and the files Vite's manifest names. Any other path outside `/api` gets 403.
+- **Both:** 403 by name, outside `/api`, for key and certificate files, keypair files, databases, `.env` files and the `node_modules/@limen` links, and no CORS header.
+- **Build:** no public folder, and a failure when the output holds a file Vite's manifest does not name.
+
+The API refuses to start with an organizer key inside this folder (see `services/api/README.md`).
 
 ## Test
 
@@ -36,36 +37,4 @@ The API also refuses to start with an organizer key file inside this folder (see
 npm test -w @limen/station
 ```
 
-`src/dev-server.test.ts` starts the dev server with this app's `vite.config.ts`. It puts uniquely named stand-ins for a key file in `keys/`, keypair files, databases and a plain repository file where the repository keeps such files, and checks that each gets 403 or 404. The requests use the `/@fs/` path, `?raw` or `?import&raw`, the `node_modules/@limen/api` workspace link, and the station folder's own path. It also checks that the preview server, after a build to a temporary folder, refuses a station keypair by its name and by `/@fs/` and a database through the workspace link; that neither server sends a CORS header with the page; and that the dev server still serves the page module and the preview server the page. Three more tests owe:
-
-- 403 from both servers for a stand-in key named `organizer.json` in `build/`, and 403 from the dev server for this folder's `vite.config.ts`, `package.json` and `README.md`, while the page and every module it loads answer 200;
-- that a station named `keys` reaches a stand-in API through both servers' proxy;
-- that a build whose output holds a plugin's stray `organizer.json`, or a `notes.html` left there, fails, and that the preview refuses a `notes.html` added after the build.
-
-`src/page.test.ts` loads the page itself, `src/main.ts`, with a stand-in document and window. It checks:
-
-- the page asks for the token in a password field with autocomplete off, in no form, and fetches nothing until it is given;
-- the token goes in the `Authorization` header and nowhere else: not the address, the history, a cookie or storage;
-- a reload asks for the token again;
-- an address with no valid station shows the station error and asks for no token;
-- another station's genuine QR is refused rather than drawn;
-- the caption comes from the signed fields, whatever the answer's other fields say, and states the interval rather than counting down;
-- a QR whose deadline passes while it is drawn is not shown;
-- a genuine full-length QR issued 2 minutes ago is not shown;
-- a QR whose draw ends 100 ms before its deadline is shown, with its clearing timer armed for those 100 ms, and cleared when the timer runs.
-
-Against the real API, with every answer delayed 2 s, it checks that a QR past its deadline on arrival is not drawn, and that the next session's QR is fetched on arrival and refreshed 30 s after its request left.
-
-`src/rotation.test.ts` drives the rotation with a fake clock. It checks:
-
-- the page fetches and shows a QR at 0 s, 30 s and 60 s and not before;
-- a failed fetch clears the QR and retries after 5 s;
-- a fetch with no answer is abandoned at 10 s and retried;
-- a QR's deadline is the earlier of its signed expiry and its signed window from when its request left, less 5 s, with and without a 2 s delay, and with the station's clock 2 s behind the API's; the next fetch comes at the deadline when that is sooner than 30 s;
-- the next fetch is timed from the clock after the draw;
-- a genuine full-length QR issued 2 minutes ago is not drawn;
-- the deadline and the next fetch come from the signed times when the answer's other fields disagree, and a QR past its deadline on arrival is not drawn;
-- each API failure becomes the owed message;
-- a station's display token, as the station-token tool derives it, reaches the real API and gets that station's QR, while the secret itself is refused.
-
-It does not draw a QR; drawing was checked by hand in a browser at an earlier head (see the E-03 pull request).
+`src/dev-server.test.ts` covers the servers and the build. `src/page.test.ts` covers the page, with a stand-in document and window, and against the real API with every answer delayed 2 s. `src/rotation.test.ts` covers the rotation with a fake clock. No test draws a QR and decodes it.

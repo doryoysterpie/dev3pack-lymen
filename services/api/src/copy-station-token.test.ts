@@ -1,13 +1,6 @@
-// E-03: `npm run station-token -w @limen/api -- <station ID>` copies a station's display token
-// to the macOS clipboard through pbcopy's stdin, and prints only that it did. Each test runs
-// the real tool as a child process, with a stub pbcopy alone on PATH that records its stdin
-// and its arguments, and with process.platform set for the child by an --import module, so
-// the macOS path runs on any CI runner.
-//
-// No test may reach the real pbcopy, which would write to this machine's clipboard. Two guards
-// fail closed before anything runs: the tool must name pbcopy by its bare name, so PATH decides
-// which one runs; and before each run, the PATH the tool will see must be set, hold no system
-// folder, and reach exactly the stub, or no pbcopy at all for the missing-pbcopy case.
+// E-03: the station-token tool. Each test runs it as a child process with a stub pbcopy alone on
+// PATH, and process.platform set by an --import module so the macOS path runs on any runner. No
+// test may reach the real pbcopy: the guards below stop a test before the tool runs.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
@@ -129,8 +122,6 @@ function run(
         ...args,
       ],
       {
-        // PATH holds the stub's folder alone, so a missing stub is a missing pbcopy and the
-        // real one, in /usr/bin on macOS, does not run.
         env: {
           ...options.env,
           PATH: path,

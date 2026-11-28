@@ -1,6 +1,5 @@
-// Station display credentials (E-03). STATION_DISPLAY_TOKEN is a secret that stays with the API.
-// Each station's display page holds its own token, derived from that secret and the station
-// ID, so the token a page holds gets QRs for its own station and no other.
+// Station display tokens (E-03), each derived from the STATION_DISPLAY_TOKEN secret and a station
+// ID.
 import { createHmac } from "node:crypto";
 
 /** The shortest STATION_DISPLAY_TOKEN accepted. */

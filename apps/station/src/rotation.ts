@@ -1,17 +1,12 @@
-// Station display rotation (E-03). Fetches a signed QR from the API, shows it, and fetches a
-// fresh one 30 s after the request for it left, or at its deadline if that comes first. A failed
-// fetch clears the QR, shows why, and retries after 5 s; a fetch that takes over 10 s counts as
-// failed. This file has no DOM code, and the tests drive it with fakes.
-//
-// The page times each QR on its own clock against the signed issued_at and expires_at, and
-// assumes the station's clock agrees with the API's within the verifier's 5 s skew; it does not
-// check that. So it stops showing a QR 5 s early:
+// Station display rotation (E-03), with no DOM code. It fetches a signed QR, has the page draw
+// it, and fetches the next 30 s after the last request left, or at the QR's deadline if sooner:
 //
 //   deadline = min(expires_at * 1000, sentAt + (expires_at - issued_at) * 1000) - 5000
 //
-// where sentAt is when the request left. A QR past its deadline on arrival is not drawn, and the
-// next is fetched at once. Otherwise the rotation waits for the page to draw it, then reads the
-// clock again to time the next fetch.
+// on the page's clock, where sentAt is when the request left. The 5 s is the verifier's skew,
+// within which the page assumes the station's clock agrees with the API's; it does not check
+// that. A QR past its deadline on arrival is not drawn. A failed fetch, or one with no answer in
+// 10 s, shows why and is retried after 5 s.
 
 /** One QR as the page shows it: the QR text and what its signed payload says. */
 export interface StationQr {
@@ -39,7 +34,7 @@ export const FETCH_TIMEOUT_MS = 10_000;
 /** The verifier's clock skew, by which the page stops showing a QR early. */
 export const CLOCK_SKEW_MS = 5_000;
 
-/** The deadline of a QR whose request left at `sentAt`; see the comment at the top. */
+/** The deadline of a QR whose request left at `sentAt` (the formula at the top). */
 export function deadlineOf(sentAt: number, qr: StationQr): number {
   return (
     Math.min(
@@ -94,7 +89,6 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
       const receivedAt = deps.now();
       const deadline = deadlineOf(sentAt, res);
       if (deadline <= receivedAt) {
-        // Its deadline passed on the way. It is not drawn; the next one is fetched at once.
         deps.render({ kind: "refreshing" });
         next = 0;
       } else {
@@ -128,10 +122,7 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
 
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 
-/**
- * Reads the station ID from the page address's query string, such as "?station=st-front". The
- * page passes location.search alone, so it reads no fragment.
- */
+/** Reads the station ID from a query string such as "?station=st-front". */
 export function readStationId(
   search: string,
 ): { station: string } | { error: string } {
@@ -142,9 +133,8 @@ export function readStationId(
 }
 
 /**
- * The signed payload inside a station QR's text, or null when the text is not a station QR.
- * The page has no key and does not check the signature; it reads what was signed, so what it
- * shows under the QR cannot drift from the QR itself.
+ * The signed payload inside a station QR's text, or null when the text is not a station QR. The
+ * page does not check the signature.
  */
 export function stationPayloadOf(qr: string): {
   station: string;
@@ -182,11 +172,7 @@ export function stationPayloadOf(qr: string): {
   };
 }
 
-/**
- * The caption under a shown QR, from its signed fields. It is a statement, not a countdown,
- * since it does not change while the QR is shown. A QR signed for less than 60 s was cut short
- * by its session's end.
- */
+/** The caption under a shown QR, from its signed fields. */
 export function captionFor(view: StationQr): string {
   const when =
     view.expiresAt < view.issuedAt + 60
@@ -245,7 +231,6 @@ export async function fetchStationQr(
     throw new Error(
       "The API answered with something that is not a station QR.",
     );
-  // A QR signed for another station is refused, whatever the response's other fields say.
   if (payload.station !== config.station)
     throw new Error("The API sent a QR for another station.");
   return {
