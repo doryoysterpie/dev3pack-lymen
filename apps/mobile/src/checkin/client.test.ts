@@ -276,3 +276,41 @@ test("307 and 308 redirects fail closed with no second request, where plain fetc
     }
   }
 });
+
+test("a response JSON body that repeats a key is refused instead of collapsing to the last value", async () => {
+  const raw = (status: number, body: string) =>
+    (async () => new Response(body, { status })) as unknown as typeof fetch;
+
+  for (const body of [
+    '{"status":"checked_in","station":"st-front","session":"day-2","mint":"Mint1","mint":"Mint2","signature":"Sig1"}',
+    '{"status":"checked_in","station":"st-front","session":"day-2","mint":"Mint1","m\\u0069nt":"Mint2","signature":"Sig1"}',
+    '{"status":"other","status":"checked_in","station":"st-front","session":"day-2","mint":"Mint1","signature":"Sig1"}',
+    '{"status":"checked_in","station":"st-front","session":"day-2","mint":"Mint1","signature":"Sig1","extra":{"a":1,"a":2}}',
+  ]) {
+    assert.deepEqual(
+      await postCheckin(raw(201, body), "http://api", REQ),
+      {
+        ok: false,
+        error: "status_201",
+        message: "The server answered with status 201.",
+      },
+      body,
+    );
+  }
+
+  for (const body of [
+    '{"error":"pass_revoked","error":"already_checked_in"}',
+    '{"error":"already_checked_in","error":"pass_revoked"}',
+    '{"error":"pass_revoked","err\\u006fr":"already_checked_in"}',
+  ]) {
+    assert.deepEqual(
+      await postCheckin(raw(409, body), "http://api", REQ),
+      {
+        ok: false,
+        error: "status_409",
+        message: "The server answered with status 409.",
+      },
+      body,
+    );
+  }
+});

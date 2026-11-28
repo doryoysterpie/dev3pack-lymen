@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { hasRepeatedKey } from "./json-keys.ts";
+import { hasRepeatedKey, parseJsonWithoutRepeatedKeys } from "./json-keys.ts";
 
 test("a key repeated in one object, at any depth or in an escaped spelling, is found", () => {
   for (const text of [
@@ -29,5 +29,20 @@ test("one key in two objects, or a key's text inside a string, is not a repeat",
     ' { "a" : [ ] , "b" : { } , "c" : -1.5e3 } ',
   ]) {
     assert.equal(hasRepeatedKey(text), false, text);
+  }
+});
+
+test("parseJsonWithoutRepeatedKeys parses valid JSON with distinct keys and refuses repeats or bad JSON", () => {
+  assert.deepEqual(parseJsonWithoutRepeatedKeys('{"a":1,"b":{"a":2}}'), {
+    ok: true,
+    value: { a: 1, b: { a: 2 } },
+  });
+  for (const bad of [
+    "<html>",
+    '{"a":1,"a":2}',
+    '{"a":1,"\\u0061":2}',
+    '{"a":{"b":1,"b":2}}',
+  ]) {
+    assert.deepEqual(parseJsonWithoutRepeatedKeys(bad), { ok: false }, bad);
   }
 });

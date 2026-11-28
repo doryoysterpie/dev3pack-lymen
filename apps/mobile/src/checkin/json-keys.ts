@@ -1,6 +1,7 @@
 // Repeated object keys in JSON text (E-05, app half). JSON.parse keeps a repeated key's last
-// value, and another reader may keep its first, so the device refuses a station QR whose payload
-// repeats one, as the backend does with its own copy of this scan (services/api/src/json-keys.ts).
+// value, and another reader may keep its first, so the device refuses a station QR payload or
+// HTTP response body that repeats one, as the backend does with its own copy of this scan
+// (services/api/src/json-keys.ts).
 // Keys are compared as decoded, so "a" and "\u0061" are one key.
 
 /**
@@ -60,4 +61,21 @@ export function hasRepeatedKey(text: string): boolean {
     return false;
   };
   return scanValue();
+}
+
+/**
+ * Parses `text` as JSON and refuses any object that repeats a key at any depth (comparing keys
+ * as decoded). Returns `{ ok: false }` if `text` is not valid JSON or repeats a key.
+ */
+export function parseJsonWithoutRepeatedKeys(
+  text: string,
+): { readonly ok: true; readonly value: unknown } | { readonly ok: false } {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return { ok: false };
+  }
+  if (hasRepeatedKey(text)) return { ok: false };
+  return { ok: true, value };
 }

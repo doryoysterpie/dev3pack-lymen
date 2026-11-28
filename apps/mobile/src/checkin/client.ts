@@ -3,6 +3,7 @@
 
 import { encodeBase64 } from "./base64.ts";
 import { appFetch, type HttpFetch } from "./http.ts";
+import { parseJsonWithoutRepeatedKeys } from "./json-keys.ts";
 
 export interface CheckinRequest {
   readonly qr: string;
@@ -90,9 +91,10 @@ export async function postCheckin(
   } catch {
     return refused("unreachable");
   }
-  let body: unknown;
+  let body: unknown = null;
   try {
-    body = await res.json();
+    const parsed = parseJsonWithoutRepeatedKeys(await res.text());
+    if (parsed.ok) body = parsed.value;
   } catch {
     body = null;
   }
