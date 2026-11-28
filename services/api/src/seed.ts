@@ -3,10 +3,11 @@
 // Sessions may not overlap: where two did, the API would issue for the later one while QRs from
 // the earlier one stayed valid for up to 60 s. Back-to-back sessions, one ending where the next
 // starts, do not overlap, since a session's end is exclusive.
-// Once a session has started, or starts within 60 s, a seed may change it only by moving its end
-// later: QRs issued for it carry expiry times cut to its end, and the API picks a session by its
-// window. The check compares each entry with the session as stored before the seed writes
-// anything, not with the values the seed would leave (seed.test.ts, the rescheduling probe).
+// Once a session has started, or starts within 60 s (60 s included), a seed may change it only by
+// moving its end later: QRs issued for it carry expiry times cut to its end, and the API picks a
+// session by its window. The check compares each entry with the session as stored before the seed
+// writes anything, not with the values the seed would leave (seed.test.ts, the rescheduling
+// probe), at the time read inside the seed's transaction.
 //
 //   npm run seed -w @limen/api -- ../../fixtures/demo-event.json
 //
@@ -109,12 +110,13 @@ export function parseEventSeed(value: unknown): EventSeed {
 
 /**
  * Writes the seed into the database in one transaction, and rolls it back if any two sessions in
- * the database would then overlap. Returns how many rows it wrote.
+ * the database would then overlap. Returns how many rows it wrote. `clock` gives the Unix time
+ * in whole seconds; it is read once, inside the transaction, after the write lock is taken.
  */
 export function seedEvent(
   db: DatabaseSync,
   seed: EventSeed,
-  now: number,
+  clock: () => number,
 ): { stations: number; sessions: number } {
   const station = db.prepare(
     "INSERT INTO stations (id, name, created_at) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET name = excluded.name",
@@ -124,6 +126,7 @@ export function seedEvent(
   );
   db.exec("BEGIN IMMEDIATE");
   try {
+    const now = clock();
     // Every session as stored, read before this seed writes anything.
     const stored = new Map(
       (
@@ -141,7 +144,7 @@ export function seedEvent(
       const was = stored.get(s.id);
       if (
         was !== undefined &&
-        was.starts_at < now + 60 &&
+        was.starts_at <= now + 60 &&
         (s.name !== was.name ||
           s.starts_at !== was.starts_at ||
           s.ends_at < was.ends_at)
@@ -206,7 +209,7 @@ if (isMainModule(import.meta.url)) {
     }
     const seed = parseEventSeed(parsed);
     const db = openDatabase(process.env.DATABASE_PATH || "limen.db");
-    const written = seedEvent(db, seed, Math.floor(Date.now() / 1000));
+    const written = seedEvent(db, seed, () => Math.floor(Date.now() / 1000));
     console.log(
       `limen seed: wrote stations ${written.stations}, sessions ${written.sessions}`,
     );
