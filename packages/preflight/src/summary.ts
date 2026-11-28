@@ -385,16 +385,18 @@ function priorityFee(decoded: readonly Decoded[]): Effect | null {
 }
 
 /**
- * The token accounts the decoded instructions show the user owns: the account
+ * The token accounts the decoded instructions name as the user's: the account
  * of an Approve, a Token program Revoke or a SetAuthority (AccountOwner) the
- * user signs as the
- * direct authority, which the token program lets only the account's owner
- * sign (solana-program/token 38de8d1, program/src/processor.rs, validate_owner
- * against the account's owner at lines 379, 407 and 442), and an associated
- * token account created for the user's wallet, which the program initializes
- * with that wallet as owner (solana-program/associated-token-account 34509e4,
- * program/src/processor.rs, lines 77 and 145 to 149). Addresses only, in the
- * order the instructions name them, without repeats.
+ * user signs as the direct authority, which the token program lets only the
+ * account's owner sign (solana-program/token 38de8d1, program/src/processor.rs,
+ * validate_owner against the account's owner at lines 379, 407 and 442), and
+ * an associated token account created for the user's wallet, which the
+ * program initializes with that wallet as owner
+ * (solana-program/associated-token-account 34509e4, program/src/processor.rs,
+ * lines 77 and 145 to 149). The instruction alone does not show the account
+ * is the user's: it only succeeds if it is. So the pre-flight marks these as
+ * user-authorized unless a read shows the user owns them (preflight.ts).
+ * Addresses only, in the order the instructions name them, without repeats.
  */
 export function userTokenAccounts(
   transaction: ParsedTransaction,
