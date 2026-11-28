@@ -506,3 +506,26 @@ test("the station page loader checks exact doctype, build marker, size limit and
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("ruling 25a stated-limits paragraph appears word for word in the station section of services/api/README.md and in apps/station/README.md", () => {
+  const expected =
+    "limen trusts the operator's own machine, files and shell environment. The checks here refuse the mistakes named above, but a finding that needs the operator to alias their own files (for example hard-linking .env or a key to a file limen serves), export a secret into the shell that starts limen, or turn on debug tracing is a stated limit, not a defect (ruling 25a). Anything a remote caller, a participant or limen's own code can cause stays in scope.";
+  const apiReadme = readFileSync(
+    new URL("../README.md", import.meta.url),
+    "utf8",
+  );
+  const stationSection =
+    /## Station QR \(E-03\)([\s\S]*?)(?:\n## |$)/.exec(apiReadme)?.[1] ?? "";
+  assert.ok(
+    stationSection.includes(`\n\n${expected}\n\n`),
+    "services/api/README.md station section holds ruling 25a word for word",
+  );
+  const stationReadme = readFileSync(
+    new URL("../../../apps/station/README.md", import.meta.url),
+    "utf8",
+  );
+  assert.ok(
+    stationReadme.includes(`\n\n${expected}\n\n`),
+    "apps/station/README.md holds ruling 25a word for word",
+  );
+});

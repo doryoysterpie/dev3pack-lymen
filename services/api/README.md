@@ -92,6 +92,8 @@ Paste the token into the station page.
 
 **Upgrading from link files.** An earlier version wrote each station's address, token included, to link files in `~/limen-station-links` or `.station-links/`. Delete any, and set a new `STATION_DISPLAY_TOKEN`, from which every station's token derives.
 
+limen trusts the operator's own machine, files and shell environment. The checks here refuse the mistakes named above, but a finding that needs the operator to alias their own files (for example hard-linking .env or a key to a file limen serves), export a secret into the shell that starts limen, or turn on debug tracing is a stated limit, not a defect (ruling 25a). Anything a remote caller, a participant or limen's own code can cause stays in scope.
+
 `src/station-qr.ts` documents the QR's format. `verifyStationQr(text, { allowlist, nowMs, expectedStation?, expectedSession? })` refuses a QR, with a reason, unless all of these hold, and `src/station-qr.test.ts` has a refusal test for each:
 
 - its payload, signer and signature are each canonical unpadded base64url, the one spelling that re-encodes to itself (`malformed` otherwise);
