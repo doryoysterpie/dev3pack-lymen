@@ -1,0 +1,136 @@
+// E-02 done test, part 1: the schema migrates from empty.
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { test } from "node:test";
+
+import { MIGRATIONS, migrate, openDatabase, schemaVersion } from "./db.ts";
+
+// The schema E-02 owes: six tables and their columns, in declaration order.
+const OWED_SCHEMA: Record<string, string[]> = {
+  cases: ["id", "status", "created_at", "updated_at"],
+  checkins: [
+    "id",
+    "session_id",
+    "station_id",
+    "reg_hash",
+    "wallet",
+    "station_nonce",
+    "mint",
+    "created_at",
+  ],
+  registrations: ["reg_hash", "wallet", "bound_at"],
+  sessions: ["id", "name", "starts_at", "ends_at"],
+  sightings: ["id", "case_id", "device_hash", "qr_text", "created_at"],
+  stations: ["id", "name", "created_at"],
+};
+
+function tables(db: DatabaseSync): string[] {
+  const rows = db
+    .prepare(
+      "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    )
+    .all() as { name: string }[];
+  return rows.map((r) => r.name);
+}
+
+function columns(db: DatabaseSync, table: string): string[] {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as {
+    name: string;
+  }[];
+  return rows.map((r) => r.name);
+}
+
+function withTempDir(fn: (dir: string) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), "limen-db-"));
+  try {
+    fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("an empty database migrates to schema version 1 with exactly the six owed tables", () => {
+  const db = new DatabaseSync(":memory:");
+  assert.equal(schemaVersion(db), 0);
+  assert.deepEqual(tables(db), []);
+
+  assert.equal(migrate(db), 1);
+  assert.equal(schemaVersion(db), 1);
+  assert.equal(MIGRATIONS.length, 1);
+  assert.deepEqual(tables(db), Object.keys(OWED_SCHEMA).sort());
+  for (const [table, owed] of Object.entries(OWED_SCHEMA)) {
+    assert.deepEqual(columns(db, table), owed, `columns of ${table}`);
+  }
+});
+
+test("an empty database file on disk migrates, and reopening it does not migrate again", () => {
+  withTempDir((dir) => {
+    const path = join(dir, "limen.db");
+    const first = openDatabase(path);
+    assert.equal(schemaVersion(first), 1);
+    first
+      .prepare("INSERT INTO stations (id, name, created_at) VALUES (?, ?, ?)")
+      .run("st-1", "Front desk", 1_700_000_000);
+    first.close();
+
+    const second = openDatabase(path);
+    assert.equal(schemaVersion(second), 1);
+    const row = second
+      .prepare("SELECT name FROM stations WHERE id = ?")
+      .get("st-1") as {
+      name: string;
+    };
+    assert.equal(row.name, "Front desk");
+    second.close();
+  });
+});
+
+test("a database from a newer build is refused, not run against", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA user_version = 99");
+  assert.throws(
+    () => migrate(db),
+    /schema version 99 is newer than this build supports \(1\)/,
+  );
+});
+
+test("the schema refuses a second check-in for the same registration in the same session", () => {
+  const db = openDatabase(":memory:");
+  db.exec(`
+    INSERT INTO stations (id, name, created_at) VALUES ('st-1', 'Front desk', 1);
+    INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('s-1', 'Day 1', 1, 2);
+    INSERT INTO registrations (reg_hash, wallet, bound_at) VALUES ('h-1', 'w-1', 1);
+  `);
+  const insert = db.prepare(
+    "INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+  );
+  insert.run("s-1", "st-1", "h-1", "w-1", "n-1", 1);
+  assert.throws(
+    () => insert.run("s-1", "st-1", "h-1", "w-1", "n-2", 2),
+    /UNIQUE constraint failed: checkins.session_id, checkins.reg_hash/,
+  );
+});
+
+test("the schema enforces foreign keys and a wallet bound to at most one registration", () => {
+  const db = openDatabase(":memory:");
+  assert.throws(
+    () =>
+      db.exec(
+        "INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, created_at) VALUES ('none', 'none', 'none', 'w', 'n', 1)",
+      ),
+    /FOREIGN KEY constraint failed/,
+  );
+  db.exec(
+    "INSERT INTO registrations (reg_hash, wallet, bound_at) VALUES ('h-1', 'w-1', 1)",
+  );
+  assert.throws(
+    () =>
+      db.exec(
+        "INSERT INTO registrations (reg_hash, wallet, bound_at) VALUES ('h-2', 'w-1', 2)",
+      ),
+    /UNIQUE constraint failed: registrations.wallet/,
+  );
+});

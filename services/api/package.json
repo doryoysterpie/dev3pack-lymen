@@ -1,6 +1,11 @@
 {
   "name": "@limen/api",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file-if-exists=../../.env src/index.ts",
+    "import-registrations": "node --env-file-if-exists=../../.env src/registration.ts",
+    "test": "node --test \"src/**/*.test.ts\""
+  }
 }
