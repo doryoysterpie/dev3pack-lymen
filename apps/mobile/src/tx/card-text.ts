@@ -284,9 +284,14 @@ function simulated(simulation: SimulationOutcome): string {
   if (simulation.status === "not-run") {
     return "No simulation result is used, so no balance change is shown.";
   }
-  return simulation.err === null
-    ? "The simulation ran, and any change it found to your wallet's SOL is shown below."
-    : "The simulation failed, so no balance change is shown.";
+  if (simulation.err !== null) {
+    return "The simulation failed, so no balance change is shown.";
+  }
+  // A run that leaves the wallet's SOL as it was lists no change (the audit
+  // of 21e1f9f, item 9).
+  return simulation.changes.length === 0
+    ? "The simulation ran, and your wallet's SOL balance stays the same."
+    : "The simulation ran, and any change it found to your wallet's SOL is shown below.";
 }
 
 /**
@@ -437,7 +442,7 @@ export function transactionCardText(
           : simulation.status === "ran" && simulation.err === null
             ? // The one simulated change a row shows is the wallet's SOL
               // (changeRow, ruling 20a).
-              "This card shows the change limen simulated to your wallet's SOL. Other simulated changes, such as tokens moved or SOL sent to a token account by another signer, are not shown."
+              `${simulation.changes.length === 0 ? "As simulated, your wallet's SOL balance stays the same." : "This card shows the change limen simulated to your wallet's SOL."} Other simulated changes, such as tokens moved or SOL sent to a token account by another signer, are not shown.`
             : `This card shows what the decoded instructions ask for. ${simulated(simulation)}`,
     rows,
   };

@@ -231,12 +231,35 @@ describe("transaction card text", () => {
     assert.equal(card.tone, "neutral");
     assert.equal(
       card.status,
-      "This card shows the change limen simulated to your wallet's SOL. Other simulated changes, such as tokens moved or SOL sent to a token account by another signer, are not shown.",
+      "As simulated, your wallet's SOL balance stays the same. Other simulated changes, such as tokens moved or SOL sent to a token account by another signer, are not shown.",
     );
     assert.deepEqual(card.rows[1], {
       label: "Closes a token account",
       value: `Asks to close ${userTokenAccount} and send its SOL to your wallet.`,
     });
+  });
+
+  it("the audit of 21e1f9f, item 9: the fallback card says when the wallet's SOL stays the same", async () => {
+    const walletAccount = {
+      lamports: 5_000_000_000,
+      owner: SYSTEM_PROGRAM,
+      data: ["", "base64"] as const,
+    };
+    const result = await preflight(
+      recordedEndpoint({
+        accounts: { [fixture.user]: walletAccount },
+        simulation: { err: null, accounts: {} },
+      }),
+      transactionOf("unknown program"),
+      fixture.user,
+    );
+    assert.ok(result.kind === "ready");
+    assert.ok(result.simulation.status === "ran");
+    assert.deepEqual(result.simulation.changes, []);
+    assert.equal(
+      transactionCardText(LINK, null, result).status,
+      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation ran, and your wallet's SOL balance stays the same.",
+    );
   });
 
   it("m12: names an address from a lookup table limen could not read", async () => {
