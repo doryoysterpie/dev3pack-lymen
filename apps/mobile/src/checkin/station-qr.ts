@@ -3,11 +3,11 @@
 //
 //   limen:station:v1.<payload>.<signer>.<signature>
 //
-// prefix, shape, version, canonical base64url signer, signer on the allowlist, canonical
-// signature, Ed25519 over the ASCII text "limen:station:v1.<payload>", exactly the five payload
-// fields, a window of at most 60 s, issued no more than 5 s ahead of the device clock, no more
-// than 60 s after issued_at and not past expires_at, measured in milliseconds, and a cut-short QR
-// (expires_at < issued_at + 60) refused from its expires_at on. Ed25519 itself is passed in, so
+// prefix, shape, version, canonical base64url payload, canonical signer, signer on the allowlist,
+// canonical signature, Ed25519 over the ASCII text "limen:station:v1.<payload>", exactly the five
+// payload fields, a window of at most 60 s, issued no more than 5 s ahead of the device clock, no
+// more than 60 s after issued_at and not past expires_at, measured in milliseconds, and a cut-short
+// QR (expires_at < issued_at + 60) refused from its expires_at on. Ed25519 itself is passed in, so
 // this module stays pure.
 
 import { decodeBase64Url } from "./base64.ts";
@@ -143,7 +143,10 @@ export function verifyStationQrOnDevice(
     string,
   ];
   if (version !== VERSION) return reject("unsupported_version");
-  if (!/^[A-Za-z0-9_-]+$/.test(payload)) return reject("malformed");
+  // As E-03's verifier at e1ee9b3: the payload must be canonical base64url, refused as
+  // malformed before the signer and signature are checked.
+  if (payload.length === 0 || decodeBase64Url(payload) === null)
+    return reject("malformed");
 
   const signerBytes = decodeBase64Url(signer);
   if (signerBytes === null || signerBytes.length !== 32)

@@ -174,7 +174,7 @@ function respelledPayloadQrs(): string[] {
   return qrs;
 }
 
-test("a payload re-spelled in non-canonical base64url is refused as invalid_payload, as the backend refuses it", () => {
+test("a payload re-spelled in non-canonical base64url, or empty, is refused as malformed before the signature, as E-03's verifier refuses it at e1ee9b3", () => {
   const qrs = respelledPayloadQrs();
   assert.equal(qrs.length, 15);
   assert.equal(
@@ -182,7 +182,10 @@ test("a payload re-spelled in non-canonical base64url is refused as invalid_payl
     RESPELLED_PAYLOAD_QRS_SHA256,
   );
   for (const qr of qrs)
-    assert.equal(reasonAt(qr, 1_795_000_010), "invalid_payload", qr);
+    assert.equal(reasonAt(qr, 1_795_000_010), "malformed", qr);
+  // An empty payload is no base64url spelling at all.
+  const [head, , ...rest] = FIXTURE.valid.split(".");
+  assert.equal(reasonAt([head, "", ...rest].join("."), T), "malformed");
 });
 
 test("a signed payload that repeats a key is refused as invalid_payload, as the backend refuses it", () => {

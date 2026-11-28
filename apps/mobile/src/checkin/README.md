@@ -33,7 +33,7 @@ Set both when building the app. Expo inlines them into the bundle, so neither ma
   - an expired one is accepted at 60 s and refused at 60.001 s, 60.999 s and 61 s;
   - a QR cut short by its session's end is accepted 1 ms before its `expires_at` and refused at it, including one E-03 cut to 59 s because its 60 s would have ended exactly at the session's end;
   - one changed payload byte gives `bad_signature`, and no QR with one character changed, to any base64url character or a dot, at any position, is accepted;
-  - the backend test's 15 QRs whose payload is re-spelled in non-canonical base64url, each signed by the organizer key, are refused as `invalid_payload`, as the backend refuses them;
+  - the backend test's 15 QRs whose payload is re-spelled in non-canonical base64url, each signed by the organizer key, and an empty payload, are refused as `malformed` before the signature, as E-03's verifier at e1ee9b3 refuses them;
   - a key off the allowlist gives `signer_not_allowlisted`;
   - the backend test's QR whose signed payload names its session twice, matched by a pinned SHA-256, gives `invalid_payload`;
   - a verifier that throws gives `verify_failed`, which the flow reports as a QR the app could not check.
