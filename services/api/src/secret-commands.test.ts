@@ -58,11 +58,11 @@ function recommendedCommand(message: string): string {
 }
 
 /** Runs `command` with sh in a copy of .env.example; returns its output and what Node then reads. */
-function runInCopy(command: string, name: string) {
+function runInCopy(command: string, name: string, trace = false) {
   const dir = mkdtempSync(join(tmpdir(), "limen-secret-"));
   try {
     writeFileSync(join(dir, ".env"), EXAMPLE);
-    const run = spawnSync("sh", ["-c", command], {
+    const run = spawnSync("sh", [...(trace ? ["-x"] : []), "-c", command], {
       cwd: dir,
       env: { PATH: process.env.PATH ?? "" },
       encoding: "utf8",
@@ -100,6 +100,14 @@ function assertWritesWithoutPrinting(command: string, name: string): void {
   );
   // A fresh value each run, not a fixed one.
   assert.notEqual(runInCopy(command, name).value, first.value);
+  // Under sh -x the shell traces each command with its arguments: the secret is in none of them.
+  const traced = runInCopy(command, name, true);
+  assert.equal(traced.status, 0);
+  assert.ok(traced.value.length >= 32);
+  assert.ok(
+    !traced.stderr.includes(traced.value),
+    `${JSON.stringify(command)} puts the secret in a command's arguments`,
+  );
 }
 
 test("the STATION_DISPLAY_TOKEN commands in .env.example and the start-up error write a new token into .env without printing it", () => {
@@ -132,8 +140,9 @@ test("the REGISTRATION_SALT commands in .env.example and the import error write 
 
 // The one command form that writes a secret without printing it, for the variable it names. It
 // must be the whole command: nothing may come before or after it on its line.
+// A blank line, then NAME= and the generator's output, piped so the secret is in no argument.
 const WRITE_COMMAND =
-  /^printf '\\n([A-Z][A-Z0-9_]*)=%s\\n' "\$\(openssl rand -base64 32\)" >> \.env$/;
+  /^\{ echo; openssl rand -base64 32 \| sed 's\/\^\/([A-Z][A-Z0-9_]*)=\/'; \} >> \.env$/;
 const MAKES_A_SECRET = /openssl\s+rand/;
 
 /**
@@ -151,7 +160,7 @@ function assertSecretLine(line: string, where: string): void {
 }
 
 test("a documented secret line runs whole: a write command with more on its line is refused", () => {
-  const write = `printf '\\nX_TOKEN=%s\\n' "$(openssl rand -base64 32)" >> .env`;
+  const write = `{ echo; openssl rand -base64 32 | sed 's/^/X_TOKEN=/'; } >> .env`;
   for (const line of [write, `#   ${write}`])
     assert.doesNotThrow(() => assertSecretLine(line, "test"), line);
   for (const line of [

@@ -9,7 +9,7 @@ export const MIN_STATION_SECRET_LENGTH = 32;
 export function parseStationDisplaySecret(value: string | undefined): string {
   if (value === undefined || value.length < MIN_STATION_SECRET_LENGTH) {
     throw new Error(
-      `STATION_DISPLAY_TOKEN must be set to at least ${MIN_STATION_SECRET_LENGTH} characters (${value === undefined || value === "" ? "it is not set" : "it is too short"}). To add one to .env without printing it, run from the repository root: printf '\\nSTATION_DISPLAY_TOKEN=%s\\n' "$(openssl rand -base64 32)" >> .env`,
+      `STATION_DISPLAY_TOKEN must be set to at least ${MIN_STATION_SECRET_LENGTH} characters (${value === undefined || value === "" ? "it is not set" : "it is too short"}). To add one to .env without printing it, run from the repository root: { echo; openssl rand -base64 32 | sed 's/^/STATION_DISPLAY_TOKEN=/'; } >> .env`,
     );
   }
   return value;
