@@ -1,6 +1,6 @@
 // Repeated object keys in JSON text (E-05). JSON.parse keeps a repeated key's last value, and
 // another reader may keep its first, so the API refuses JSON that repeats one: a check-in body,
-// and a station QR's payload. Keys are compared as decoded, so "a" and "a" are one key.
+// and a station QR's payload. Keys are compared as decoded, so "a" and "\u0061" are one key.
 
 /**
  * True when any object in `text`, at any depth, has the same key twice. `text` must already be
