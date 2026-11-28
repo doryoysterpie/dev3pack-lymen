@@ -3,6 +3,9 @@
 // the build loads no environment (src/build.test.ts).
 import { defineConfig, type Plugin } from "vite";
 
+/** Build marker inserted into index.html and required by services/api/src/station-page.ts. */
+export const STATION_PAGE_MARKER = "<!-- limen:station-page:v1 -->";
+
 /** Inlines the page's one script into index.html, and fails on any other output. */
 export function inlineScript(): Plugin {
   return {
@@ -35,7 +38,8 @@ export function inlineScript(): Plugin {
         );
       html.source = source.replace(
         tag,
-        () => `<script type="module">${chunk.code}</script>`,
+        () =>
+          `${STATION_PAGE_MARKER}<script type="module">${chunk.code}</script>`,
       );
       delete bundle[chunk.fileName];
     },

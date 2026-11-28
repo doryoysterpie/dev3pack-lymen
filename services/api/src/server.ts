@@ -12,6 +12,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { routeReports, type ReportOptions } from "./reports.ts";
 import { schemaVersion } from "./db.ts";
+import { assertStationPage } from "./station-page.ts";
 import { issueStationQr, type StationSigner } from "./station-qr.ts";
 import { stationDisplayToken } from "./station-token.ts";
 
@@ -147,6 +148,7 @@ function stationQr(
 }
 
 export function createApiServer(ctx: ApiContext): Server {
+  if (ctx.stationPage != null) assertStationPage(ctx.stationPage);
   return createServer((req, res) => {
     try {
       const { pathname } = new URL(req.url ?? "/", "http://localhost");

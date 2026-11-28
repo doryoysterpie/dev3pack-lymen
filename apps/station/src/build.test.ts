@@ -36,7 +36,12 @@ test("the build writes one self-contained index.html: its script inline, no othe
     assert.deepEqual(scripts, [' type="module"'], "one inline module script");
     assert.doesNotMatch(html, /<link\b/i);
     assert.doesNotMatch(html, /\s(src|href)="(?!data:)/i);
-    // The page's own markup and code are in it.
+    // The page's own markup, build marker and code are in it.
+    assert.ok(html.startsWith("<!doctype html>"), "starts with exact doctype");
+    assert.ok(
+      html.includes("<!-- limen:station-page:v1 -->"),
+      "contains the station build marker",
+    );
     assert.match(html, /<canvas id="qr" hidden><\/canvas>/);
     assert.match(html, /\/stations\//);
   } finally {
@@ -110,7 +115,7 @@ test("the inliner refuses a script holding </script, <script or <!-- in any case
     assert.throws(() => run(code), /holds/, code);
   assert.equal(
     run("console.log(1);"),
-    '<html><script type="module">console.log(1);</script></html>',
+    '<html><!-- limen:station-page:v1 --><script type="module">console.log(1);</script></html>',
   );
 });
 
