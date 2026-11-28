@@ -12,6 +12,7 @@
     "station-link": "node --env-file-if-exists=../../.env src/station-link.ts"
   },
   "dependencies": {
+    "@noble/curves": "2.4.0",
     "@solana/spl-token": "0.4.15",
     "@solana/web3.js": "1.98.4"
   },

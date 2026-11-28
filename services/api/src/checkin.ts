@@ -23,7 +23,6 @@
 // session still open; the wallet's signature over the message; the registration (the wallet's
 // binding, or a first binding of registration_id); one check-in per registration per session.
 // Only then does it mint.
-import { createPublicKey, verify } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { Connection } from "@solana/web3.js";
@@ -175,8 +174,56 @@ const REQUEST_KEYS: ReadonlySet<string> = new Set<RequestField>([
   "signature",
 ]);
 const MAX_FIELD_CHARS = 1024;
-// DER header of an X.509 SubjectPublicKeyInfo Ed25519 public key (RFC 8410).
-const SPKI_ED25519_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+
+/** The order L of Ed25519's prime-order subgroup (RFC 8032 section 5.1). */
+const ED25519_L = 2n ** 252n + 27742317777372353535851937790883648493n;
+
+type Noble = typeof import("@noble/curves/ed25519.js");
+let noble: Promise<Noble> | null = null;
+/** @noble/curves 2.4.0, loaded at the first check, so the API starts where nothing checks in. */
+const loadNoble = (): Promise<Noble> =>
+  (noble ??= import("@noble/curves/ed25519.js"));
+
+/**
+ * True when `bytes` decodes, under RFC 8032's canonical rules (y below p, no sign bit on x = 0),
+ * to a point of the prime-order subgroup other than the identity: no small or mixed order.
+ */
+function primeOrderPoint(ed: Noble, bytes: Uint8Array): boolean {
+  try {
+    const point = ed.ed25519.Point.fromBytes(bytes, false);
+    return !point.isSmallOrder() && point.isTorsionFree();
+  } catch {
+    return false;
+  }
+}
+
+/** True when `key` is a canonically encoded Ed25519 public key in the prime-order subgroup. */
+export async function walletKeyAcceptable(key: Uint8Array): Promise<boolean> {
+  return key.length === 32 && primeOrderPoint(await loadNoble(), key);
+}
+
+/**
+ * Strict Ed25519 verification of a wallet's signature. The key and the signature's R must each be
+ * canonically encoded and in the prime-order subgroup, S must be below L, and then noble's RFC
+ * 8032 check, with ZIP-215 off, must pass.
+ */
+export async function walletSignatureValid(
+  key: Uint8Array,
+  message: Uint8Array,
+  signature: Uint8Array,
+): Promise<boolean> {
+  if (key.length !== 32 || signature.length !== 64) return false;
+  const ed = await loadNoble();
+  const s = BigInt(
+    `0x${Buffer.from(signature.subarray(32)).reverse().toString("hex")}`,
+  );
+  return (
+    s < ED25519_L &&
+    primeOrderPoint(ed, key) &&
+    primeOrderPoint(ed, signature.subarray(0, 32)) &&
+    ed.ed25519.verify(signature, message, key, { zip215: false })
+  );
+}
 
 /** The exact text the wallet signs. */
 export function checkinMessage(p: {
@@ -229,23 +276,6 @@ function parseRequest(
       signature,
     },
   };
-}
-
-function walletSigned(
-  key: Uint8Array,
-  message: string,
-  signature: Buffer,
-): boolean {
-  try {
-    const publicKey = createPublicKey({
-      key: Buffer.concat([SPKI_ED25519_PREFIX, key]),
-      format: "der",
-      type: "spki",
-    });
-    return verify(null, Buffer.from(message, "utf8"), publicKey, signature);
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -315,14 +345,20 @@ export async function checkIn(
   if (open === undefined) return refuse(409, "session_closed");
 
   const key = deps.registrations.walletKey(req.wallet);
-  if (key === null || key.length !== 32)
+  if (key === null || !(await walletKeyAcceptable(key)))
     return refuse(400, "invalid_request", { field: "wallet" });
   const message = checkinMessage({
     ...payload,
     wallet: req.wallet,
     registrationId: req.registrationId,
   });
-  if (!walletSigned(key, message, req.signature))
+  if (
+    !(await walletSignatureValid(
+      key,
+      Buffer.from(message, "utf8"),
+      req.signature,
+    ))
+  )
     return refuse(401, "bad_wallet_signature");
 
   let regHash: string;
