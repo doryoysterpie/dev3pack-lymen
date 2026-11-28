@@ -7,8 +7,9 @@
 //     symbol, and the station, session and check-in time as additional fields.
 // The organizer key is the mint authority and the metadata update authority, and pays for
 // everything. Devnet only (D-03): connectDevnet connects only to DEVNET_URL, refusing any other URL
-// before a connection is made, and builds the Connection with makeConnection, whose every request
-// fails on a redirect rather than following it. connectDevnet, mintPass, revokePass and
+// before a connection is made, and builds the Connection with makeConnection, whose every HTTP
+// request fails on a redirect rather than following it (the WebSocket web3.js opens to confirm a
+// transaction does not use that fetch). connectDevnet, mintPass, revokePass and
 // passMintState each refuse a connection whose own endpoint is not DEVNET_URL, and then one whose
 // cluster's genesis hash is not devnet's, before anything is sent.
 import {
@@ -257,7 +258,10 @@ export const noRedirectFetch = ((
   init?: Parameters<typeof fetch>[1],
 ) => globalThis.fetch(input, { ...init, redirect: "error" })) as typeof fetch;
 
-/** A Connection to `url` whose every RPC request refuses redirects. Every Connection limen makes. */
+/**
+ * A Connection to `url` whose every HTTP request refuses redirects. connectDevnet makes every
+ * Connection limen uses with it, unless a test passes a stand-in.
+ */
 export function makeConnection(url: string): Connection {
   return new Connection(url, {
     commitment: "confirmed",

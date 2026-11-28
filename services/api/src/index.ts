@@ -49,7 +49,7 @@ export function listenUrl(host: string, port: number): string {
  * `connectionFor` is for tests only: it replaces the Connection constructor inside connectDevnet,
  * so a test sees every call the running check-in path makes on its Solana connection, without
  * reaching devnet. Unset, as `npm start` leaves it, connectDevnet builds the connection with
- * makeConnection (pass-mint.ts), which refuses redirects.
+ * makeConnection (pass-mint.ts), whose HTTP requests refuse redirects.
  */
 export async function start(
   env: NodeJS.ProcessEnv = process.env,

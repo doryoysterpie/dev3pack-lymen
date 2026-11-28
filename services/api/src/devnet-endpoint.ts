@@ -1,8 +1,8 @@
 // The one Solana RPC endpoint limen calls (D-03: devnet only). Solana's "Clusters and Public RPC
 // Endpoints" page (https://solana.com/docs/references/clusters, read 2026-11-28) lists it as
 // Devnet's endpoint. SOLANA_RPC_URL may name no other, and pass-mint.ts checks each
-// Connection's own endpoint against it before using it, builds every Connection to refuse
-// redirects, and keeps the genesis hash check as a second guard. This module imports nothing
+// Connection's own endpoint against it before using it, builds every Connection so that its HTTP
+// requests refuse redirects, and keeps the genesis hash check as a second guard. This module imports nothing
 // from @solana/web3.js, so start-up can check SOLANA_RPC_URL without loading it.
 export const DEVNET_ENDPOINT = "https://api.devnet.solana.com";
 

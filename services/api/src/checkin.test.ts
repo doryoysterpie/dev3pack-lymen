@@ -2,9 +2,9 @@
 // reason; an expired window is refused; a fresh wallet with no registration binding is refused.
 // Registration binding is E-07's real code (registrationsFrom, on registrations imported with
 // importRegistrations). Minting is E-06's mintPass on devnet, which spends devnet SOL, so a test
-// whose check-in would succeed uses mintDouble, a named test double, instead. One test goes
-// through start() to the running API's own minter, and replaces only the Connection constructor
-// inside connectDevnet, with a stand-in that reaches nothing.
+// whose check-in would succeed uses mintDouble, a named test double, instead. Two tests run the
+// API's own minter, one through start() and one as a restarted API builds it, and replace only
+// the Connection constructor inside connectDevnet, with a stand-in that reaches nothing.
 import assert from "node:assert/strict";
 import {
   createHash,
@@ -1110,6 +1110,8 @@ test("a malformed request is refused by field", async () => {
   const cases: [unknown, string][] = [
     [null, "body"],
     [[good], "body"],
+    // An empty object fails on its first field, before any QR is read.
+    [{}, "qr"],
     [{ ...good, qr: "" }, "qr"],
     [{ ...good, wallet: "wallet-alice\nstation: other" }, "wallet"],
     [{ ...good, wallet: "wallet-unknown" }, "wallet"],
@@ -1573,6 +1575,70 @@ test("the API refuses a SOLANA_RPC_URL that is not the allowlisted devnet endpoi
   } finally {
     for (const s of started)
       await new Promise<void>((resolve) => s.server.close(() => resolve()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("after a restart that left a check-in pending, the minter first connects for the chain read, through connectDevnet", async () => {
+  const { db, deps, alice } = setup();
+  const dir = mkdtempSync(join(tmpdir(), "limen-checkin-"));
+  const keyPath = join(dir, "organizer.json");
+  writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
+  // The reservation a crashed process left: bound, pending, nothing sent.
+  const mint = passAddress("day-2", "LMN-0001");
+  assert.equal(deps.registrations.bind("LMN-0001", alice.address, T).ok, true);
+  db.prepare(
+    "INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, mint, mint_status, created_at) VALUES ('day-2', 'st-front', ?, ?, 'n', ?, 'pending', ?)",
+  ).run(regHashOf("LMN-0001"), alice.address, mint, T);
+  const urls: string[] = [];
+  const calls: string[] = [];
+  const answers: Record<string, unknown> = {
+    getGenesisHash: DEVNET_GENESIS_HASH,
+    getAccountInfo: null,
+    getMinimumBalanceForRentExemption: 4_181_760,
+    sendTransaction: "stand-in-signature",
+    confirmTransaction: { context: { slot: 1 }, value: { err: null } },
+  };
+  const standInFor = (url: string) =>
+    new Proxy(
+      {},
+      {
+        get: (_target, name) =>
+          name === "then"
+            ? undefined
+            : name === "rpcEndpoint"
+              ? url
+              : async () => {
+                  calls.push(String(name));
+                  if (!(String(name) in answers))
+                    throw new Error(`unexpected call: ${String(name)}`);
+                  return answers[String(name)];
+                },
+      },
+    ) as unknown as Connection;
+  try {
+    // A minter as a restarted API builds it: nothing connected yet.
+    const minter = devnetMinter(
+      "https://api.devnet.solana.com",
+      loadOrganizerKey(keyPath),
+      (url) => {
+        urls.push(url);
+        return standInFor(url);
+      },
+    );
+    const answer = await retryAt({ ...deps, minter }, alice, T + 12);
+    assert.equal(answer.status, 201);
+    assert.deepEqual(urls, ["https://api.devnet.solana.com"]);
+    assert.deepEqual(calls, [
+      "getGenesisHash",
+      "getGenesisHash",
+      "getAccountInfo",
+      "getGenesisHash",
+      "getMinimumBalanceForRentExemption",
+      "sendTransaction",
+      "confirmTransaction",
+    ]);
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
