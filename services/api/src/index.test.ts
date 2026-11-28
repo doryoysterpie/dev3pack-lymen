@@ -198,7 +198,7 @@ test("start-up with a good key file but no usable display token exits 1 without 
     assert.equal(unset.status, 1);
     assert.equal(
       unset.stderr,
-      "limen api: STATION_DISPLAY_TOKEN must be set to at least 32 characters (it is not set). Generate one with: openssl rand -base64 32\n",
+      "limen api: STATION_DISPLAY_TOKEN must be set to at least 32 characters (it is not set). To add one to .env without printing it, run from the repository root: printf '\\nSTATION_DISPLAY_TOKEN=%s\\n' \"$(openssl rand -base64 32)\" >> .env\n",
     );
     const short = runEntry({
       ORGANIZER_KEYPAIR_PATH: keyPath,
@@ -207,7 +207,7 @@ test("start-up with a good key file but no usable display token exits 1 without 
     assert.equal(short.status, 1);
     assert.equal(
       short.stderr,
-      "limen api: STATION_DISPLAY_TOKEN must be set to at least 32 characters (it is too short). Generate one with: openssl rand -base64 32\n",
+      "limen api: STATION_DISPLAY_TOKEN must be set to at least 32 characters (it is too short). To add one to .env without printing it, run from the repository root: printf '\\nSTATION_DISPLAY_TOKEN=%s\\n' \"$(openssl rand -base64 32)\" >> .env\n",
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

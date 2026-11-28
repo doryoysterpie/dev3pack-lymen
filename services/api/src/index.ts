@@ -40,7 +40,7 @@ function parseStationDisplayToken(value: string | undefined): string {
   if (value === undefined || value.length < MIN_TOKEN_LENGTH) {
     // The message never echoes the value, only whether it is set.
     throw new Error(
-      `STATION_DISPLAY_TOKEN must be set to at least ${MIN_TOKEN_LENGTH} characters (${value === undefined || value === "" ? "it is not set" : "it is too short"}). Generate one with: openssl rand -base64 32`,
+      `STATION_DISPLAY_TOKEN must be set to at least ${MIN_TOKEN_LENGTH} characters (${value === undefined || value === "" ? "it is not set" : "it is too short"}). To add one to .env without printing it, run from the repository root: printf '\\nSTATION_DISPLAY_TOKEN=%s\\n' "$(openssl rand -base64 32)" >> .env`,
     );
   }
   return value;
