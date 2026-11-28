@@ -4,9 +4,11 @@ import type { Server } from "node:http";
 import { isIPv6, type AddressInfo } from "node:net";
 
 import { chainabuseHook, parseChainabuseMode } from "./chainabuse.ts";
+import { devnetMinter, registrationsFrom } from "./checkin.ts";
 import { openDatabase } from "./db.ts";
 import { isMainModule } from "./main-module.ts";
 import { loadOrganizerKey } from "./organizer-key.ts";
+import { loadRegistrationSalt } from "./registration.ts";
 import { API_VERSION, createApiServer } from "./server.ts";
 import { parseStationDisplaySecret } from "./station-token.ts";
 import { bundledLists, type DomainLists } from "./triage.ts";
@@ -45,6 +47,14 @@ export async function start(
     env.STATION_DISPLAY_TOKEN,
   );
   const chainabuse = parseChainabuseMode(env.CHAINABUSE_POST);
+  // Check-in (E-05) binds registrations with E-07's code under REGISTRATION_SALT and mints with
+  // E-06's mintPass on devnet (SOLANA_RPC_URL, or the public devnet endpoint), paid for by the
+  // organizer key. With REGISTRATION_SALT unset or empty, POST /checkins answers 503; a set but
+  // short salt stops start-up, as it stops the import tool.
+  const salt =
+    env.REGISTRATION_SALT === undefined || env.REGISTRATION_SALT === ""
+      ? undefined
+      : loadRegistrationSalt(env.REGISTRATION_SALT);
   const port = parsePort(env.API_PORT);
   const host = env.API_HOST || "127.0.0.1";
   const db = openDatabase(env.DATABASE_PATH || "limen.db");
@@ -67,6 +77,13 @@ export async function start(
     stationDisplayToken,
     now: () => Math.floor(Date.now() / 1000),
     nowMs: () => Date.now(),
+    checkin:
+      salt === undefined
+        ? undefined
+        : {
+            registrations: registrationsFrom(db, salt),
+            minter: devnetMinter(env.SOLANA_RPC_URL || undefined, organizerKey),
+          },
     reports: {
       triageToken: env.TRIAGE_TOKEN || undefined,
       lists,

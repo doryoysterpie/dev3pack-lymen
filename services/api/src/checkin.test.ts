@@ -1,7 +1,8 @@
-// E-05 done test, backend half, prep build: a second check-in in the same session is refused with
-// the owed reason; an expired window is refused; a fresh wallet with no registration binding is
-// refused. E-07 and E-06 are stand-ins here (see below) until those units land; the done test
-// is rerun against the real code before E-05 is READY.
+// E-05 done test, backend half: a second check-in in the same session is refused with the owed
+// reason; an expired window is refused; a fresh wallet with no registration binding is refused.
+// Registration binding is E-07's real code (registrationsFrom, on registrations imported with
+// importRegistrations). Minting is E-06's mintPass on devnet, which spends devnet SOL, so a test
+// whose check-in would succeed uses mintDouble, a named test double, instead.
 import assert from "node:assert/strict";
 import {
   createPrivateKey,
@@ -9,17 +10,31 @@ import {
   sign,
   type KeyObject,
 } from "node:crypto";
-import type { AddressInfo } from "node:net";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createNetServer, type AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+
+import { PublicKey, type Connection } from "@solana/web3.js";
 
 import {
   checkIn,
   checkinMessage,
+  devnetMinter,
+  registrationsFrom,
   type CheckinDeps,
-  type CheckinRegistrations,
 } from "./checkin.ts";
 import { openDatabase } from "./db.ts";
+import { start } from "./index.ts";
+import { loadOrganizerKey } from "./organizer-key.ts";
+import { connectDevnet } from "./pass-mint.ts";
+import {
+  bindRegistration,
+  importRegistrations,
+  registrationHash,
+} from "./registration.ts";
 import {
   API_VERSION,
   createApiServer,
@@ -54,6 +69,16 @@ const STRANGER = rfcSigner(
   "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
 );
 const T = 1_795_000_000;
+/** A test value of REGISTRATION_SALT, at least 32 characters. */
+const SALT = "test-registration-salt-0123456789abcdef";
+/** RFC 8032 TEST 1 as a Solana keypair file: 32-byte seed, then the public key. */
+const RFC_KEYPAIR = [
+  ...Buffer.from(
+    "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60" +
+      "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    "hex",
+  ),
+];
 
 interface Wallet {
   readonly address: string;
@@ -61,54 +86,21 @@ interface Wallet {
   readonly privateKey: KeyObject;
 }
 
-function wallet(address: string): Wallet {
+/** A fresh Ed25519 wallet; its address is the base58 of its public key, as Solana writes it. */
+function wallet(): Wallet {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const key = Buffer.from(
     publicKey.export({ format: "jwk" }).x ?? "",
     "base64url",
   );
-  return { address, key, privateKey };
+  return { address: new PublicKey(key).toBase58(), key, privateKey };
 }
 
 /**
- * Stands in for E-07 until it lands: wallet addresses map to keys through a table, and binding
- * follows E-07's rules on the real registrations table (one wallet per registration).
+ * mintDouble: a test double for E-06's devnet mint (mintPass), used wherever a check-in would
+ * succeed and so spend devnet SOL. It records each call and can be made to fail.
  */
-function standInRegistrations(
-  db: DatabaseSync,
-  wallets: Wallet[],
-): CheckinRegistrations {
-  const keys = new Map(wallets.map((w) => [w.address, w.key]));
-  return {
-    walletKey: (address) => keys.get(address) ?? null,
-    bindingOf: (address) =>
-      (
-        db
-          .prepare("SELECT reg_hash FROM registrations WHERE wallet = ?")
-          .get(address) as { reg_hash: string } | undefined
-      )?.reg_hash ?? null,
-    bind: (id, address, now) => {
-      if (!/^[A-Za-z0-9_-]{1,64}$/.test(id))
-        return { ok: false, reason: "invalid_registration_id" };
-      const regHash = `hash:${id.toUpperCase()}`;
-      const row = db
-        .prepare("SELECT wallet FROM registrations WHERE reg_hash = ?")
-        .get(regHash) as { wallet: string | null } | undefined;
-      if (row === undefined)
-        return { ok: false, reason: "unknown_registration" };
-      if (row.wallet === address) return { ok: true, regHash };
-      if (row.wallet !== null)
-        return { ok: false, reason: "registration_bound_to_other_wallet" };
-      db.prepare(
-        "UPDATE registrations SET wallet = ?, bound_at = ? WHERE reg_hash = ?",
-      ).run(address, now, regHash);
-      return { ok: true, regHash };
-    },
-  };
-}
-
-/** Stands in for E-06 until it lands: records each mint and can be made to fail. */
-function recordingMinter() {
+function mintDouble() {
   const calls: { wallet: string; details: unknown }[] = [];
   let failNext = false;
   return {
@@ -141,16 +133,17 @@ function setup() {
     INSERT INTO stations (id, name, created_at) VALUES ('st-front', 'Front desk', ${T});
     INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('day-2', 'Day 2', ${T - 3600}, ${T + 3600});
     INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('day-3', 'Day 3', ${T + 3600}, ${T + 7200});
-    INSERT INTO registrations (reg_hash) VALUES ('hash:LMN-0001'), ('hash:LMN-0002');
   `);
-  const alice = wallet("wallet-alice");
-  const bob = wallet("wallet-bob");
-  const fresh = wallet("wallet-fresh");
-  const minting = recordingMinter();
+  // E-07's import, as `npm run import-registrations` runs it.
+  importRegistrations(db, SALT, ["LMN-0001", "LMN-0002"]);
+  const alice = wallet();
+  const bob = wallet();
+  const fresh = wallet();
+  const minting = mintDouble();
   const deps: CheckinDeps = {
     db,
     allowlist: stationAllowlist([ORGANIZER.publicKey]),
-    registrations: standInRegistrations(db, [alice, bob, fresh]),
+    registrations: registrationsFrom(db, SALT),
     minter: minting.minter,
   };
   return { db, deps, alice, bob, fresh, minting };
@@ -227,7 +220,7 @@ test("a first check-in binds the registration, mints once and records the pass",
   });
   assert.deepEqual(minting.calls, [
     {
-      wallet: "wallet-alice",
+      wallet: alice.address,
       details: { station: "st-front", session: "day-2", checkedInAt: T + 5 },
     },
   ]);
@@ -242,8 +235,8 @@ test("a first check-in binds the registration, mints once and records the pass",
     {
       session_id: "day-2",
       station_id: "st-front",
-      reg_hash: "hash:LMN-0001",
-      wallet: "wallet-alice",
+      reg_hash: registrationHash(SALT, "LMN-0001"),
+      wallet: alice.address,
       mint: "mint-1",
     },
   );
@@ -408,7 +401,7 @@ test("a malformed request is refused by field", async () => {
   }
 });
 
-test("POST /checkins runs the check-in end to end, and answers 503 until binding and minting are wired", async () => {
+test("POST /checkins runs the check-in end to end, and answers 503 on a server built without check-in", async () => {
   const { db, deps, alice } = setup();
   const clock = { now: T + 5 };
   const base = {
@@ -492,5 +485,136 @@ test("POST /checkins checks the QR window against the millisecond clock, not the
     );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+async function freePort(): Promise<number> {
+  const probe = createNetServer();
+  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const { port } = probe.address() as AddressInfo;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return port;
+}
+
+test("the running API checks in with E-07's binding: refusals only the salted binding can give, and 503 without REGISTRATION_SALT", async () => {
+  // No request here can succeed, so nothing is minted and no devnet SOL is spent.
+  const dir = mkdtempSync(join(tmpdir(), "limen-checkin-"));
+  const keyPath = join(dir, "organizer.json");
+  writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
+  const dbPath = join(dir, "limen.db");
+  const now = Math.floor(Date.now() / 1000);
+  const db = openDatabase(dbPath);
+  db.exec(`
+    INSERT INTO stations (id, name, created_at) VALUES ('st-front', 'Front desk', ${now});
+    INSERT INTO sessions (id, name, starts_at, ends_at) VALUES ('day-2', 'Day 2', ${now - 3600}, ${now + 3600});
+  `);
+  importRegistrations(db, SALT, ["LMN-0001"]);
+  const alice = wallet();
+  const bob = wallet();
+  // LMN-0001 is bound to bob through E-07's own code, under the same salt.
+  assert.equal(
+    bindRegistration(db, SALT, "LMN-0001", bob.address, now).ok,
+    true,
+  );
+  const env = (extra: Record<string, string>) => ({
+    ORGANIZER_KEYPAIR_PATH: keyPath,
+    STATION_DISPLAY_TOKEN: "test-display-token-0123456789abcdef",
+    DATABASE_PATH: dbPath,
+    ...extra,
+  });
+  const started: { server: { close(cb: () => void): void } }[] = [];
+  try {
+    const wired = await start(
+      env({ REGISTRATION_SALT: SALT, API_PORT: String(await freePort()) }),
+    );
+    started.push(wired);
+    const unwired = await start(env({ API_PORT: String(await freePort()) }));
+    started.push(unwired);
+    const post = (url: string, body: unknown) =>
+      fetch(`${url}/checkins`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const answer = async (res: Response) => [res.status, await res.json()];
+    assert.deepEqual(
+      await answer(
+        await post(wired.url, request(alice, "LMN-0001", { issuedAt: now })),
+      ),
+      [403, { error: "registration_bound_to_other_wallet" }],
+    );
+    assert.deepEqual(
+      await answer(
+        await post(wired.url, request(alice, null, { issuedAt: now })),
+      ),
+      [403, { error: "no_registration_binding" }],
+    );
+    assert.deepEqual(
+      await answer(
+        await post(unwired.url, request(alice, null, { issuedAt: now })),
+      ),
+      [503, { error: "check_in_unavailable" }],
+    );
+    assert.equal(
+      (db.prepare("SELECT count(*) AS n FROM checkins").get() as { n: number })
+        .n,
+      0,
+    );
+    // A short salt stops start-up, and the message does not echo it.
+    await assert.rejects(
+      start(
+        env({
+          REGISTRATION_SALT: "short-salt",
+          API_PORT: String(await freePort()),
+        }),
+      ),
+      (err: Error) =>
+        /^REGISTRATION_SALT must be set to at least 32 characters \(it is too short\)/.test(
+          err.message,
+        ) && !err.message.includes("short-salt"),
+    );
+  } finally {
+    for (const s of started)
+      await new Promise<void>((resolve) => s.server.close(() => resolve()));
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the running API's minter is E-06's mintPass through connectDevnet: a cluster that is not devnet is refused before anything is sent", async () => {
+  const { db, deps, alice } = setup();
+  const dir = mkdtempSync(join(tmpdir(), "limen-checkin-"));
+  const keyPath = join(dir, "organizer.json");
+  writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
+  // A connection that answers with another cluster's genesis hash and records every call made.
+  const calls: string[] = [];
+  const otherCluster = new Proxy(
+    {},
+    {
+      get: (_target, name) =>
+        name === "then"
+          ? undefined
+          : async () => {
+              calls.push(String(name));
+              return name === "getGenesisHash"
+                ? "not-the-devnet-genesis-hash"
+                : undefined;
+            },
+    },
+  ) as unknown as Connection;
+  try {
+    const minter = devnetMinter(
+      "http://127.0.0.1:9/",
+      loadOrganizerKey(keyPath),
+      (url) => connectDevnet(url, () => otherCluster),
+    );
+    assert.deepEqual(
+      await checkInAt({ ...deps, minter }, request(alice, "LMN-0001"), T + 5),
+      { status: 502, body: { error: "mint_failed" } },
+    );
+    assert.deepEqual(calls, ["getGenesisHash"]);
+    assert.equal(checkinCount(db), 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

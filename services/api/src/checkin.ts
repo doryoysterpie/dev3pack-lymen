@@ -1,5 +1,7 @@
-// Check-in, backend half (E-05). Prep build: registration binding (E-07) and pass minting (E-06)
-// sit behind the two interfaces below until those units land and their code is wired in.
+// Check-in, backend half (E-05). Registration binding is E-07's (registration.ts) and pass
+// minting is E-06's (mintPass on devnet, through connectDevnet). checkIn reaches them through the
+// two interfaces below, so tests can pass doubles; registrationsFrom and devnetMinter build the
+// real ones, and the running API (index.ts) uses those.
 //
 // The app posts JSON to POST /checkins:
 //
@@ -24,9 +26,18 @@
 import { createPublicKey, verify } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
+import type { Connection } from "@solana/web3.js";
+
+import type { OrganizerKey } from "./organizer-key.ts";
+import {
+  bindRegistration,
+  decodeBase58,
+  isWalletAddress,
+  registrationForWallet,
+} from "./registration.ts";
 import { verifyStationQr, type StationPayload } from "./station-qr.ts";
 
-/** What E-05 needs from E-07. Each method names the E-07 function that will back it. */
+/** What E-05 needs from E-07. Each method names the E-07 function that backs it. */
 export interface CheckinRegistrations {
   /** The 32-byte public key a wallet address names, or null (E-07: decodeBase58 and isWalletAddress). */
   walletKey(wallet: string): Uint8Array | null;
@@ -52,6 +63,74 @@ export interface PassMinter {
       readonly checkedInAt: number;
     },
   ): Promise<{ readonly mint: string; readonly signature: string }>;
+}
+
+/** E-07's registration binding on `db`, with registration IDs hashed under `salt`. */
+export function registrationsFrom(
+  db: DatabaseSync,
+  salt: string,
+): CheckinRegistrations {
+  return {
+    walletKey: (wallet) =>
+      isWalletAddress(wallet) ? decodeBase58(wallet) : null,
+    bindingOf: (wallet) => registrationForWallet(db, wallet),
+    bind: (registrationId, wallet, now) => {
+      const bound = bindRegistration(db, salt, registrationId, wallet, now);
+      return bound.ok
+        ? { ok: true, regHash: bound.regHash }
+        : { ok: false, reason: bound.reason };
+    },
+  };
+}
+
+/**
+ * E-06's pass mint on devnet, paid for and signed by the organizer key, at `url` or, when it is
+ * undefined, the public devnet endpoint. The connection is made at the first mint, through
+ * connectDevnet, which refuses any cluster but devnet before anything is sent; a failed
+ * connection is tried again at the next mint. E-06's code and @solana/web3.js load at that first
+ * mint too, so the API starts without them where no check-in mints.
+ */
+export function devnetMinter(
+  url: string | undefined,
+  organizer: OrganizerKey,
+  connect?: (url: string) => Promise<Connection>,
+): PassMinter {
+  let ready: Promise<{
+    mint: (
+      wallet: string,
+      details: Parameters<PassMinter["mint"]>[1],
+    ) => Promise<{ mint: string; signature: string }>;
+  }> | null = null;
+  const prepare = async () => {
+    const { Keypair, PublicKey } = await import("@solana/web3.js");
+    const { connectDevnet, DEVNET_URL, mintPass } =
+      await import("./pass-mint.ts");
+    const connection = await (connect ?? connectDevnet)(url ?? DEVNET_URL);
+    const payer = Keypair.fromSecretKey(organizer.secretKeyBytes());
+    return {
+      mint: async (
+        wallet: string,
+        details: Parameters<PassMinter["mint"]>[1],
+      ) => {
+        const minted = await mintPass(
+          connection,
+          payer,
+          new PublicKey(wallet),
+          details,
+        );
+        return { mint: minted.mint.toBase58(), signature: minted.signature };
+      },
+    };
+  };
+  return {
+    async mint(wallet, details) {
+      ready ??= prepare().catch((err: unknown) => {
+        ready = null;
+        throw err;
+      });
+      return (await ready).mint(wallet, details);
+    },
+  };
 }
 
 export interface CheckinDeps {

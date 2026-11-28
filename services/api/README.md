@@ -88,9 +88,26 @@ Open the address in that file in the station's browser. The tool refuses a path 
 
 The QR text is `limen:station:v1.<payload>.<signer>.<signature>`. `src/station-qr.ts` documents each part, and `verifyStationQr` there accepts a QR only when its signer is on the allowlist, its signature verifies, its payload has exactly the five owed fields, and the verifying time, in milliseconds, is no more than 60 s after `issued_at` and not after `expires_at`. A cut-short QR, one whose `expires_at` is less than `issued_at` + 60, is refused from its `expires_at` on, which is never after its session's end. So no QR verifies at or after the instant its session ends, when the API moves to the next session or, if none follows at once, answers 409. That holds because a session's end cannot move once the session has started, or starts within 60 s, as the seed refuses that. Its caller passes the time as `nowMs`; a missing, NaN or infinite `nowMs` is refused as `invalid_clock`, whatever the QR. At this head only the tests call `verifyStationQr`; the check-in endpoint, E-05 (#45), calls it.
 
-## Check-in (E-05, prep, not wired)
+## Check-in (E-05)
 
-`POST /checkins` takes `{ "qr", "wallet", "registration_id", "signature" }`. The wallet signs the text `checkinMessage()` builds in `src/checkin.ts`. The backend re-verifies the station QR, the session, the wallet's signature and the registration, refuses a second check-in for the same registration in the same session, then mints. Until E-06 (minting) and E-07 (registration binding) land and are wired in, the API answers `503 {"error":"check_in_unavailable"}`. The tests run the flow with stand-ins for those two units.
+`POST /checkins` takes `{ "qr", "wallet", "registration_id", "signature" }`. The wallet signs the text `checkinMessage()` builds in `src/checkin.ts`. The backend checks, in order, and the first failure is the answer:
+
+1. the station QR;
+2. the station, and that its session is still open;
+3. the wallet's signature;
+4. the registration: the wallet's binding, or a first binding of `registration_id`;
+5. that this registration has no check-in yet in this session.
+
+Only then does it mint the pass to the wallet.
+
+The running API uses the real units:
+
+- **Registration binding** is E-07's `bindRegistration` and `registrationForWallet`, under `REGISTRATION_SALT`. Registrations come from `npm run import-registrations`.
+- **Minting** is E-06's `mintPass` on devnet, at `SOLANA_RPC_URL` or the public devnet endpoint. The organizer key pays for it and signs it. The connection is made at the first mint through `connectDevnet`, which refuses any cluster but devnet before anything is sent. A failed mint undoes the check-in and answers `502 {"error":"mint_failed"}`.
+
+With `REGISTRATION_SALT` unset or empty, `POST /checkins` answers `503 {"error":"check_in_unavailable"}`; a set but short salt stops start-up.
+
+The tests use the real binding throughout. Minting spends devnet SOL, so a test whose check-in would succeed passes `mintDouble`, a test double named in `src/checkin.test.ts`, instead.
 
 ## Test
 
@@ -119,4 +136,4 @@ npm test -w @limen/api
 | `src/seed.test.ts`            | The demo seed writes its station and session with the owed Unix times; bad seed files are refused; a seed that would leave two sessions overlapping, or move the end of a session that has started or starts within 60 s, is refused and writes nothing, and back-to-back sessions are allowed                                                                                                                                                                                                          |
 | `src/secret-commands.test.ts` | Every secret command in `.env.example` and the READMEs, for `REGISTRATION_SALT`, `STATION_DISPLAY_TOKEN` and `TRIAGE_TOKEN`, writes a fresh value into `.env` and prints nothing; the start-up error for `STATION_DISPLAY_TOKEN` and the import tool's error for `REGISTRATION_SALT` give the documented command                                                                                                                                                                                        |
 | `src/station-link.test.ts`    | The link tool writes a station's own address and token, mode 600, prints neither the token nor the secret, and refuses a bad station ID, a missing secret, any path inside the repository (a symlinked one, and on macOS one in another letter case, included), a path through a symlink that does not resolve, and an existing file, which it leaves as it was                                                                                                                                         |
-| `src/checkin.test.ts`         | E-05 done test with stand-ins for E-06 and E-07: a second check-in in the same session, a QR older than 60 s and a wallet with no binding are refused with their owed reasons                                                                                                                                                                                                                                                                                                                           |
+| `src/checkin.test.ts`         | E-05 done test on E-07's real binding: a second check-in in the same session, a QR older than 60 s and a wallet with no binding are refused with their owed reasons; the running API refuses with the salted binding and answers 503 without `REGISTRATION_SALT`; the devnet minter refuses a cluster that is not devnet before sending anything; minting otherwise uses the named double `mintDouble`                                                                                                  |
