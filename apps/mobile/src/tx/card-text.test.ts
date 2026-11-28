@@ -67,15 +67,15 @@ describe("E-09 done test: what the transaction card shows", () => {
       {
         label: "Pays a priority fee",
         value:
-          "Your wallet pays a priority fee of up to 0.00007 SOL: 50000 micro-lamports per compute unit, for the runtime's default number of units, at most 1400000.",
+          "Asks your wallet to pay a priority fee of up to 0.00007 SOL: 50000 micro-lamports per compute unit, for the runtime's default number of units, at most 1400000.",
       },
       {
         label: "Sends SOL",
-        value: `4.99 SOL from your wallet to ${attacker}.`,
+        value: `Asks to send 4.99 SOL from your wallet to ${attacker}.`,
       },
       {
         label: "Approves a delegate",
-        value: `${attacker} may move up to 18446744073709551615 base units, the largest allowance a token account can hold, from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
+        value: `Asks to let ${attacker} move up to 18446744073709551615 base units, the largest allowance a token account can hold, from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
       },
     ]);
   });
@@ -273,7 +273,7 @@ describe("transaction card text", () => {
     );
     assert.deepEqual(card.rows[1], {
       label: "Closes a token account",
-      value: `It asks to close ${userTokenAccount} and send its SOL to your wallet.`,
+      value: `Asks to close ${userTokenAccount} and send its SOL to your wallet.`,
     });
   });
 
@@ -289,7 +289,7 @@ describe("transaction card text", () => {
         (row) =>
           row.label === "Sends SOL" &&
           row.value ===
-            `4.99 SOL from your wallet to an address in lookup table ${fixture.keys.lookupTable} (index 1) that limen could not read.`,
+            `Asks to send 4.99 SOL from your wallet to an address in lookup table ${fixture.keys.lookupTable} (index 1) that limen could not read.`,
       ),
     );
     assert.ok(
@@ -364,7 +364,7 @@ describe("transaction card text", () => {
     assert.deepEqual(card.rows[1], {
       label: "Pays a priority fee",
       value:
-        "Your wallet pays a priority fee of 4.9 SOL: 3500000000 micro-lamports per compute unit for 1400000 units.",
+        "Asks your wallet to pay a priority fee of 4.9 SOL: 3500000000 micro-lamports per compute unit for 1400000 units.",
     });
   });
 
@@ -394,7 +394,7 @@ describe("transaction card text", () => {
     });
     assert.deepEqual(card.rows[1], {
       label: "Mints tokens",
-      value: `1000000000000000 base units of mint ${fixture.keys.mint} to token account ${attacker}. Your wallet signs as the mint authority the instruction names.`,
+      value: `Asks to mint 1000000000000000 base units of mint ${fixture.keys.mint} to token account ${attacker}. Your wallet signs as the mint authority the instruction names.`,
     });
   });
 
@@ -457,7 +457,7 @@ describe("transaction card text", () => {
     );
   });
 
-  it("starts the delegate row with a capital when the delegate is the wallet", async () => {
+  it("names the wallet as the delegate inside the row's sentence", async () => {
     const result = await preflight(
       offline,
       transactionOf("drainer: SOL balance out"),
@@ -484,7 +484,7 @@ describe("transaction card text", () => {
     });
     assert.deepEqual(card.rows[1], {
       label: "Approves a delegate",
-      value: `Your wallet may move up to 5 base units from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
+      value: `Asks to let your wallet move up to 5 base units from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
     });
     assert.equal(
       card.status,
@@ -547,17 +547,17 @@ describe("the owner's audit: what the card claims", () => {
     const rows = await rowsFor([approve(LOWER, "5")]);
     assert.deepEqual(rows[1], {
       label: "Approves a delegate",
-      value: `${LOWER} may move up to 5 base units from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
+      value: `Asks to let ${LOWER} move up to 5 base units from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
     });
   });
 
-  it("N4: a delegate in a lookup table limen could not read starts the sentence, its table address as written", async () => {
+  it("N4: names a delegate in a lookup table limen could not read, its table address as written", async () => {
     const rows = await rowsFor([
       { ...approve(attacker, "5"), delegate: { table: LOWER, index: 0 } },
     ]);
     assert.deepEqual(rows[1], {
       label: "Approves a delegate",
-      value: `An address in lookup table ${LOWER} (index 0) that limen could not read may move up to 5 base units from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
+      value: `Asks to let an address in lookup table ${LOWER} (index 0) that limen could not read move up to 5 base units from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
     });
   });
 
@@ -594,7 +594,7 @@ describe("the owner's audit: what the card claims", () => {
         (row) =>
           row.label === "Approves a delegate" &&
           row.value ===
-            `${attacker} may move up to 18446744073709551615 base units, the largest allowance a token account can hold, from your token account ${userTokenAccount}.`,
+            `Asks to let ${attacker} move up to 18446744073709551615 base units, the largest allowance a token account can hold, from your token account ${userTokenAccount}.`,
       ),
     );
   });
@@ -603,7 +603,7 @@ describe("the owner's audit: what the card claims", () => {
     const rows = await rowsFor([approve(attacker, U64)]);
     assert.deepEqual(rows[1], {
       label: "Approves a delegate",
-      value: `${attacker} may move up to ${U64} base units, the largest allowance a token account can hold, from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
+      value: `Asks to let ${attacker} move up to ${U64} base units, the largest allowance a token account can hold, from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
     });
   });
 
@@ -697,39 +697,70 @@ describe("the owner's audit: what the card claims", () => {
         account: { address: userTokenAccount },
         destination: { address: attacker },
       },
+      {
+        kind: "token-out" as const,
+        instruction: 8,
+        program: "token" as const,
+        source: { address: userTokenAccount },
+        destination: { address: attacker },
+        mint: { address: fixture.keys.mint },
+        amount: "2500000",
+        decimals: 6,
+      },
+      {
+        kind: "sol-out" as const,
+        instruction: 9,
+        to: { address: attacker },
+        lamports: "1000000000",
+        reason: "derived-account" as const,
+      },
+    ]);
+    // Every row a decoded effect makes says what the instruction asks.
+    for (const row of rows.slice(1, 11)) {
+      assert.ok(row.value.startsWith("Asks "), row.value);
+    }
+    assert.deepEqual(rows.slice(9, 11), [
+      {
+        label: "Sends tokens",
+        value: `Asks to send 2.5 of mint ${fixture.keys.mint} from token account ${userTokenAccount} to ${attacker}.`,
+      },
+      {
+        label: "Sends SOL",
+        value: `Asks to send 1 SOL from an account derived from your wallet to ${attacker}.`,
+      },
     ]);
     assert.deepEqual(rows.slice(1, 9), [
       {
         label: "Pays to create an account",
-        value: `It asks your wallet to pay 0.005 SOL into new account ${attacker}.`,
+        value: `Asks your wallet to pay 0.005 SOL into new account ${attacker}.`,
       },
       {
         label: "Hands over your wallet account",
-        value: `It asks to assign your wallet account to program ${unknownProgram}, which would then control its SOL.`,
+        value: `Asks to assign your wallet account to program ${unknownProgram}, which would then control its SOL.`,
       },
       {
         label: "Changes an authority",
-        value: `It asks to set no close authority on ${userTokenAccount}. If accepted, the account's owner can still close it.`,
+        value: `Asks to set no close authority on ${userTokenAccount}. If accepted, the account's owner can still close it.`,
       },
       {
         label: "Changes an authority",
-        value: `It asks to set no mint authority on ${userTokenAccount}.`,
+        value: `Asks to set no mint authority on ${userTokenAccount}.`,
       },
       {
         label: "Changes an authority",
-        value: `It asks to set no TransferFeeConfig authority on ${userTokenAccount}.`,
+        value: `Asks to set no TransferFeeConfig authority on ${userTokenAccount}.`,
       },
       {
         label: "Changes an authority",
-        value: `It asks to set the freeze authority of ${userTokenAccount} to ${attacker}.`,
+        value: `Asks to set the freeze authority of ${userTokenAccount} to ${attacker}.`,
       },
       {
         label: "Changes an authority",
-        value: `It asks to set the TransferFeeConfig authority of ${userTokenAccount} to ${attacker}.`,
+        value: `Asks to set the TransferFeeConfig authority of ${userTokenAccount} to ${attacker}.`,
       },
       {
         label: "Closes a token account",
-        value: `It asks to close ${userTokenAccount} and send its SOL to ${attacker}.`,
+        value: `Asks to close ${userTokenAccount} and send its SOL to ${attacker}.`,
       },
     ]);
     const result = await drainerOffline();
@@ -743,7 +774,7 @@ describe("the owner's audit: what the card claims", () => {
     });
     assert.ok(
       nonce.rows.some(
-        (row) => row.value === "It asks to advance a durable nonce.",
+        (row) => row.value === "Asks to advance a durable nonce.",
       ),
     );
     // No row says an instruction is accepted, removes something, or happens.
@@ -771,7 +802,7 @@ describe("the owner's audit: what the card claims", () => {
     ]);
     assert.deepEqual(rows[1], {
       label: "Transfers to the same account",
-      value: `It asks to transfer 5 base units from token account ${userTokenAccount} to itself, which moves no tokens if accepted.`,
+      value: `Asks to transfer 5 base units from token account ${userTokenAccount} to itself, which moves no tokens if accepted.`,
     });
   });
 
@@ -796,11 +827,11 @@ describe("the owner's audit: what the card claims", () => {
     assert.deepEqual(rows.slice(1, 3), [
       {
         label: "Removes any delegate",
-        value: `From token account ${userTokenAccount}. Your wallet signs as the authority the instruction names.`,
+        value: `Asks to remove any delegate from token account ${userTokenAccount}. Your wallet signs as the authority the instruction names.`,
       },
       {
         label: "Burns tokens",
-        value: `5 base units from token account ${userTokenAccount}. Your wallet signs as the authority the instruction names.`,
+        value: `Asks to burn 5 base units from token account ${userTokenAccount}. Your wallet signs as the authority the instruction names.`,
       },
     ]);
   });
@@ -966,11 +997,11 @@ describe("the owner's audit: what the card claims", () => {
     assert.deepEqual(rows.slice(1, 3), [
       {
         label: "Refused by the token program",
-        value: `It asks to remove the owner of token account ${userTokenAccount}, which the Token program refuses, so the transaction would fail.`,
+        value: `Asks to remove the owner of token account ${userTokenAccount}, which the Token program refuses, so the transaction would fail.`,
       },
       {
         label: "Refused by the token program",
-        value: `It asks to close token account ${userTokenAccount} and send its SOL to that same account, which Token-2022 refuses, so the transaction would fail.`,
+        value: `Asks to close token account ${userTokenAccount} and send its SOL to that same account, which Token-2022 refuses, so the transaction would fail.`,
       },
     ]);
   });
@@ -997,11 +1028,11 @@ describe("the owner's audit: what the card claims", () => {
     assert.deepEqual(rows.slice(1, 3), [
       {
         label: "Changes an authority",
-        value: `It asks to set the owner of ${userTokenAccount} to your wallet.`,
+        value: `Asks to set the owner of ${userTokenAccount} to your wallet.`,
       },
       {
         label: "Changes an authority",
-        value: `It asks to set the mint authority of ${fixture.keys.mint} to ${attacker}.`,
+        value: `Asks to set the mint authority of ${fixture.keys.mint} to ${attacker}.`,
       },
     ]);
   });
@@ -1183,19 +1214,19 @@ describe("the owner's audit: what the card claims", () => {
     assert.deepEqual(rows.slice(1, 5), [
       {
         label: "Burns tokens",
-        value: `5 base units from token account ${userTokenAccount}. Your wallet signs as the authority the instruction names.`,
+        value: `Asks to burn 5 base units from token account ${userTokenAccount}. Your wallet signs as the authority the instruction names.`,
       },
       {
         label: "Removes any delegate",
-        value: `From token account ${userTokenAccount}. Your wallet signs as the authority the instruction names.`,
+        value: `Asks to remove any delegate from token account ${userTokenAccount}. Your wallet signs as the authority the instruction names.`,
       },
       {
         label: "Creates a token account",
-        value: `It asks your wallet to pay up to the rent for new token account ${attacker}.`,
+        value: `Asks your wallet to pay up to the rent for new token account ${attacker}.`,
       },
       {
         label: "May create a token account",
-        value: `It asks to create token account ${attacker} if it does not exist yet, with your wallet paying up to its rent.`,
+        value: `Asks to create token account ${attacker} if it does not exist yet, with your wallet paying up to its rent.`,
       },
     ]);
   });

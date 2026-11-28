@@ -44,15 +44,6 @@ function where(place: Place): string {
   return "address" in place ? shown(place.address) : `an ${unread(place)}`;
 }
 
-/**
- * where(), to start a sentence. An address is still shown exactly as
- * written, since base58 is case-sensitive; only the words around it change.
- */
-function whereFirst(place: Place): string {
-  if (!("address" in place)) return `An ${unread(place)}`;
-  return place.address === USER_MARKER ? "Your wallet" : place.address;
-}
-
 /** Whether two places are the same account, as far as the card can tell. */
 function samePlace(a: Place, b: Place): boolean {
   if ("address" in a && "address" in b) return a.address === b.address;
@@ -82,10 +73,10 @@ const AUTHORITY: Readonly<Record<string, string>> = {
 };
 
 /**
- * One row per decoded effect, saying what the instruction asks for: an
- * instruction alone cannot show that it is accepted or what it changes, so a
- * row states an outcome only where the program refuses the request whatever
- * the accounts hold. owned lists the token accounts a read shows
+ * One row per decoded effect, each starting "Asks": an instruction alone
+ * cannot show that it is accepted or what it changes, so a row states an
+ * outcome only where the program refuses the request whatever the accounts
+ * hold. owned lists the token accounts a read shows
  * the wallet owns (Preflight.userTokenAccounts); an instruction alone shows
  * no ownership, so only these are called the wallet's.
  */
@@ -95,19 +86,19 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
       return effect.reason === "create-account"
         ? {
             label: "Pays to create an account",
-            value: `It asks your wallet to pay ${sol(effect.lamports)} into new account ${where(effect.to)}.`,
+            value: `Asks your wallet to pay ${sol(effect.lamports)} into new account ${where(effect.to)}.`,
           }
         : {
             label: "Sends SOL",
             value:
               effect.reason === "derived-account"
-                ? `${sol(effect.lamports)} from an account derived from your wallet to ${where(effect.to)}.`
-                : `${sol(effect.lamports)} from your wallet to ${where(effect.to)}.`,
+                ? `Asks to send ${sol(effect.lamports)} from an account derived from your wallet to ${where(effect.to)}.`
+                : `Asks to send ${sol(effect.lamports)} from your wallet to ${where(effect.to)}.`,
           };
     case "owner-assigned":
       return {
         label: "Hands over your wallet account",
-        value: `It asks to assign your wallet account to program ${effect.newOwner}, which would then control its SOL.`,
+        value: `Asks to assign your wallet account to program ${effect.newOwner}, which would then control its SOL.`,
       };
     case "pays-for-token-account":
       // The wallet pays only what the account lacks of its rent, and an
@@ -115,11 +106,11 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
       return effect.idempotent
         ? {
             label: "May create a token account",
-            value: `It asks to create token account ${where(effect.account)} if it does not exist yet, with your wallet paying up to its rent.`,
+            value: `Asks to create token account ${where(effect.account)} if it does not exist yet, with your wallet paying up to its rent.`,
           }
         : {
             label: "Creates a token account",
-            value: `It asks your wallet to pay up to the rent for new token account ${where(effect.account)}.`,
+            value: `Asks your wallet to pay up to the rent for new token account ${where(effect.account)}.`,
           };
     case "token-out":
       // A transfer to the account it comes from returns before any amount
@@ -128,15 +119,15 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
       if (samePlace(effect.source, effect.destination)) {
         return {
           label: "Transfers to the same account",
-          value: `It asks to transfer ${tokenAmount(effect.amount, effect.decimals)} from token account ${where(effect.source)} to itself, which moves no tokens if accepted.`,
+          value: `Asks to transfer ${tokenAmount(effect.amount, effect.decimals)} from token account ${where(effect.source)} to itself, which moves no tokens if accepted.`,
         };
       }
       return {
         label: "Sends tokens",
-        value: `${tokenAmount(effect.amount, effect.decimals)}${effect.mint === null ? "" : ` of mint ${where(effect.mint)}`} from token account ${where(effect.source)} to ${where(effect.destination)}.`,
+        value: `Asks to send ${tokenAmount(effect.amount, effect.decimals)}${effect.mint === null ? "" : ` of mint ${where(effect.mint)}`} from token account ${where(effect.source)} to ${where(effect.destination)}.`,
       };
     case "delegate-approved": {
-      const who = whereFirst(effect.delegate);
+      const who = where(effect.delegate);
       const from =
         "address" in effect.account && owned.includes(effect.account.address)
           ? `from your token account ${where(effect.account)}.`
@@ -146,8 +137,8 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
         label: "Approves a delegate",
         value:
           effect.amount === U64_MAX
-            ? `${who} may move up to ${U64_MAX} base units, the largest allowance a token account can hold, ${from}`
-            : `${who} may move up to ${tokenAmount(effect.amount, effect.decimals)} ${from}`,
+            ? `Asks to let ${who} move up to ${U64_MAX} base units, the largest allowance a token account can hold, ${from}`
+            : `Asks to let ${who} move up to ${tokenAmount(effect.amount, effect.decimals)} ${from}`,
       };
     }
     case "delegate-revoked":
@@ -157,7 +148,7 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
         label: "Removes any delegate",
         // The delegate itself may revoke (Token-2022), so the account is not
         // said to be the wallet's.
-        value: `From token account ${where(effect.account)}. Your wallet signs as the authority the instruction names.`,
+        value: `Asks to remove any delegate from token account ${where(effect.account)}. Your wallet signs as the authority the instruction names.`,
       };
     case "authority-changed": {
       // A token account always has an owner: both programs refuse to remove
@@ -169,7 +160,7 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
       ) {
         return {
           label: "Refused by the token program",
-          value: `It asks to remove the owner of token account ${where(effect.account)}, which ${programName(effect.program)} refuses, so the transaction would fail.`,
+          value: `Asks to remove the owner of token account ${where(effect.account)}, which ${programName(effect.program)} refuses, so the transaction would fail.`,
         };
       }
       const what =
@@ -181,8 +172,8 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
         label: "Changes an authority",
         value:
           effect.newAuthority === null
-            ? `It asks to set no ${what} on ${where(effect.account)}.${effect.authorityType === "CloseAccount" ? " If accepted, the account's owner can still close it." : ""}`
-            : `It asks to set the ${what} of ${where(effect.account)} to ${shown(effect.newAuthority)}.`,
+            ? `Asks to set no ${what} on ${where(effect.account)}.${effect.authorityType === "CloseAccount" ? " If accepted, the account's owner can still close it." : ""}`
+            : `Asks to set the ${what} of ${where(effect.account)} to ${shown(effect.newAuthority)}.`,
       };
     }
     case "account-closed":
@@ -192,25 +183,25 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
       if (samePlace(effect.account, effect.destination)) {
         return {
           label: "Refused by the token program",
-          value: `It asks to close token account ${where(effect.account)} and send its SOL to that same account, which ${programName(effect.program)} refuses, so the transaction would fail.`,
+          value: `Asks to close token account ${where(effect.account)} and send its SOL to that same account, which ${programName(effect.program)} refuses, so the transaction would fail.`,
         };
       }
       return {
         label: "Closes a token account",
-        value: `It asks to close ${where(effect.account)} and send its SOL to ${where(effect.destination)}.`,
+        value: `Asks to close ${where(effect.account)} and send its SOL to ${where(effect.destination)}.`,
       };
     case "tokens-minted":
       return {
         label: "Mints tokens",
-        value: `${tokenAmount(effect.amount, effect.decimals)} of mint ${where(effect.mint)} to token account ${where(effect.destination)}. Your wallet signs as the mint authority the instruction names.`,
+        value: `Asks to mint ${tokenAmount(effect.amount, effect.decimals)} of mint ${where(effect.mint)} to token account ${where(effect.destination)}. Your wallet signs as the mint authority the instruction names.`,
       };
     case "priority-fee":
       return {
         label: "Pays a priority fee",
         value:
           effect.unitLimit === null
-            ? `Your wallet pays a priority fee of up to ${sol(effect.lamports)}: ${effect.microLamportsPerUnit} micro-lamports per compute unit, for the runtime's default number of units, at most 1400000.`
-            : `Your wallet pays a priority fee of ${sol(effect.lamports)}: ${effect.microLamportsPerUnit} micro-lamports per compute unit for ${effect.unitLimit} units.`,
+            ? `Asks your wallet to pay a priority fee of up to ${sol(effect.lamports)}: ${effect.microLamportsPerUnit} micro-lamports per compute unit, for the runtime's default number of units, at most 1400000.`
+            : `Asks your wallet to pay a priority fee of ${sol(effect.lamports)}: ${effect.microLamportsPerUnit} micro-lamports per compute unit for ${effect.unitLimit} units.`,
       };
     case "tokens-burned":
       return {
@@ -219,7 +210,7 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
         // not the System Program or the incinerator (solana-program/token
         // 38de8d1, program/src/processor.rs:620; token-2022 efe55b4, :1273),
         // which the instruction does not show.
-        value: `${tokenAmount(effect.amount, effect.decimals)} from token account ${where(effect.account)}. Your wallet signs as the authority the instruction names.`,
+        value: `Asks to burn ${tokenAmount(effect.amount, effect.decimals)} from token account ${where(effect.account)}. Your wallet signs as the authority the instruction names.`,
       };
   }
 }
@@ -245,7 +236,7 @@ function otherText(kind: TransactionSummary["others"][number]["kind"]): string {
     case "token-other":
       return "A token program instruction whose details are not shown.";
     case "advance-nonce":
-      return "It asks to advance a durable nonce.";
+      return "Asks to advance a durable nonce.";
     default:
       // The summary keeps an instruction here when it names the wallet
       // neither as its payer nor as its authority; a multisig the wallet
