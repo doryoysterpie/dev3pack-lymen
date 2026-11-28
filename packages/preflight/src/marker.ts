@@ -17,6 +17,14 @@ export const USER_MARKER = "user";
 /** A report writes this, then a number from 1, for each wallet token account. */
 export const USER_TOKEN_ACCOUNT_MARKER = "user token account";
 
+/**
+ * A report writes this, then a number from 1, for each other token account a
+ * token instruction acts on with the wallet as its signing authority, owner
+ * or delegate, where nothing shows the wallet owns it.
+ */
+export const USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER =
+  "user-authorized token account";
+
 /** What scrubAddresses writes in place of an address. */
 export const SCRUBBED = "an address";
 
@@ -24,6 +32,8 @@ export const SCRUBBED = "an address";
 // address inside a longer run is left alone.
 const BASE58_RUN = /[1-9A-HJ-NP-Za-km-z]+/g;
 
+// Keys too: an object the RPC wrote, such as an error, can be keyed by an
+// address.
 function mapStrings<T>(value: T, map: (text: string) => string): T {
   if (typeof value === "string") return map(value) as T;
   if (Array.isArray(value)) {
@@ -31,7 +41,10 @@ function mapStrings<T>(value: T, map: (text: string) => string): T {
   }
   if (typeof value === "object" && value !== null) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, mapStrings(item, map)]),
+      Object.entries(value).map(([key, item]) => [
+        map(key),
+        mapStrings(item, map),
+      ]),
     ) as T;
   }
   return value;
@@ -39,7 +52,7 @@ function mapStrings<T>(value: T, map: (text: string) => string): T {
 
 /**
  * Writes each address's marker in place of the address, in every string of a
- * plain JSON value: strings, arrays and objects, values only, never keys.
+ * plain JSON value, keys included.
  */
 export function withMarkers<T>(
   value: T,
@@ -57,8 +70,8 @@ export function withMarker<T>(value: T, user: string): T {
 
 /**
  * Replaces every address (a base58 run that decodes to 32 bytes) in every
- * string of a plain JSON value with SCRUBBED. For text the RPC wrote, which
- * could name any account.
+ * string of a plain JSON value, keys included, with SCRUBBED. For text the
+ * RPC wrote, which could name any account.
  */
 export function scrubAddresses<T>(value: T): T {
   return mapStrings(value, (text) =>

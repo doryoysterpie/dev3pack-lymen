@@ -29,6 +29,8 @@ export {
 } from "./decode.ts";
 export {
   summarizeTransaction,
+  userAuthorizedTokenAccounts,
+  userTokenAccounts,
   type Effect,
   type Place,
   type Signers,
@@ -87,6 +89,7 @@ export {
   SCRUBBED,
   scrubAddresses,
   USER_MARKER,
+  USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER,
   USER_TOKEN_ACCOUNT_MARKER,
   withMarker,
   withMarkers,

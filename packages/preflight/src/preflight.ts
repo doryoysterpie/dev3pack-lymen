@@ -29,6 +29,7 @@ import { drainPattern } from "./drain.ts";
 import { readUnsetFeePayer, withFeePayer } from "./fee-payer.ts";
 import {
   scrubAddresses,
+  USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER,
   USER_TOKEN_ACCOUNT_MARKER,
   withMarker,
   withMarkers,
@@ -46,6 +47,7 @@ import {
 import { parseLookupTable } from "./state.ts";
 import {
   summarizeTransaction,
+  userAuthorizedTokenAccounts,
   userTokenAccounts,
   type TransactionSummary,
 } from "./summary.ts";
@@ -111,6 +113,12 @@ export type Preflight =
        * report writes "user token account N" for the Nth.
        */
       readonly userTokenAccounts: readonly string[];
+      /**
+       * Other token accounts the decoded instructions act on with the wallet
+       * as signing authority (summary.ts, userAuthorizedTokenAccounts), in
+       * the same order. A report writes "user-authorized token account N".
+       */
+      readonly userAuthorizedTokenAccounts: readonly string[];
     };
 
 export function signBlocks(
@@ -266,7 +274,14 @@ export async function preflight(
       // Like the summary, the changes name the user's wallet by its role.
       changes: withMarker(changes, feePayer),
     };
-    simulatedAt = { slot: result.slot, blockhash: result.replacementBlockhash };
+    // A blockhash is never one of the transaction's own accounts; such a
+    // value from the RPC is not kept.
+    const blockhash =
+      result.replacementBlockhash !== null &&
+      keys.includes(result.replacementBlockhash)
+        ? null
+        : result.replacementBlockhash;
+    simulatedAt = { slot: result.slot, blockhash };
   } catch (error) {
     if (error instanceof RpcError && error.reason === "not-devnet") {
       return { kind: "not-devnet" };
@@ -285,9 +300,13 @@ export async function preflight(
   const order = messageAccounts(transaction.message, tables).map(
     (account) => account.address,
   );
+  const inOrder = (a: string, b: string) => order.indexOf(a) - order.indexOf(b);
   const tokenAccounts = [
     ...new Set([...owned, ...userTokenAccounts(transaction, tables)]),
-  ].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  ].sort(inOrder);
+  const authorizedAccounts = userAuthorizedTokenAccounts(transaction, tables)
+    .filter((address) => !tokenAccounts.includes(address))
+    .sort(inOrder);
   return {
     kind: "ready",
     base64,
@@ -298,6 +317,7 @@ export async function preflight(
     blocks: signBlocks(summary, simulation),
     simulatedAt,
     userTokenAccounts: tokenAccounts,
+    userAuthorizedTokenAccounts: authorizedAccounts,
   };
 }
 
@@ -359,12 +379,16 @@ export type PreflightReport =
 export function toReport(result: Preflight): PreflightReport {
   if (result.kind !== "ready") return result;
   const { feePayerSet, summary, simulation, blocks } = result;
-  const markers = new Map(
-    result.userTokenAccounts.map((address, i) => [
-      address,
-      `${USER_TOKEN_ACCOUNT_MARKER} ${i + 1}`,
-    ]),
-  );
+  const markers = new Map([
+    ...result.userTokenAccounts.map(
+      (address, i) =>
+        [address, `${USER_TOKEN_ACCOUNT_MARKER} ${i + 1}`] as const,
+    ),
+    ...result.userAuthorizedTokenAccounts.map(
+      (address, i) =>
+        [address, `${USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER} ${i + 1}`] as const,
+    ),
+  ]);
   return withMarkers(
     { kind: "ready", feePayerSet, summary, simulation, blocks },
     markers,

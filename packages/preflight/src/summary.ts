@@ -429,6 +429,64 @@ export function userTokenAccounts(
   return found;
 }
 
+/**
+ * The token accounts a decoded token instruction acts on with the user's
+ * wallet as its signing authority (authorizedByUser), owner or delegate: the
+ * source of a transfer, approval or revocation, the account burned from or
+ * closed, and the account whose owner or close authority changes. A report
+ * marks them (preflight.ts, toReport), since the wallet's authority over them
+ * points to the wallet. Addresses only, in the order the instructions name
+ * them, without repeats.
+ */
+export function userAuthorizedTokenAccounts(
+  transaction: ParsedTransaction,
+  tables: LookupTables,
+): string[] {
+  const { message } = transaction;
+  const accounts = messageAccounts(message, tables);
+  const user = message.staticKeys[0];
+  const found: string[] = [];
+  for (const compiled of message.instructions) {
+    const decoded = decodeInstruction(compiled, accounts);
+    let account: Account | null = null;
+    switch (decoded.kind) {
+      case "token-transfer":
+      case "token-approve":
+      case "token-revoke":
+        account = decoded.source;
+        break;
+      case "token-burn":
+      case "token-close-account":
+        account = decoded.account;
+        break;
+      case "token-set-authority":
+        // AccountOwner and CloseAccount are a token account's authorities;
+        // the other types belong to a mint.
+        if (
+          decoded.authorityType === "AccountOwner" ||
+          decoded.authorityType === "CloseAccount"
+        ) {
+          account = decoded.target;
+        }
+        break;
+      default:
+        break;
+    }
+    if (
+      account === null ||
+      !("authorizers" in decoded) ||
+      !authorizedByUser(decoded.authorizers, user)
+    ) {
+      continue;
+    }
+    const address = account.address;
+    if (address !== null && address !== user && !found.includes(address)) {
+      found.push(address);
+    }
+  }
+  return found;
+}
+
 function isZero(signature: Uint8Array): boolean {
   return signature.every((byte) => byte === 0);
 }

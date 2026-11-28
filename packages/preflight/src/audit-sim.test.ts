@@ -446,3 +446,79 @@ describe("audit 6: the rest of the same-run evidence", () => {
     assert.equal(result.drainPattern, false);
   });
 });
+
+describe("audit 9: the report JSON and the blockhash", () => {
+  const offline = () =>
+    jsonRpc(async () => {
+      throw new Error("offline");
+    }, "x");
+
+  it("an offline token transfer the wallet signs does not name its source account", async () => {
+    const result = await preflightTransaction(
+      build([
+        new web3.TransactionInstruction({
+          programId: new web3.PublicKey(TOKEN_PROGRAM),
+          keys: [
+            { pubkey: tokenAccount, isSigner: false, isWritable: true },
+            { pubkey: attacker, isSigner: false, isWritable: true },
+            { pubkey: user, isSigner: true, isWritable: false },
+          ],
+          data: Buffer.from([3, 5, 0, 0, 0, 0, 0, 0, 0]),
+        }),
+      ]),
+      { rpc: offline(), user: USER },
+    );
+    assert.ok(result.summary.kind === "ready");
+    assert.equal(result.summary.simulation.status, "not-run");
+    const json = JSON.stringify(result);
+    assert.equal(json.includes(K.userTokenAccount), false);
+    assert.equal(json.includes(USER), false);
+    const out = result.summary.summary.effects[0];
+    assert.ok(out.kind === "token-out");
+    assert.deepEqual(out.source, {
+      address: "user-authorized token account 1",
+    });
+  });
+
+  it("an error keyed by the wallet's address loses the address", async () => {
+    const result = await preflightTransaction(build([transfer()]), {
+      rpc: recordedRpc({
+        accounts: { [USER]: system(5_000_000_000) as never },
+        simulation: {
+          err: { [USER]: "insufficient funds" },
+          accounts: { [USER]: system(5_000_000_000) as never },
+        },
+      }),
+      user: USER,
+    });
+    assert.equal(JSON.stringify(result).includes(USER), false);
+  });
+
+  it("keeps no replacement blockhash that is an account of the transaction, or not a hash", async () => {
+    const withHash = (replacementBlockhash: string) =>
+      preflightTransaction(build([transfer()]), {
+        rpc: recordedRpc({
+          accounts: { [USER]: system(5_000_000_000) as never },
+          simulation: {
+            err: null,
+            accounts: { [USER]: system(4_999_995_000) as never },
+            slot: 7,
+            replacementBlockhash,
+          },
+        }),
+        user: USER,
+      });
+    assert.deepEqual((await withHash(USER)).simulatedAt, {
+      slot: 7,
+      blockhash: null,
+    });
+    assert.deepEqual((await withHash("not a hash")).simulatedAt, {
+      slot: 7,
+      blockhash: null,
+    });
+    assert.deepEqual((await withHash(K.mint)).simulatedAt, {
+      slot: 7,
+      blockhash: K.mint,
+    });
+  });
+});
