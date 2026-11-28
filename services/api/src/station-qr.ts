@@ -206,6 +206,14 @@ export function issueStationQr(input: {
   };
 }
 
+/** True when `expected` is absent, or is an ID equal to `actual`. */
+function matchesExpected(actual: string, expected: unknown): boolean {
+  if (expected === undefined) return true;
+  return (
+    typeof expected === "string" && ID.test(expected) && actual === expected
+  );
+}
+
 /**
  * Verifies a station QR at Unix time `nowMs`, in milliseconds, against `allowlist`. Checks run
  * in this order and the first failure is the reason: a usable clock (a finite `nowMs`; missing,
@@ -217,9 +225,16 @@ export function verifyStationQr(
   options: {
     allowlist: ReadonlySet<string>;
     nowMs: number;
-    /** The station the caller is at. Required: a QR for any other station is refused. */
-    expectedStation: string;
-    /** When given, a QR for any other session is refused. */
+    /**
+     * The station the caller is at. When given, a QR for any other station is refused, and a
+     * value that is not a station ID matches none. A caller that knows its station must pass
+     * it. A check-in has no station but the QR's own, so it has none to pass.
+     */
+    expectedStation?: string;
+    /**
+     * When given, a QR for any other session is refused, and a value that is not an ID matches
+     * none.
+     */
     expectedSession?: string;
   },
 ): StationQrResult {
@@ -269,18 +284,10 @@ export function verifyStationQr(
 
   const parsed = parsePayload(payload);
   if (parsed === null) return reject("invalid_payload");
-  // A missing or malformed expectedStation matches no station, so every QR is refused.
-  const expectedStation: unknown = options.expectedStation;
-  if (
-    typeof expectedStation !== "string" ||
-    !ID.test(expectedStation) ||
-    parsed.station !== expectedStation
-  )
+  // A given expectedStation or expectedSession that is not an ID matches nothing.
+  if (!matchesExpected(parsed.station, options.expectedStation))
     return reject("wrong_station");
-  if (
-    options.expectedSession !== undefined &&
-    parsed.session !== options.expectedSession
-  )
+  if (!matchesExpected(parsed.session, options.expectedSession))
     return reject("wrong_session");
   const issuedMs = parsed.issued_at * 1000;
   if (options.nowMs < issuedMs - STATION_QR_CLOCK_SKEW_S * 1000)

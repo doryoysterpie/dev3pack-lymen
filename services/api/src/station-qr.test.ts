@@ -489,28 +489,41 @@ test("a QR for another station, or for another session when one is expected, is 
   assert.equal(verdict("st-side", "day-3"), "wrong_station");
 });
 
-test("an expectedStation that is missing or not a station ID refuses every QR as wrong_station", () => {
-  const text = issue();
-  for (const expectedStation of [
-    undefined,
-    "",
-    "st front",
-    "x".repeat(65),
-    7,
-  ]) {
+test("expectedStation and expectedSession are optional: absent, nothing is checked against them; given, each must match, and a given value that is not an ID matches none", () => {
+  const text = issue(); // st-front, day-2
+  const verdict = (options: Record<string, unknown>, at = T) => {
     const r = verifyStationQr(text, {
       allowlist: ALLOWLIST,
-      nowMs: T * 1000,
-      expectedStation,
-    } as unknown as {
+      nowMs: at * 1000,
+      ...options,
+    } as {
       allowlist: ReadonlySet<string>;
       nowMs: number;
-      expectedStation: string;
+      expectedStation?: string;
+      expectedSession?: string;
     });
+    return r.ok ? "ok" : r.reason;
+  };
+  // Absent: the verifier behaves as it did before either option existed.
+  assert.equal(verdict({}), "ok");
+  assert.equal(verdict({ expectedStation: undefined }), "ok");
+  assert.equal(verdict({}, T + 61), "expired");
+  // Given and matching, and given and mismatched.
+  assert.equal(verdict({ expectedStation: "st-front" }), "ok");
+  assert.equal(verdict({ expectedStation: "st-side" }), "wrong_station");
+  assert.equal(verdict({ expectedSession: "day-2" }), "ok");
+  assert.equal(verdict({ expectedSession: "day-3" }), "wrong_session");
+  // Given but not an ID: it matches no station or session.
+  for (const expectedStation of [null, "", "st front", "x".repeat(65), 7])
     assert.equal(
-      r.ok ? "ok" : r.reason,
+      verdict({ expectedStation }),
       "wrong_station",
       String(expectedStation),
     );
-  }
+  for (const expectedSession of [null, "", "day 2", 7])
+    assert.equal(
+      verdict({ expectedSession }),
+      "wrong_session",
+      String(expectedSession),
+    );
 });
