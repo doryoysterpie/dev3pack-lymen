@@ -78,9 +78,10 @@ export interface SimulatedBalances {
 }
 
 /**
- * Why the watched accounts would not cover every account the transaction can
- * write, or null when they do: a writable account behind a lookup table that
- * could not be read, or more writable accounts than MAX_WATCHED.
+ * Why the simulation's evidence would not be complete, or null when it is: a
+ * writable account behind a lookup table that could not be read, any other
+ * address limen could not resolve (so every key of the message is known when
+ * a result is used), or more writable accounts than MAX_WATCHED.
  */
 export function watchProblem(
   user: string,
@@ -90,6 +91,9 @@ export function watchProblem(
     accounts.some((account) => account.writable && account.address === null)
   ) {
     return "a writable account comes from a lookup table limen could not read";
+  }
+  if (accounts.some((account) => account.address === null)) {
+    return "an address comes from a lookup table limen could not read";
   }
   const writable = new Set(
     accounts

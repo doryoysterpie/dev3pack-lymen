@@ -800,7 +800,7 @@ describe("fix check N2: token balances come only with a token program", () => {
     assert.equal(result.drainPattern, false);
   });
 
-  it("an address behind a lookup table limen could not read may be a token program, so the token balances are still owed", async () => {
+  it("an address behind a lookup table limen could not read, which may be a token program, leaves the run unused", async () => {
     const table = new web3.AddressLookupTableAccount({
       key: web3.PublicKey.unique(),
       state: {
@@ -860,7 +860,7 @@ describe("fix check N2: token balances come only with a token program", () => {
     assert.ok(result.summary.kind === "ready");
     assert.deepEqual(result.summary.simulation, {
       status: "not-run",
-      reason: "the simulation's token balances do not match the accounts read",
+      reason: "an address comes from a lookup table limen could not read",
     });
     assert.deepEqual(result.summary.blocks, ["simulation-not-run"]);
   });
@@ -1776,6 +1776,54 @@ describe("re-audit 2, item 3: only an account the program would unpack is a toke
       assert.deepEqual(result.userTokenAccounts, []);
     });
   }
+});
+
+describe("re-audit 2, item 9: any address limen cannot resolve holds signing", () => {
+  it("a read-only address behind a lookup table limen could not read leaves the run unused", async () => {
+    const table = new web3.AddressLookupTableAccount({
+      key: web3.PublicKey.unique(),
+      state: {
+        deactivationSlot: BigInt("18446744073709551615"),
+        lastExtendedSlot: 0,
+        lastExtendedSlotStartIndex: 0,
+        addresses: [attacker],
+      },
+    });
+    const call = new web3.TransactionInstruction({
+      programId: key(K.unknownProgram),
+      keys: [
+        { pubkey: user, isSigner: true, isWritable: true },
+        { pubkey: attacker, isSigner: false, isWritable: false },
+      ],
+      data: Buffer.from([1]),
+    });
+    const message = new web3.TransactionMessage({
+      payerKey: user,
+      recentBlockhash: K.mint,
+      instructions: [call],
+    }).compileToV0Message([table]);
+    assert.equal(message.addressTableLookups.length, 1);
+    assert.deepEqual(message.addressTableLookups[0].writableIndexes, []);
+    const result = await preflightTransaction(
+      new web3.VersionedTransaction(message, [new Uint8Array(64)]).serialize(),
+      {
+        endpoint: recordedEndpoint({
+          accounts: { [USER]: system(5_000_000_000) as never },
+          simulation: {
+            err: null,
+            accounts: { [USER]: system(4_999_995_000) as never },
+          },
+        }),
+        user: USER,
+      },
+    );
+    assert.ok(result.summary.kind === "ready");
+    assert.deepEqual(result.summary.simulation, {
+      status: "not-run",
+      reason: "an address comes from a lookup table limen could not read",
+    });
+    assert.deepEqual(result.summary.blocks, ["simulation-not-run"]);
+  });
 });
 
 describe("audit 9: the report JSON and the blockhash", () => {
