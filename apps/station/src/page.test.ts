@@ -120,112 +120,244 @@ function element(id: string, log: string[]) {
   };
 }
 
+/** The token field and its button: a value, and the listeners the page adds. */
+function control(id: string) {
+  const listeners = new Map<string, ((event: { key?: string }) => void)[]>();
+  return {
+    id,
+    hidden: true,
+    value: "",
+    addEventListener(type: string, fn: (event: { key?: string }) => void) {
+      listeners.set(type, [...(listeners.get(type) ?? []), fn]);
+    },
+    fire(type: string, event: { key?: string } = {}) {
+      for (const fn of listeners.get(type) ?? []) fn(event);
+    },
+  };
+}
+
+/**
+ * Where a page could keep a token across a reload: both storages, cookies, the address and the
+ * history. Each write is recorded, and the storages and cookies keep what is written, so a page
+ * that stored the token would find it again after a reload.
+ */
+function keeper() {
+  const writes: string[] = [];
+  const storage = (name: string) => {
+    const items = new Map<string, string>();
+    return {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        writes.push(`${name}.setItem(${key}, ${value})`);
+        items.set(key, value);
+      },
+      removeItem: (key: string) => {
+        writes.push(`${name}.removeItem(${key})`);
+        items.delete(key);
+      },
+      clear: () => {
+        writes.push(`${name}.clear()`);
+        items.clear();
+      },
+      key: (i: number) => [...items.keys()][i] ?? null,
+      get length() {
+        return items.size;
+      },
+    };
+  };
+  let cookie = "";
+  return {
+    writes,
+    localStorage: storage("localStorage"),
+    sessionStorage: storage("sessionStorage"),
+    getCookie: () => cookie,
+    setCookie: (value: string) => {
+      writes.push(`document.cookie = ${value}`);
+      cookie = value;
+    },
+  };
+}
+type Keeper = ReturnType<typeof keeper>;
+
 let runs = 0;
 
 const INDEX_HTML = readFileSync(
   new URL("../index.html", import.meta.url),
   "utf8",
 );
-/** The inline script that index.html runs first in <head>, as text, or null if it has none. */
-function headScript(): string | null {
-  const m = /<head>\s*<script>([\s\S]*?)<\/script>/.exec(INDEX_HTML);
-  return m?.[1] ?? null;
-}
+const STATION_URL = "http://127.0.0.1:5173/?station=st-front";
+const TOKEN = "station-token-0123456789";
 
 /**
- * Loads main.ts at `href`. `fetchFn` answers the page's requests; it may wait on `clock`. Returns
- * the page's elements, the shared log of what the page did, and the clock.
+ * Loads main.ts at `href`, as a page load does. `fetchFn` answers the page's requests; it may
+ * wait on `clock`. With `token`, the token is typed into the field and the button pressed. Returns
+ * the page's elements, the shared log, the Authorization header of each request, the writes the
+ * page made where a token could be kept, and the window's address.
  */
 async function loadPage(
   href: string,
   fetchFn: (url: string, init?: RequestInit) => Promise<Response>,
   clock: Clock = fakeClock(),
+  options: { token?: string; keep?: Keeper } = {},
 ) {
   const log: string[] = [];
+  const sent: string[] = [];
+  const keep = options.keep ?? keeper();
   const elements = {
     qr: element("qr", log),
     caption: element("caption", log),
     problem: element("problem", log),
+    "token-prompt": control("token-prompt"),
+    token: control("token"),
+    "token-start": control("token-start"),
+  };
+  let address = href;
+  const record = (what: string) => (value: unknown) => {
+    keep.writes.push(`${what}(${String(value)})`);
+    address = String(value);
+  };
+  const location = {
+    get href() {
+      return address;
+    },
+    set href(value: string) {
+      record("location.href =")(value);
+    },
+    assign: record("location.assign"),
+    replace: record("location.replace"),
   };
   const g = globalThis as Record<string, unknown>;
   g.document = {
     getElementById: (id: string) =>
       (elements as Record<string, unknown>)[id] ?? null,
+    get cookie() {
+      return keep.getCookie();
+    },
+    set cookie(value: string) {
+      keep.setCookie(value);
+    },
   };
   g.window = {
-    location: { href },
+    location,
     history: {
-      replaceState: (_state: unknown, _title: string, url: URL | string) =>
-        log.push(`address: ${String(url)}`),
+      replaceState: (_s: unknown, _t: string, url: URL | string) =>
+        record("history.replaceState")(url),
+      pushState: (_s: unknown, _t: string, url: URL | string) =>
+        record("history.pushState")(url),
     },
+    localStorage: keep.localStorage,
+    sessionStorage: keep.sessionStorage,
     fetch: (url: string, init?: RequestInit) => {
       log.push(`fetch: ${url}`);
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      sent.push(headers.authorization ?? "");
       return fetchFn(url, init);
     },
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
     performance: { now: () => clock.now },
   };
-  // As in a browser: index.html's first script runs before the page module loads.
-  const script = headScript();
-  if (script !== null) new Function("window", script)(g.window);
   await import(new URL(`./main.ts?run=${++runs}`, import.meta.url).href);
   await flush();
-  return { elements, log, clock };
+  if (options.token !== undefined) {
+    elements.token.value = options.token;
+    elements["token-start"].fire("click");
+    await flush();
+  }
+  return {
+    elements,
+    log,
+    sent,
+    writes: keep.writes,
+    clock,
+    address: () => address,
+  };
 }
 
 const never = (): Promise<Response> => new Promise(() => {});
 
-test("index.html's first element in <head> is an inline script, not a module", () => {
-  assert.notEqual(headScript(), null, "<head> opens with <script>");
-});
-
-test("the inline script takes the address and removes the token from the address bar, so it is gone even if the page module does not run", () => {
-  const log: string[] = [];
-  const href =
-    "http://127.0.0.1:5173/?station=st-front#token=station-token-0123456789";
-  const win = {
-    location: { href },
-    history: {
-      replaceState: (_state: unknown, _title: string, url: URL | string) =>
-        log.push(`address: ${String(url)}`),
-    },
-  } as Record<string, unknown>;
-  const script = headScript();
-  assert.ok(script !== null);
-  new Function("window", script)(win);
-  // No module ran here, as when its import fails.
-  assert.deepEqual(log, ["address: http://127.0.0.1:5173/?station=st-front"]);
-  assert.equal(win.limenStationAddress, href);
-});
-
-test("the token leaves the address bar before a station error is shown", async () => {
-  for (const href of [
-    "http://127.0.0.1:5173/#token=station-token-0123456789",
-    "http://127.0.0.1:5173/?station=bad%20id#token=station-token-0123456789",
+test("the page asks for the token in a password field with autocomplete off, in no form, and fetches nothing until it is given", async () => {
+  const input = /<input\b[^>]*\bid="token"[^>]*>/.exec(INDEX_HTML)?.[0] ?? "";
+  assert.match(input, /\btype="password"/);
+  assert.match(input, /\bautocomplete="off"/);
+  assert.equal(/<form\b/i.test(INDEX_HTML), false, "no form to submit");
+  for (const press of [
+    (page: Awaited<ReturnType<typeof loadPage>>) =>
+      page.elements["token-start"].fire("click"),
+    (page: Awaited<ReturnType<typeof loadPage>>) =>
+      page.elements.token.fire("keydown", { key: "Enter" }),
   ]) {
-    const { log } = await loadPage(href, never);
-    const address = log.findIndex((l) => l.startsWith("address: "));
-    const problem = log.findIndex((l) => l.startsWith("problem: "));
-    assert.ok(address !== -1, `${href}: the address is rewritten`);
-    assert.ok(!log[address]!.includes("#"), `${href}: the fragment is gone`);
-    assert.ok(problem !== -1 && address < problem, `${href}: before the error`);
+    const page = await loadPage(STATION_URL, never);
+    assert.equal(page.elements["token-prompt"].hidden, false);
+    assert.ok(!page.log.some((l) => l.startsWith("fetch: ")));
+    // An empty field starts nothing.
+    press(page);
+    await flush();
+    assert.deepEqual(page.sent, []);
+    page.elements.token.value = TOKEN;
+    press(page);
+    await flush();
+    assert.equal(page.elements.token.value, "", "the field is cleared");
+    assert.equal(page.elements["token-prompt"].hidden, true);
+    assert.deepEqual(page.sent, [`Bearer ${TOKEN}`]);
   }
 });
 
-test("a valid address also loses its token before the first fetch", async () => {
-  const { log } = await loadPage(
-    "http://127.0.0.1:5173/?station=st-front#token=station-token-0123456789",
-    never,
+test("the token goes in the Authorization header and nowhere else: not the address, the history, a cookie or storage", async () => {
+  const clock = fakeClock();
+  const page = await loadPage(
+    STATION_URL,
+    answering({ qr: signedQr("st-front") }),
+    clock,
+    { token: TOKEN },
   );
-  assert.equal(log[0], "address: http://127.0.0.1:5173/?station=st-front");
-  assert.equal(log[1], "fetch: /api/stations/st-front/qr");
+  await clock.advance(30_000);
+  assert.deepEqual(page.sent, [`Bearer ${TOKEN}`, `Bearer ${TOKEN}`]);
+  assert.deepEqual(page.writes, []);
+  assert.equal(page.address(), STATION_URL);
+  assert.ok(!page.log.some((l) => l.includes(TOKEN)));
+});
+
+test("a reload asks for the token again: the page keeps nothing that lets it start without one", async () => {
+  const keep = keeper();
+  const first = await loadPage(
+    STATION_URL,
+    answering({ qr: signedQr("st-front") }),
+    fakeClock(),
+    { token: TOKEN, keep },
+  );
+  assert.deepEqual(first.sent, [`Bearer ${TOKEN}`]);
+  // The same storages and cookies, as after a reload.
+  const second = await loadPage(
+    STATION_URL,
+    answering({ qr: signedQr("st-front") }),
+    fakeClock(),
+    { keep },
+  );
+  assert.equal(second.elements["token-prompt"].hidden, false);
+  assert.ok(!second.log.some((l) => l.startsWith("fetch: ")));
+});
+
+test("an address with no valid station shows the station error and asks for no token", async () => {
+  for (const href of [
+    "http://127.0.0.1:5173/",
+    "http://127.0.0.1:5173/?station=bad%20id",
+  ]) {
+    const page = await loadPage(href, never);
+    assert.ok(
+      page.log.includes(
+        "problem: Add ?station=<station ID> to the page address.",
+      ),
+      href,
+    );
+    assert.equal(page.elements["token-prompt"].hidden, true, href);
+  }
 });
 
 test("a response carrying another station's genuine QR is refused, not drawn under this station's name", async () => {
   // As in the audit: st-side's genuine QR, labelled st-front by the response.
   const { elements, log } = await loadPage(
-    "http://127.0.0.1:5173/?station=st-front#token=station-token-0123456789",
+    STATION_URL,
     answering({
       qr: signedQr("st-side"),
       station: "st-front",
@@ -235,6 +367,8 @@ test("a response carrying another station's genuine QR is refused, not drawn und
       refresh_after_s: 30,
       expires_in_ms: 60_000,
     }),
+    fakeClock(),
+    { token: TOKEN },
   );
   assert.equal(elements.qr.dataset.qr, undefined, "no QR is drawn");
   assert.ok(log.includes("problem: The API sent a QR for another station."));
@@ -242,8 +376,7 @@ test("a response carrying another station's genuine QR is refused, not drawn und
 });
 
 test("the caption comes from the signed QR's fields, whatever the answer's other fields say, and states the interval, not a countdown", async () => {
-  const href =
-    "http://127.0.0.1:5173/?station=st-front#token=station-token-0123456789";
+  const href = STATION_URL;
   // A full 60 s QR, while the answer's own fields name another station, another session and a
   // 7 s refresh; the caption follows the signed fields.
   const full = signedQr("st-front");
@@ -258,6 +391,8 @@ test("the caption comes from the signed QR's fields, whatever the answer's other
       refresh_after_s: 7,
       expires_in_ms: 20_000,
     }),
+    fakeClock(),
+    { token: TOKEN },
   );
   assert.equal(first.elements.qr.dataset.qr, full);
   assert.equal(
@@ -283,6 +418,8 @@ test("the caption comes from the signed QR's fields, whatever the answer's other
       refresh_after_s: 30,
       expires_in_ms: 60_000,
     }),
+    fakeClock(),
+    { token: TOKEN },
   );
   assert.equal(
     second.elements.caption.textContent,
@@ -306,11 +443,9 @@ test("a QR whose deadline passes while it is being drawn is not revealed", async
         100,
       );
     });
-  const { elements, log } = await loadPage(
-    "http://127.0.0.1:5173/?station=st-front#token=station-token-0123456789",
-    slow,
-    clock,
-  );
+  const { elements, log } = await loadPage(STATION_URL, slow, clock, {
+    token: TOKEN,
+  });
   // Drawing takes until past the deadline.
   const ctx = elements.qr.getContext();
   elements.qr.getContext = () => {
@@ -368,11 +503,9 @@ test("with a 2 s response delay, a QR that expires in transit is not drawn, and 
   };
   const settle = () => new Promise((resolve) => setTimeout(resolve, 100));
   try {
-    const { log } = await loadPage(
-      `http://127.0.0.1:5173/?station=st-front#token=${stationDisplayToken(secret, "st-front")}`,
-      delayed,
-      clock,
-    );
+    const { log } = await loadPage(STATION_URL, delayed, clock, {
+      token: stationDisplayToken(secret, "st-front"),
+    });
     await settle();
     await clock.advance(2000);
     await settle();

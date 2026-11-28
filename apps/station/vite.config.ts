@@ -9,7 +9,7 @@
 //   (src/dev-server.test.ts).
 // - server.fs.deny adds, to Vite 8.3.8's six default entries, which a deny list replaces, the
 //   workspace links in node_modules/@limen (one of them leads to services/api), databases, key
-//   folders and keypair files, link files and .env files, wherever they are.
+//   folders and keypair files, and .env files, wherever they are.
 // - publicDir is false, so no file is copied into the build or served from a public folder.
 // - CORS is off on both servers, so another page on localhost cannot read their answers.
 // - refuseSecretPaths, a middleware ahead of Vite's own on both servers, answers 403 to any
@@ -33,8 +33,6 @@ const SECRET_PATHS = [
   /(^|\/)keys(\/|$)/,
   /keypair[^/]*\.json$/i,
   /(^|\/)id\.json$/,
-  /\.url$/i,
-  /(^|\/)\.station-links(\/|$)/,
 ];
 
 function refuseSecretPaths(): Plugin {
@@ -111,9 +109,7 @@ export default defineConfig(({ mode }) => {
           "**/keys/**",
           "**/*keypair*.json",
           "**/id.json",
-          "**/*.url",
           "**/.env*",
-          "**/.station-links/**",
         ],
       },
     },

@@ -1,8 +1,7 @@
-// E-03: the station page's dev server must not serve a station link file, which holds a
-// display token. The test starts Vite with this app's own vite.config.ts, puts a link file in
-// the repository's .station-links/ folder, where the docs once said to write one, and owes that
-// no request reaches it: by /@fs/ path, with ?raw or ?import&raw, or from another page on
-// localhost.
+// E-03: the station page's dev and preview servers, started with this app's own
+// vite.config.ts, must not serve key, database or repository files. Each test puts uniquely named
+// stand-ins where such files would sit and owes 403 or 404 for them, by /@fs/ path, with ?raw or
+// ?import&raw, or from another page on localhost.
 import assert from "node:assert/strict";
 import {
   existsSync,
@@ -31,47 +30,6 @@ async function freePort(): Promise<number> {
   await new Promise<void>((resolve) => probe.close(() => resolve()));
   return port;
 }
-
-test("the dev server does not serve a link file in the repository's .station-links folder", async () => {
-  const dir = join(REPO, ".station-links");
-  const hadDir = existsSync(dir);
-  mkdirSync(dir, { recursive: true });
-  const name = `dev-server-test-${process.pid}.url`;
-  const file = join(dir, name);
-  writeFileSync(
-    file,
-    `http://127.0.0.1:5173/?station=st-front#token=${MARKER}\n`,
-  );
-  const server = await createServer({
-    configFile: join(APP, "vite.config.ts"),
-    root: APP,
-    logLevel: "silent",
-    server: { port: await freePort(), strictPort: true },
-  });
-  try {
-    await server.listen();
-    const { port } = server.httpServer!.address() as AddressInfo;
-    for (const path of [
-      `/@fs${file}`,
-      `/@fs${file}?raw`,
-      `/@fs${file}?import&raw`,
-    ]) {
-      const res = await fetch(`http://127.0.0.1:${port}${path}`, {
-        headers: { origin: "http://localhost:8081" },
-      });
-      const body = await res.text();
-      assert.ok(
-        res.status === 403 || res.status === 404,
-        `${path} answered ${res.status}`,
-      );
-      assert.ok(!body.includes(MARKER), `${path} served the link file`);
-    }
-  } finally {
-    await server.close();
-    rmSync(file, { force: true });
-    if (!hadDir) rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 test("the dev server refuses a key, database or repository file outside the station app", async () => {
   // Uniquely named stand-ins where the repository keeps secrets and data, each created with flag
@@ -130,7 +88,7 @@ test("the dev server refuses a key, database or repository file outside the stat
   }
 });
 
-test("the dev and preview servers serve no key or database through a workspace link, the station folder or the build, send no CORS header, and open <head> with the inline script, after Vite's client in development", async () => {
+test("the dev and preview servers serve no key or database through a workspace link, the station folder or the build, and send no CORS header", async () => {
   // Stand-ins, each created with flag "wx", so an existing file is not overwritten, and removed
   // afterwards.
   const tag = `dev-server-test-${process.pid}`;
@@ -187,11 +145,6 @@ test("the dev and preview servers serve no key or database through a workspace l
     const page = await get(devPort, "/src/main.ts");
     assert.equal(page.status, 200);
     assert.equal(page.headers.get("access-control-allow-origin"), null);
-    // In development Vite puts its client module ahead of the inline script, and nothing else.
-    assert.match(
-      await (await get(devPort, "/")).text(),
-      /<head>\s*<script type="module" src="\/@vite\/client"><\/script>\s*<script>\s*\/\/ E-03:/,
-    );
 
     await build({ ...config, build: { outDir, emptyOutDir: true } });
     previewServer = await preview({
@@ -210,8 +163,6 @@ test("the dev and preview servers serve no key or database through a workspace l
     const built = await get(previewPort, "/");
     assert.equal(built.status, 200);
     assert.equal(built.headers.get("access-control-allow-origin"), null);
-    // In the build the inline script is the first element in <head>.
-    assert.match(await built.text(), /<head>\s*<script>\s*\/\/ E-03:/);
   } finally {
     await dev.close();
     if (previewServer !== null)

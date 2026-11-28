@@ -9,11 +9,10 @@ import {
   API_VERSION,
   createApiServer,
 } from "../../../services/api/src/server.ts";
-import { stationLink } from "../../../services/api/src/station-link.ts";
+import { stationDisplayToken } from "../../../services/api/src/station-token.ts";
 import {
   fetchStationQr,
-  fragmentParam,
-  readStationConfig,
+  readStationId,
   startRotation,
   type StationQr,
   type StationView,
@@ -181,29 +180,26 @@ test("stop ends the rotation", async () => {
   assert.equal(calls, 1);
 });
 
-test("the page reads its station from ?station= and its token from #token=", () => {
-  assert.deepEqual(
-    readStationConfig("http://localhost:5173/?station=st-front#token=abc"),
-    {
-      station: "st-front",
-      token: "abc",
-    },
-  );
-  assert.deepEqual(readStationConfig("http://localhost:5173/#token=abc"), {
-    error: "Add ?station=<station ID> to the page address.",
+test("the page reads its station from ?station=, and nothing else from the address", () => {
+  assert.deepEqual(readStationId("http://localhost:5173/?station=st-front"), {
+    station: "st-front",
   });
+  // A token in the fragment or the query, as an earlier version took it, is not read.
   assert.deepEqual(
-    readStationConfig("http://localhost:5173/?station=st%20front#token=abc"),
-    {
+    readStationId(
+      "http://localhost:5173/?station=st-front&token=abc#token=abc",
+    ),
+    { station: "st-front" },
+  );
+  for (const href of [
+    "http://localhost:5173/",
+    "http://localhost:5173/#token=abc",
+    "http://localhost:5173/?station=st%20front",
+    `http://localhost:5173/?station=${"x".repeat(65)}`,
+  ])
+    assert.deepEqual(readStationId(href), {
       error: "Add ?station=<station ID> to the page address.",
-    },
-  );
-  assert.deepEqual(
-    readStationConfig("http://localhost:5173/?station=st-front"),
-    {
-      error: "Add #token=<display token> to the page address.",
-    },
-  );
+    });
 });
 
 test("one fetch asks the API for the station's QR with the token and returns its answer", async () => {
@@ -279,22 +275,7 @@ test("each failed fetch becomes the owed message for the screen", async () => {
   }
 });
 
-test("a display token with +, / and = is read from #token= exactly as written", () => {
-  const token = "ab+cd/ef+gh==";
-  assert.deepEqual(
-    readStationConfig(`http://localhost:5173/?station=st-front#token=${token}`),
-    {
-      station: "st-front",
-      token,
-    },
-  );
-  assert.equal(fragmentParam("#token=a%2Bb%2Fc%3D", "token"), "a+b/c=");
-  assert.equal(fragmentParam("#x=1&token=a+b", "token"), "a+b");
-  assert.equal(fragmentParam("#token=a=b=", "token"), "a=b=");
-  assert.equal(fragmentParam("#other=1", "token"), null);
-});
-
-test("a station link from the link tool reaches the real API and gets that station's QR, and the secret itself is refused", async () => {
+test("a station's display token, as the station-token tool derives it, reaches the real API and gets that station's QR, and the secret itself is refused", async () => {
   // RFC 8032 section 7.1, TEST 1: a published Ed25519 test vector, not a real key.
   const signer = {
     publicKey: Buffer.from(
@@ -328,9 +309,10 @@ test("a station link from the link tool reaches the real API and gets that stati
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const config = readStationConfig(stationLink(secret, "st-front"));
-    assert.ok(!("error" in config));
-    const qr = await fetchStationQr(fetch, base, config);
+    const qr = await fetchStationQr(fetch, base, {
+      station: "st-front",
+      token: stationDisplayToken(secret, "st-front"),
+    });
     assert.equal(qr.station, "st-front");
     assert.ok(qr.qr.startsWith("limen:station:v1."));
     // A page given the secret itself, rather than its station's token, is refused.
