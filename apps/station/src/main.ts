@@ -43,7 +43,18 @@ function showRefreshing(): void {
   caption.textContent = "Refreshing the QR. Please wait.";
 }
 
+/** The page's clock: milliseconds since the Unix epoch, read against the QR's signed times. */
+const now = (): number => window.Date.now();
+
+// The timer that clears the shown QR at its deadline, and a count of the renders, so a slow draw
+// that a newer render has overtaken shows nothing.
+let clearing: number | null = null;
+let renders = 0;
+
 function render(view: StationView): void {
+  if (clearing !== null) window.clearTimeout(clearing);
+  clearing = null;
+  const mine = ++renders;
   if (view.kind === "error") {
     showProblem(view.message);
     return;
@@ -59,8 +70,11 @@ function render(view: StationView): void {
     errorCorrectionLevel: "M",
   }).then(
     () => {
-      // Drawing takes time, so the deadline is checked again just before the QR is shown.
-      if (window.performance.now() >= view.deadline) {
+      if (mine !== renders) return;
+      // Drawing takes time, so the clock is read again now: the QR is shown only if its
+      // deadline is still ahead, and the clearing timer is armed for what is left.
+      const left = view.deadline - now();
+      if (left <= 0) {
         showRefreshing();
         return;
       }
@@ -68,8 +82,14 @@ function render(view: StationView): void {
       canvas.hidden = false;
       caption.textContent = captionFor(view);
       problem.hidden = true;
+      clearing = window.setTimeout(() => {
+        clearing = null;
+        showRefreshing();
+      }, left);
     },
-    () => showProblem("This QR could not be drawn."),
+    () => {
+      if (mine === renders) showProblem("This QR could not be drawn.");
+    },
   );
 }
 
@@ -84,7 +104,7 @@ function show(station: string, token: string): void {
         signal,
       ),
     render,
-    now: () => window.performance.now(),
+    now,
     setTimeout: (fn, ms) => window.setTimeout(fn, ms),
     clearTimeout: (handle) => window.clearTimeout(handle as number),
   });

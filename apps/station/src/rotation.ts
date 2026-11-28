@@ -3,15 +3,17 @@
 // fetch clears the QR, shows why, and retries after 5 s; a fetch that takes over 10 s counts as
 // failed. This file has no DOM code, and the tests drive it with fakes.
 //
-// Every time the page acts on comes from the QR's signed payload: issued_at and expires_at, in
-// the API's whole seconds. The answer's other fields are not read. The API signed the QR at some
-// instant in [issued_at, issued_at + 999 ms] on its clock, while the request was out, so on the
-// page's clock the QR expires no earlier than its deadline:
+// Every time the page acts on comes from the QR's signed payload, issued_at and expires_at in the
+// API's whole seconds, read against the page's own clock. That assumes the station's clock
+// agrees with the API's within the verifier's 5 s skew; the page does not check it. The answer's
+// other fields are not read. A QR's deadline is
 //
-//   deadline = sentAt + (expires_at - issued_at) * 1000 - 999
+//   deadline = min(expires_at * 1000, sentAt + (expires_at - issued_at) * 1000)
 //
-// where sentAt is when the request left. A QR already past its deadline when it arrives is not
-// drawn, and a shown QR is cleared at its deadline.
+// where sentAt is when the request left, on the page's clock. A QR whose deadline has passed
+// when it arrives is not drawn, and the next one is fetched at once. The page (main.ts) reads
+// the clock again after drawing a QR, shows it only if its deadline is still ahead, and clears it
+// at its deadline.
 
 /** One QR as the page shows it: the QR text and what its signed payload says. */
 export interface StationQr {
@@ -25,7 +27,7 @@ export interface StationQr {
 export type StationView =
   | ({
       readonly kind: "qr";
-      /** The QR's deadline on the rotation's own clock (RotationDeps.now), in milliseconds. */
+      /** The QR's deadline on the page's clock (RotationDeps.now), in milliseconds. */
       readonly deadline: number;
     } & StationQr)
   | { readonly kind: "error"; readonly message: string }
@@ -39,14 +41,17 @@ export const FETCH_TIMEOUT_MS = 10_000;
 
 /** The deadline of a QR whose request left at `sentAt`; see the comment at the top. */
 export function deadlineOf(sentAt: number, qr: StationQr): number {
-  return sentAt + (qr.expiresAt - qr.issuedAt) * 1000 - 999;
+  return Math.min(
+    qr.expiresAt * 1000,
+    sentAt + (qr.expiresAt - qr.issuedAt) * 1000,
+  );
 }
 
 export interface RotationDeps {
   /** Fetches one QR. The rotation aborts `signal` when the fetch runs past FETCH_TIMEOUT_MS. */
   readonly fetchQr: (signal: AbortSignal) => Promise<StationQr>;
   readonly render: (view: StationView) => void;
-  /** A monotonic clock in milliseconds, such as performance.now(). */
+  /** The page's clock, in milliseconds since the Unix epoch, such as Date.now(). */
   readonly now: () => number;
   readonly setTimeout: (fn: () => void, ms: number) => unknown;
   readonly clearTimeout: (handle: unknown) => void;
@@ -56,15 +61,9 @@ export interface RotationDeps {
 export function startRotation(deps: RotationDeps): { stop: () => void } {
   let stopped = false;
   let timer: unknown = null;
-  let staleTimer: unknown = null;
 
   const schedule = (ms: number): void => {
     if (!stopped) timer = deps.setTimeout(tick, ms);
-  };
-
-  const clearStale = (): void => {
-    if (staleTimer !== null) deps.clearTimeout(staleTimer);
-    staleTimer = null;
   };
 
   async function tick(): Promise<void> {
@@ -89,7 +88,6 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
         deps.clearTimeout(fetchTimer);
       }
       if (stopped) return;
-      clearStale();
       const receivedAt = deps.now();
       const deadline = deadlineOf(sentAt, res);
       if (deadline <= receivedAt) {
@@ -98,10 +96,6 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
         next = 0;
       } else {
         deps.render({ kind: "qr", ...res, deadline });
-        staleTimer = deps.setTimeout(() => {
-          staleTimer = null;
-          if (!stopped) deps.render({ kind: "refreshing" });
-        }, deadline - receivedAt);
         next = Math.max(
           0,
           Math.min(deadline, sentAt + ROTATION_S * 1000) - receivedAt,
@@ -109,7 +103,6 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
       }
     } catch (err) {
       if (stopped) return;
-      clearStale();
       deps.render({
         kind: "error",
         message: err instanceof Error ? err.message : String(err),
@@ -124,7 +117,6 @@ export function startRotation(deps: RotationDeps): { stop: () => void } {
     stop: () => {
       stopped = true;
       if (timer !== null) deps.clearTimeout(timer);
-      clearStale();
     },
   };
 }

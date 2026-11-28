@@ -47,8 +47,8 @@ const answering = (body: unknown) => (): Promise<Response> =>
   );
 
 /** A fake clock: its timers run when the test advances time. */
-function fakeClock() {
-  let now = 0;
+function fakeClock(start = 0) {
+  let now = start;
   let nextId = 1;
   const timers = new Map<number, { at: number; fn: () => void }>();
   return {
@@ -75,11 +75,12 @@ function fakeClock() {
           .sort((a, b) => a[1].at - b[1].at)[0];
         if (due === undefined) break;
         timers.delete(due[0]);
-        now = due[1].at;
+        // A jump during a step is not undone: the clock only moves forward.
+        now = Math.max(now, due[1].at);
         due[1].fn();
         await flush();
       }
-      now = end;
+      now = Math.max(now, end);
       await flush();
     },
   };
@@ -255,7 +256,8 @@ async function loadPage(
     },
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
-    performance: { now: () => clock.now },
+    // The page's clock.
+    Date: { now: () => clock.now },
   };
   await import(new URL(`./main.ts?run=${++runs}`, import.meta.url).href);
   await flush();
@@ -456,6 +458,67 @@ test("a QR whose deadline passes while it is being drawn is not revealed", async
   assert.equal(elements.qr.hidden, true, "the canvas stays hidden");
   assert.equal(elements.qr.dataset.qr, undefined);
   assert.ok(!log.some((l) => l.startsWith("caption: Station")));
+  assert.equal(elements.caption.textContent, "Refreshing the QR. Please wait.");
+});
+
+test("a genuine full-length QR issued 2 minutes ago is not shown", async () => {
+  // The page's clock reads T; the API signed this QR at T - 120 s for its full 60 s.
+  const old = issueStationQr({
+    station: "st-front",
+    session: "day-2",
+    now: T - 120,
+    signer: SIGNER,
+  }).text;
+  const { elements, log } = await loadPage(
+    STATION_URL,
+    answering({ qr: old }),
+    fakeClock(T * 1000),
+    { token: TOKEN },
+  );
+  assert.equal(elements.qr.dataset.qr, undefined, "no QR is drawn");
+  assert.equal(elements.qr.hidden, true);
+  assert.ok(!log.some((l) => l.startsWith("caption: Station")));
+});
+
+test("a slow draw that finishes just before the deadline shows the QR, and clears it at the deadline, read from the clock after the draw", async () => {
+  const clock = fakeClock(T * 1000);
+  const qr = signedQr("st-front"); // signed at T for 60 s
+  // The first answer comes 100 ms after its request; later requests get no answer.
+  let calls = 0;
+  const once = (): Promise<Response> =>
+    calls++ > 0
+      ? never()
+      : new Promise((resolve) => {
+          clock.setTimeout(
+            () =>
+              resolve(
+                new Response(JSON.stringify({ qr }), {
+                  status: 200,
+                  headers: { "content-type": "application/json" },
+                }),
+              ),
+            100,
+          );
+        });
+  const { elements } = await loadPage(STATION_URL, once, clock, {
+    token: TOKEN,
+  });
+  // The request left at T, so the deadline is T + 60 s. The draw takes until 100 ms before it.
+  const ctx = elements.qr.getContext();
+  let drawn = false;
+  elements.qr.getContext = () => {
+    if (!drawn) clock.jump(59_800);
+    drawn = true;
+    return ctx;
+  };
+  await clock.advance(100);
+  assert.equal(clock.now, T * 1000 + 59_900);
+  assert.equal(elements.qr.hidden, false, "shown with 100 ms left");
+  assert.equal(elements.qr.dataset.qr, qr);
+  await clock.advance(99);
+  assert.equal(elements.qr.hidden, false, "still shown 1 ms before");
+  await clock.advance(1);
+  assert.equal(elements.qr.hidden, true, "cleared at the deadline");
   assert.equal(elements.caption.textContent, "Refreshing the QR. Please wait.");
 });
 
