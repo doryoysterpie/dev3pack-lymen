@@ -3,11 +3,13 @@
 // owes that it is not served or not built.
 import assert from "node:assert/strict";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   rmdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -462,5 +464,55 @@ test("a notes.html left in the output folder fails the build, and one added afte
         previewServer!.httpServer.close(() => resolve()),
       );
     rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
+test("the config reads STATION_API_URL alone from .env and the environment: DEBUG=vite:env prints no other variable", () => {
+  // A copy of this app's config in a temporary repository whose .env holds a secret, so no test
+  // writes the repository's own .env.
+  const root = mkdtempSync(join(tmpdir(), "limen-station-env-"));
+  try {
+    const app = join(root, "apps", "station");
+    mkdirSync(app, { recursive: true });
+    for (const name of ["vite.config.ts", "package.json", "index.html"])
+      copyFileSync(join(APP, name), join(app, name));
+    symlinkSync(join(REPO, "node_modules"), join(root, "node_modules"));
+    const secret = `env-secret-${MARKER}`;
+    writeFileSync(
+      join(root, ".env"),
+      `STATION_DISPLAY_TOKEN=${secret}-file\nSTATION_API_URL=http://127.0.0.1:9911\n`,
+    );
+    const r = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import { resolveConfig } from "vite";
+const c = await resolveConfig({ configFile: process.argv[1], root: process.argv[2], logLevel: "silent" }, "serve");
+console.log(c.server.proxy["/api"].target);`,
+        join(app, "vite.config.ts"),
+        app,
+      ],
+      {
+        cwd: APP,
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH ?? "",
+          DEBUG: "vite:env",
+          STATION_DISPLAY_TOKEN: `${secret}-environment`,
+        },
+        timeout: 60_000,
+      },
+    );
+    assert.equal(r.status, 0, `exit: ${r.stderr.slice(-400)}`);
+    assert.equal(r.stdout.trim(), "http://127.0.0.1:9911");
+    assert.match(r.stderr, /vite:env/, "the debug output ran");
+    assert.ok(
+      !r.stderr.includes(secret),
+      "the debug output printed the secret",
+    );
+    assert.ok(!r.stdout.includes(secret));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

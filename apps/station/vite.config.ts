@@ -184,11 +184,9 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const appRoot = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, repoRoot, "");
-  const api =
-    process.env.STATION_API_URL ||
-    env.STATION_API_URL ||
-    "http://127.0.0.1:8787";
+  // The prefix loads STATION_API_URL alone, from the environment or the repository's .env.
+  const env = loadEnv(mode, repoRoot, "STATION_API_URL");
+  const api = env.STATION_API_URL || "http://127.0.0.1:8787";
   const proxy = {
     "/api": {
       target: api,
