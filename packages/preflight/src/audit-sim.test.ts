@@ -1098,6 +1098,74 @@ describe("re-audit A1 and A2: the token balances agree with the run's own accoun
     ));
 });
 
+describe("re-audit A3: recordedRpc's post state agrees with its balances", () => {
+  // A token account left out of simulation.accounts is recorded as
+  // unchanged: its post state and its post balances are both the read's.
+  const recording = {
+    accounts: {
+      [USER]: system(5_000_000_000) as never,
+      [K.userTokenAccount]: tokenState(200, null) as never,
+    },
+    simulation: {
+      err: null,
+      accounts: { [USER]: system(4_999_995_000) as never },
+    },
+  };
+  // A Token Revoke on the wallet's token account: source, then owner.
+  const revokeOwn = () =>
+    build([
+      new web3.TransactionInstruction({
+        programId: new web3.PublicKey(TOKEN_PROGRAM),
+        keys: [
+          { pubkey: tokenAccount, isSigner: false, isWritable: true },
+          { pubkey: user, isSigner: true, isWritable: false },
+        ],
+        data: Buffer.from([5]),
+      }),
+    ]);
+
+  it("returns the read's state for an account left out, as its balances do", async () => {
+    const rpc = recordedRpc(recording);
+    const transaction = encodeBase64(revokeOwn());
+    const simulation = await rpc.simulate(transaction, [
+      USER,
+      K.userTokenAccount,
+    ]);
+    assert.deepEqual(
+      simulation.accounts.map((account) => account?.lamports ?? null),
+      ["4999995000", "2039280"],
+    );
+    assert.deepEqual(
+      simulation.postTokenBalances?.map((balance) => balance.amount),
+      ["200"],
+    );
+  });
+
+  it("so a report lists no token change for it, and no closed account", async () => {
+    const result = await preflightTransaction(revokeOwn(), {
+      rpc: recordedRpc(recording),
+      user: USER,
+    });
+    assert.ok(result.summary.kind === "ready");
+    assert.deepEqual(result.summary.simulation, {
+      status: "ran",
+      err: null,
+      changes: [
+        {
+          kind: "sol",
+          account: "user",
+          before: "5000000000",
+          after: "4999995000",
+          ownerBefore: SYSTEM_PROGRAM,
+          ownerAfter: SYSTEM_PROGRAM,
+          dataLengthBefore: 0,
+          dataLengthAfter: 0,
+        },
+      ],
+    });
+  });
+});
+
 describe("audit 9: the report JSON and the blockhash", () => {
   const offline = () =>
     jsonRpc(async () => {

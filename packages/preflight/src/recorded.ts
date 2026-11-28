@@ -32,7 +32,11 @@ export interface Recording {
   readonly genesisHash?: string;
   /** Account state before the simulation, by address. Absent when left out. */
   readonly accounts: Readonly<Record<string, RecordedAccount | null>>;
-  /** simulateTransaction's value, with its accounts by address. */
+  /**
+   * simulateTransaction's value, with its accounts by address. An address
+   * left out of accounts is recorded as unchanged: its post state is its
+   * state in Recording.accounts, as are its post balances.
+   */
   readonly simulation: {
     readonly err: unknown;
     readonly logs?: readonly string[];
@@ -175,10 +179,8 @@ export function recordedRpc(recording: Recording): Rpc {
             err: recording.simulation.err,
             logs: recording.simulation.logs ?? [],
             unitsConsumed: recording.simulation.unitsConsumed ?? 0,
-            accounts: byAddress(
-              recording.simulation.accounts,
-              options.accounts.addresses,
-            ),
+            // As the balances above: an address left out is unchanged.
+            accounts: options.accounts.addresses.map(post),
             ...balances,
           },
         };
