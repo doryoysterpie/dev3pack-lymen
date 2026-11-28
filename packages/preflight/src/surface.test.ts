@@ -86,7 +86,7 @@ describe("re-audit 2, item 1: no RPC surface but the package's own client", () =
       } as never;
     };
     const used = await preflight(
-      { url: "x", fetch: withMethods } satisfies RpcEndpoint,
+      { url: recorded.url, fetch: withMethods } satisfies RpcEndpoint,
       drainer,
       USER,
     );

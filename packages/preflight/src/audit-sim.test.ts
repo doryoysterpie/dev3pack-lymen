@@ -915,3 +915,90 @@ describe("ruling 20a, item 2: from a failed run limen uses nothing but its error
     });
   }
 });
+
+describe("ruling 20a, item 4: every answer comes from the endpoint, with status 200", () => {
+  const answered = (
+    endpointUrl: string,
+    change: (url: string) => { status?: number; url?: string },
+  ): RpcEndpoint => {
+    const base = recordedEndpoint({
+      accounts: { [USER]: system(10_000_000_000) as never },
+      simulation: { err: null, accounts: {} },
+    });
+    return {
+      url: endpointUrl,
+      fetch: async (url, init) => ({
+        ...(await base.fetch(url, init)),
+        url,
+        ...change(url),
+      }),
+    };
+  };
+  const run = async (endpoint: RpcEndpoint) => {
+    const result = await preflight(
+      endpoint,
+      encodeBase64(build([transfer()])),
+      USER,
+    );
+    assert.ok(result.kind === "ready");
+    return result.simulation;
+  };
+
+  it("refuses an answer that is ok with a status other than 200", async () => {
+    for (const status of [201, 204, 299]) {
+      assert.deepEqual(
+        await run(answered("https://rpc.example/", () => ({ status }))),
+        {
+          status: "not-run",
+          reason: `getGenesisHash: HTTP ${status}`,
+        },
+      );
+    }
+  });
+
+  it("refuses an answer from another URL", async () => {
+    for (const other of [
+      "https://elsewhere.example/",
+      "https://rpc.example/other",
+      "https://rpc.example/?key=1",
+      "",
+    ]) {
+      assert.deepEqual(
+        await run(answered("https://rpc.example/", () => ({ url: other }))),
+        {
+          status: "not-run",
+          reason: "getGenesisHash: the answer came from another address",
+        },
+      );
+    }
+  });
+
+  it("reads an answer from the endpoint, an empty path written as /", async () => {
+    assert.equal(
+      (
+        await run(
+          answered("https://rpc.example", () => ({
+            url: "https://rpc.example/",
+          })),
+        )
+      ).status,
+      "ran",
+    );
+    assert.equal(
+      (await run(answered("https://rpc.example/v1", (url) => ({ url }))))
+        .status,
+      "ran",
+    );
+    assert.deepEqual(
+      await run(
+        answered("https://rpc.example/v1", () => ({
+          url: "https://rpc.example/v1/",
+        })),
+      ),
+      {
+        status: "not-run",
+        reason: "getGenesisHash: the answer came from another address",
+      },
+    );
+  });
+});

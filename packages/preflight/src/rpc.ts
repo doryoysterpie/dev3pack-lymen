@@ -133,6 +133,21 @@ export function readAnswer(answer: unknown): FetchResponse {
   };
 }
 
+/**
+ * A URL as a fetch reports a final URL: without its fragment, and with an
+ * empty path written as "/" (https://rpc.example and https://rpc.example/
+ * are one URL). Nothing else is rewritten, so an endpoint is to be given as
+ * its fetch writes it: a lower-case host, no default port.
+ */
+function asFetched(url: string): string {
+  const hash = url.indexOf("#");
+  const bare = hash < 0 ? url : url.slice(0, hash);
+  const authorityOnly = /^([a-z][a-z0-9+.-]*:\/\/[^/?]*)(\?.*)?$/i.exec(bare);
+  return authorityOnly === null
+    ? bare
+    : `${authorityOnly[1]}/${authorityOnly[2] ?? ""}`;
+}
+
 /** One JSON-RPC call; its result, parsed from the answer's text. */
 async function call(
   endpoint: Required<RpcEndpoint>,
@@ -157,8 +172,18 @@ async function call(
       late,
     ),
   );
-  if (!answer.ok) {
+  // Provenance (the owner's ruling 20a): only a 200 answer from the
+  // endpoint itself is evidence. A fetch follows redirects, and its answer's
+  // url is the final one, so an answer from any other address is refused,
+  // as is one marked ok with another status.
+  if (!answer.ok || answer.status !== 200) {
     throw new RpcError("http", `${method}: HTTP ${answer.status}`);
+  }
+  if (answer.url === "" || asFetched(answer.url) !== asFetched(endpoint.url)) {
+    throw new RpcError(
+      "http",
+      `${method}: the answer came from another address`,
+    );
   }
   let body: unknown;
   try {
