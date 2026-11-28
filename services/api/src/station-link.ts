@@ -2,17 +2,21 @@
 // display token in the fragment, to a file the operator names, and prints only where it wrote
 // it, never the token (rule 8). Open the address in the station's browser.
 //
-// The file must be outside the repository. The station page's dev server serves files from
-// the whole workspace by /@fs/ path, so a link file inside the repository could be read by any
-// page on localhost. The tool resolves symlinks before it checks.
+// The file must be outside the repository, so it never sits where a server or a commit could pick
+// it up. The check resolves symlinks with the operating system's own realpath, compares without
+// letter case on macOS, whose default file system ignores it, and refuses a path that runs
+// through a symlink that does not resolve. The file is created new, never written into an
+// existing one or through a symlink, readable by its owner only.
 //
 //   npm run station-link -w @limen/api -- <station ID> <output file>
 import {
-  chmodSync,
-  existsSync,
+  closeSync,
+  constants,
+  lstatSync,
   mkdirSync,
+  openSync,
   realpathSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
 import {
   basename,
@@ -34,26 +38,51 @@ import {
 export const STATION_PAGE_URL = "http://127.0.0.1:5173/";
 
 const STATION_ID = /^[A-Za-z0-9_-]{1,64}$/;
-const REPOSITORY = realpathSync(
+const REPOSITORY = realpathSync.native(
   fileURLToPath(new URL("../../../", import.meta.url)),
 );
 const INSIDE_REPOSITORY =
   "the link file must be outside the repository, where the station page's dev server cannot serve it.";
+const DANGLING_LINK =
+  "the link file's path holds a symlink that does not resolve; name a path without one.";
+const EXISTS = "the link file already exists; remove it or name another file.";
+// macOS's default file system (APFS) does not tell letter cases apart.
+const IGNORES_CASE = process.platform === "darwin";
 
-/** `path` with symlinks resolved, for a path whose last parts may not exist yet. */
+/** Whether anything, a symlink included, sits at `path`. existsSync follows symlinks. */
+function lexists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `path` with symlinks resolved, for a path whose last parts may not exist yet. Throws when the
+ * deepest part that exists is a symlink that does not resolve.
+ */
 function realPathOf(path: string): string {
   let existing = path;
   const rest: string[] = [];
-  while (!existsSync(existing)) {
+  while (!lexists(existing)) {
     rest.unshift(basename(existing));
     existing = dirname(existing);
   }
-  return join(realpathSync(existing), ...rest);
+  let real: string;
+  try {
+    real = realpathSync.native(existing);
+  } catch {
+    throw new Error(DANGLING_LINK);
+  }
+  return join(real, ...rest);
 }
 
 /** Whether `path` lies inside the repository, symlinks resolved. */
 export function insideRepository(path: string): boolean {
-  const from = relative(REPOSITORY, realPathOf(resolve(path)));
+  const fold = (p: string) => (IGNORES_CASE ? p.toLowerCase() : p);
+  const from = relative(fold(REPOSITORY), fold(realPathOf(resolve(path))));
   return from === "" || (!from.startsWith("..") && !isAbsolute(from));
 }
 const USAGE =
@@ -83,9 +112,27 @@ export function writeStationLink(
   const path = resolve(out);
   if (insideRepository(path)) throw new Error(INSIDE_REPOSITORY);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${stationLink(secret, station)}\n`, { mode: 0o600 });
-  // writeFileSync sets the mode only when it creates the file.
-  chmodSync(path, 0o600);
+  // A new file only: never an existing one, which may be readable by others, nor a symlink.
+  let fd: number;
+  try {
+    fd = openSync(
+      path,
+      constants.O_CREAT |
+        constants.O_EXCL |
+        constants.O_WRONLY |
+        constants.O_NOFOLLOW,
+      0o600,
+    );
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST")
+      throw new Error(EXISTS, { cause: err });
+    throw err;
+  }
+  try {
+    writeSync(fd, `${stationLink(secret, station)}\n`);
+  } finally {
+    closeSync(fd);
+  }
   return `Wrote the display link for station ${station} to ${path}.`;
 }
 
