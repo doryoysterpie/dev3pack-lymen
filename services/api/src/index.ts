@@ -39,6 +39,7 @@ export function listenUrl(host: string, port: number): string {
 /** Starts the API. Throws a configuration error with an operator-readable message. */
 export async function start(
   env: NodeJS.ProcessEnv = process.env,
+  stationPagePath: string = STATION_PAGE_PATH,
 ): Promise<StartedApi> {
   // Loaded first so a bad key file stops start-up before anything else happens.
   const organizerKey = loadOrganizerKey(env.ORGANIZER_KEYPAIR_PATH);
@@ -50,7 +51,7 @@ export async function start(
   const host = env.API_HOST || "127.0.0.1";
   // Read once, here: a symlink or anything but a regular file stops start-up. With no page built,
   // /station answers 503 with the build command.
-  const stationPage = loadStationPage(STATION_PAGE_PATH);
+  const stationPage = loadStationPage(stationPagePath);
   const db = openDatabase(env.DATABASE_PATH || "limen.db");
   // The triage lists load once, here. If they cannot, the API still starts and serves /health,
   // and only the triage routes answer 503 (E-12).

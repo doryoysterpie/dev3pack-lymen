@@ -1,6 +1,8 @@
 // E-03: the station page, one built file the API reads at start-up and serves at /station.
 import assert from "node:assert/strict";
 import {
+  chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -9,12 +11,13 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import type { AddressInfo } from "node:net";
+import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
 import { openDatabase } from "./db.ts";
+import { start } from "./index.ts";
 import { createApiServer } from "./server.ts";
 import { loadStationPage, STATION_PAGE_PATH } from "./station-page.ts";
 import { stationDisplayToken } from "./station-token.ts";
@@ -141,4 +144,65 @@ test("the page is read from a regular file; a symlink, a folder or a symlinked f
     rmSync(dir, { recursive: true, force: true });
   }
   assert.ok(STATION_PAGE_PATH.endsWith("/apps/station/dist/index.html"));
+});
+
+test("a page the API cannot look at stops start-up rather than reading as not built; a page under a file is absent", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "limen-station-page-")));
+  const shut = join(dir, "shut");
+  try {
+    mkdirSync(shut);
+    writeFileSync(join(shut, "index.html"), "page\n");
+    // No search permission on the folder, so lstat fails with EACCES.
+    chmodSync(shut, 0o600);
+    assert.throws(
+      () => loadStationPage(join(shut, "index.html")),
+      /could not be read/,
+    );
+    writeFileSync(join(dir, "file"), "x");
+    assert.equal(loadStationPage(join(dir, "file", "index.html")), null);
+  } finally {
+    chmodSync(shut, 0o700);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("start-up stops on a symlinked station page, before it opens the database or listens", async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "limen-station-page-")));
+  try {
+    const page = join(dir, "page.html");
+    writeFileSync(page, "page\n");
+    const link = join(dir, "index.html");
+    symlinkSync(page, link);
+    // RFC 8032 TEST 1's keypair, as solana-keygen writes one.
+    const key = join(dir, "organizer.json");
+    writeFileSync(
+      key,
+      JSON.stringify([
+        ...Buffer.from(
+          "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60" +
+            "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+          "hex",
+        ),
+      ]),
+    );
+    const probe = createNetServer();
+    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const port = (probe.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    const env = {
+      ORGANIZER_KEYPAIR_PATH: key,
+      STATION_DISPLAY_TOKEN: TEST_STATION_DISPLAY_SECRET,
+      API_PORT: String(port),
+      DATABASE_PATH: join(dir, "limen.db"),
+    };
+    await assert.rejects(
+      start(env, link).then(({ server }) => {
+        server.close();
+      }),
+      /is a symlink/,
+    );
+    assert.ok(!existsSync(join(dir, "limen.db")), "no database was opened");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

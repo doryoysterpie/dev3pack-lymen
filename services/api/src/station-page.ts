@@ -20,20 +20,29 @@ export const STATION_PAGE_PATH = fileURLToPath(
 
 /**
  * The page's bytes, or null when no file is at `path`. Throws when `path` or a folder above it is
- * a symlink, or when it is not a regular file.
+ * a symlink, when it is not a regular file, or when it cannot be looked at.
  */
 export function loadStationPage(path: string): Buffer | null {
   let stat;
   try {
     stat = lstatSync(path);
-  } catch {
-    return null;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    throw new Error(`the station page at ${path} could not be read (${code})`, {
+      cause: err,
+    });
   }
   if (stat.isSymbolicLink() || realpathSync(dirname(path)) !== dirname(path))
     throw new Error(`the station page at ${path} is a symlink, or under one`);
   if (!stat.isFile())
     throw new Error(`the station page at ${path} is not a regular file`);
-  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  // O_NOFOLLOW and O_NONBLOCK: a file swapped for a symlink or a FIFO after the checks above is
+  // refused or does not block start-up; fstat then checks the file opened.
+  const fd = openSync(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
   try {
     if (!fstatSync(fd).isFile())
       throw new Error(`the station page at ${path} is not a regular file`);
