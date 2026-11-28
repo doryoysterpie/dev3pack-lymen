@@ -38,11 +38,7 @@ export {
   type TransactionSummary,
   type Undecoded,
 } from "./summary.ts";
-export {
-  parseLookupTable,
-  parseTokenAccount,
-  type TokenAccount,
-} from "./state.ts";
+export { parseLookupTable } from "./state.ts";
 
 // The package's only RPC is its own JSON-RPC client: a caller gives an
 // endpoint (a URL and a fetch), never an RPC adapter of its own.
@@ -55,13 +51,7 @@ export {
   type FetchResponse,
   type RpcEndpoint,
 } from "./rpc.ts";
-export {
-  balanceChanges,
-  MAX_WATCHED,
-  watchedAddresses,
-  FROM_READ_BEFORE,
-  type BalanceChange,
-} from "./simulate.ts";
+export { type BalanceChange } from "./simulate.ts";
 export {
   forSigning,
   preflight,

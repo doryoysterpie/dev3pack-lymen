@@ -2,21 +2,21 @@
 // threshold. This module is the one definition: E-11's threshold, E-15's
 // claims table and the app's card read it, and the package README states it
 // in words. D-05 names the condition without defining it; the owner adopted
-// this definition as written, its false alarms kept (ruling 7a).
+// this definition with its false alarms kept (ruling 7a), and ruling 20a
+// narrowed it to what limen takes from a simulation: the run's status and the
+// wallet's SOL change from the run's own balances. So 7a's simulated
+// token-sweep clause is gone, and with no account read before the
+// simulation, so is its clause comparing the wallet's and its token
+// accounts' owner, data length, delegate, allowance and close authority with
+// such a read. A token drain inside a program limen does not decode shows
+// only the flagged fallback card; token-sweep evidence returns as H-13.
 //
-// "A simulation that ran without an error" means one the pre-flight used: its
-// amounts come from the simulation's own run (a token account's, when no
-// token program is among the transaction's accounts, is the amount read
-// before, which the transaction cannot change; simulate.ts), and it is not
-// used when it cannot cover every account the transaction writes or when the
-// accounts changed between the reads around it (preflight.ts). Clause 2's
-// values before come from the read before the simulation, not from the run
-// (FROM_READ_BEFORE in simulate.ts), so a change another transaction makes
-// between that read and the simulation counts too. Ownership is taken from
-// the token programs' own authority rule (summary.ts, authorizedByUser).
+// "A simulation that ran without an error" means one the pre-flight used
+// (preflight.ts). Ownership in clause 1 is taken from the token programs' own
+// authority rule (summary.ts, authorizedByUser).
 //
 // A ready report shows a drain pattern when, for the user's wallet (the
-// transaction's fee payer, written "user" in the report), any of these holds:
+// transaction's fee payer, written "user" in the report), either holds:
 //
 // 1. Control handed over, in the decoded instructions: a delegate other than
 //    the wallet approved over one of the wallet's token accounts; the wallet
@@ -24,20 +24,14 @@
 //    account or mint authority moved to an address other than the wallet; or
 //    a token account closed with its SOL sent to an address other than the
 //    wallet.
-// 2. Control handed over, in a simulation that ran without an error: the
-//    wallet account given a new owner program or a different data length; or
-//    a token account the wallet owned given a new delegate other than the
-//    wallet, a raised allowance for a delegate other than the wallet, a new
-//    owner other than the wallet, or a new close authority other than the
-//    wallet.
-// 3. A sweep, in a simulation that ran without an error: the wallet, or a
-//    token account the wallet owned, left with less than a tenth of what it
-//    held, closing included.
+// 2. A sweep of the wallet's SOL, in a simulation that ran without an error:
+//    the wallet left with less than a tenth of the lamports it held, from the
+//    run's own pre and post balances.
 //
 // A request whose fee payer is unset is checked as rebuilt with the user's
 // wallet as fee payer (fee-payer.ts). A malformed transaction, a stop at a
 // non-devnet endpoint, another wallet's transaction, a run with no wallet
-// named, and a payment that leaves each account a tenth or more show no drain
+// named, and a payment that leaves the wallet a tenth or more show no drain
 // pattern.
 
 import { USER_MARKER } from "./marker.ts";
@@ -84,37 +78,9 @@ function swept(before: string, after: string): boolean {
   return had > BigInt(0) && BigInt(after) * BigInt(SWEEP_DIVISOR) < had;
 }
 
-const other = (address: string | null): boolean =>
-  address !== null && address !== USER_MARKER;
-
-/** Clauses 2 and 3, for one simulated change. */
+/** Clause 2, for the wallet's simulated SOL change. */
 export function drainingChange(change: BalanceChange): boolean {
-  if (change.kind === "sol") {
-    const newOwner =
-      change.ownerBefore !== null &&
-      change.ownerAfter !== null &&
-      change.ownerBefore !== change.ownerAfter;
-    const newData = change.dataLengthBefore !== change.dataLengthAfter;
-    return newOwner || newData || swept(change.before, change.after);
-  }
-  const newDelegate =
-    other(change.delegateAfter) &&
-    change.delegateAfter !== change.delegateBefore;
-  const raisedAllowance =
-    other(change.delegateAfter) &&
-    change.delegateAfter === change.delegateBefore &&
-    BigInt(change.delegatedAmountAfter) > BigInt(change.delegatedAmountBefore);
-  const newOwner = other(change.ownerAfter);
-  const newCloseAuthority =
-    other(change.closeAuthorityAfter) &&
-    change.closeAuthorityAfter !== change.closeAuthorityBefore;
-  return (
-    newDelegate ||
-    raisedAllowance ||
-    newOwner ||
-    newCloseAuthority ||
-    swept(change.before, change.after)
-  );
+  return swept(change.before, change.after);
 }
 
 export function drainPattern(report: PreflightReport): boolean {

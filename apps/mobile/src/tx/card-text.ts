@@ -76,11 +76,10 @@ const AUTHORITY: Readonly<Record<string, string>> = {
  * One row per decoded effect, each starting "Asks": an instruction alone
  * cannot show that it is accepted or what it changes, so a row states an
  * outcome only where the program refuses the request whatever the accounts
- * hold. owned lists the token accounts a read shows
- * the wallet owns (Preflight.userTokenAccounts); an instruction alone shows
- * no ownership, so only these are called the wallet's.
+ * hold. limen reads no account (ruling 20a), so no token account is called
+ * the wallet's.
  */
-function effectRow(effect: Effect, owned: readonly string[]): CardRow {
+function effectRow(effect: Effect): CardRow {
   switch (effect.kind) {
     case "sol-out":
       return effect.reason === "create-account"
@@ -128,10 +127,9 @@ function effectRow(effect: Effect, owned: readonly string[]): CardRow {
       };
     case "delegate-approved": {
       const who = where(effect.delegate);
-      const from =
-        "address" in effect.account && owned.includes(effect.account.address)
-          ? `from your token account ${where(effect.account)}.`
-          : `from token account ${where(effect.account)}. Your wallet signs as the owner the instruction names.`;
+      // limen reads no account (ruling 20a), so no token account is called
+      // the wallet's.
+      const from = `from token account ${where(effect.account)}. Your wallet signs as the owner the instruction names.`;
       // The largest u64 is still an allowance each transfer spends down.
       return {
         label: "Approves a delegate",
@@ -245,63 +243,12 @@ function otherText(kind: TransactionSummary["others"][number]["kind"]): string {
   }
 }
 
-// The amounts and a token account's owner after come from the simulation's
-// own run. The other values before come from a read taken before the
-// simulation (FROM_READ_BEFORE), so each row says so instead of calling the
-// difference simulated: another transaction may have made it.
-const READ = "in a read taken before the simulation";
-const orNone = (address: string | null): string =>
-  address === null ? "none" : shown(address);
-
+// The one simulated change a card shows (ruling 20a): the wallet's SOL
+// before and after, from the simulation's own run.
 function changeRow(change: BalanceChange): CardRow {
-  if (change.kind === "sol") {
-    const parts = [`${sol(change.before)} before, ${sol(change.after)} after.`];
-    if (
-      change.ownerBefore !== null &&
-      change.ownerAfter !== null &&
-      change.ownerBefore !== change.ownerAfter
-    ) {
-      parts.push(
-        `Your wallet account's owner program: ${change.ownerBefore} ${READ}, ${change.ownerAfter} after it, which would then control its SOL.`,
-      );
-    }
-    if (change.dataLengthBefore !== change.dataLengthAfter) {
-      parts.push(
-        `Your wallet account's data: ${change.dataLengthBefore} bytes ${READ}, ${change.dataLengthAfter} bytes after it.`,
-      );
-    }
-    return { label: "Your wallet, simulated", value: parts.join(" ") };
-  }
-  const parts = [`${change.before} base units before, ${change.after} after.`];
-  if (change.ownerAfter === null) {
-    parts.push("The account is closed.");
-  } else {
-    if (change.ownerAfter !== USER_MARKER) {
-      parts.push(`Owner after: ${shown(change.ownerAfter)}.`);
-    }
-    if (change.delegateAfter !== change.delegateBefore) {
-      parts.push(
-        change.delegateAfter === null
-          ? `The delegate: ${orNone(change.delegateBefore)} ${READ}, none after it.`
-          : `The delegate: ${orNone(change.delegateBefore)} ${READ}, ${shown(change.delegateAfter)} after it, for up to ${tokenAmount(change.delegatedAmountAfter, null)}.`,
-      );
-    } else if (
-      change.delegateAfter !== null &&
-      change.delegatedAmountAfter !== change.delegatedAmountBefore
-    ) {
-      parts.push(
-        `The allowance of delegate ${shown(change.delegateAfter)}: ${tokenAmount(change.delegatedAmountBefore, null)} ${READ}, ${tokenAmount(change.delegatedAmountAfter, null)} after it.`,
-      );
-    }
-    if (change.closeAuthorityAfter !== change.closeAuthorityBefore) {
-      parts.push(
-        `The close authority: ${orNone(change.closeAuthorityBefore)} ${READ}, ${orNone(change.closeAuthorityAfter)} after it.`,
-      );
-    }
-  }
   return {
-    label: `Your token account ${change.account}, simulated`,
-    value: parts.join(" "),
+    label: "Your wallet, simulated",
+    value: `${sol(change.before)} before, ${sol(change.after)} after.`,
   };
 }
 
@@ -321,11 +268,9 @@ const DRAIN = {
   // ownership, so no account is called the wallet's here.
   decoded:
     "It asks your wallet to give another address control of tokens or accounts.",
-  // Clauses 3 and 2 of the drain pattern (drain.ts), each named. Clause 2's
-  // values before come from a read (FROM_READ_BEFORE), so it is said as a
-  // comparison with that read.
+  // Clause 2 of the drain pattern (drain.ts): the wallet's SOL sweep.
   simulated:
-    "As simulated, your wallet or one of its token accounts would be left with less than a tenth of what it held, or, compared with a read taken before the simulation, would come under another address's control or hold a different amount of data.",
+    "As simulated, your wallet would be left with less than a tenth of the SOL it held.",
 } as const;
 
 // What the simulation adds to a card, said only as far as a result is used.
@@ -334,7 +279,7 @@ function simulated(simulation: SimulationOutcome): string {
     return "No simulation result is used, so no balance change is shown.";
   }
   return simulation.err === null
-    ? "The simulation ran, and the balance changes it found are shown below."
+    ? "The simulation ran, and any change it found to your wallet's SOL is shown below."
     : "The simulation failed, so no balance change is shown.";
 }
 
@@ -416,11 +361,7 @@ export function transactionCardText(
       quoted: true,
     });
   }
-  rows.push(
-    ...summary.effects.map((effect) =>
-      effectRow(effect, result.userTokenAccounts),
-    ),
-  );
+  rows.push(...summary.effects.map((effect) => effectRow(effect)));
   for (const entry of summary.undecoded) {
     rows.push({
       label: "Not decoded",
@@ -486,10 +427,9 @@ export function transactionCardText(
         : drains
           ? `limen flags this transaction: ${lower(DRAIN.simulated)}`
           : simulation.status === "ran" && simulation.err === null
-            ? // limen watches every account the transaction can write, but a
-              // row shows only these (changeRow): SOL that reaches a token
-              // account, or leaves another signer, has no row.
-              "This card shows the changes limen simulated to your wallet's SOL, owner program and data, and to the token amount, delegate, owner and close authority of each token account a read shows your wallet owns. Other changes, such as SOL sent to a token account by another signer, may not be shown."
+            ? // The one simulated change a row shows is the wallet's SOL
+              // (changeRow, ruling 20a).
+              "This card shows the change limen simulated to your wallet's SOL. Other simulated changes, such as tokens moved or SOL sent to a token account by another signer, are not shown."
             : `This card shows what the decoded instructions ask for. ${simulated(simulation)}`,
     rows,
   };

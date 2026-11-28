@@ -4,7 +4,6 @@ import { describe, it } from "node:test";
 
 import {
   decodePublicKey,
-  FROM_READ_BEFORE,
   preflight,
   SYSTEM_PROGRAM,
   TOKEN_PROGRAM,
@@ -122,42 +121,6 @@ describe("E-09 done test: what the transaction card shows", () => {
 });
 
 describe("transaction card text", () => {
-  it("says when the simulation gives the wallet a new owner program", async () => {
-    const rpc = recordedEndpoint({
-      accounts: {
-        [fixture.user]: {
-          lamports: 5_000_000_000,
-          owner: SYSTEM_PROGRAM,
-          data: ["", "base64"],
-        },
-      },
-      simulation: {
-        err: null,
-        accounts: {
-          [fixture.user]: {
-            lamports: 4_999_995_000,
-            owner: unknownProgram,
-            data: ["", "base64"],
-          },
-        },
-      },
-    });
-    const result = await preflight(
-      rpc,
-      transactionOf("unknown program"),
-      fixture.user,
-    );
-    const card = transactionCardText(LINK, null, result);
-    assert.ok(
-      card.rows.some(
-        (row) =>
-          row.label === "Your wallet, simulated" &&
-          row.value ===
-            `5 SOL before, 4.999995 SOL after. Your wallet account's owner program: ${SYSTEM_PROGRAM} in a read taken before the simulation, ${unknownProgram} after it, which would then control its SOL.`,
-      ),
-    );
-  });
-
   it("stops when the connected wallet is not the transaction's fee payer", async () => {
     const result = await preflight(
       offline,
@@ -217,7 +180,7 @@ describe("transaction card text", () => {
           },
         }),
       ),
-      `${lead} The simulation ran, and the balance changes it found are shown below.`,
+      `${lead} The simulation ran, and any change it found to your wallet's SOL is shown below.`,
     );
     assert.equal(
       await statusWith(
@@ -261,7 +224,6 @@ describe("transaction card text", () => {
         status: "ran" as const,
         err: null,
         changes: [],
-        fromReadBefore: FROM_READ_BEFORE,
       },
       blocks: [],
     };
@@ -269,7 +231,7 @@ describe("transaction card text", () => {
     assert.equal(card.tone, "neutral");
     assert.equal(
       card.status,
-      "This card shows the changes limen simulated to your wallet's SOL, owner program and data, and to the token amount, delegate, owner and close authority of each token account a read shows your wallet owns. Other changes, such as SOL sent to a token account by another signer, may not be shown.",
+      "This card shows the change limen simulated to your wallet's SOL. Other simulated changes, such as tokens moved or SOL sent to a token account by another signer, are not shown.",
     );
     assert.deepEqual(card.rows[1], {
       label: "Closes a token account",
@@ -411,8 +373,10 @@ describe("transaction card text", () => {
         },
         simulation: {
           err: null,
+          // Ruling 20a: the drain pattern a run shows is the wallet's SOL
+          // sweep, from the run's own balances.
           accounts: {
-            [fixture.user]: walletAccount(4_999_995_000, unknownProgram),
+            [fixture.user]: walletAccount(400_000_000, SYSTEM_PROGRAM),
           },
         },
       }),
@@ -422,7 +386,7 @@ describe("transaction card text", () => {
     const card = transactionCardText(LINK, null, result);
     assert.equal(
       card.status,
-      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation ran, and the balance changes it found are shown below. As simulated, your wallet or one of its token accounts would be left with less than a tenth of what it held, or, compared with a read taken before the simulation, would come under another address's control or hold a different amount of data.",
+      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation ran, and any change it found to your wallet's SOL is shown below. As simulated, your wallet would be left with less than a tenth of the SOL it held.",
     );
   });
 
@@ -559,44 +523,6 @@ describe("the owner's audit: what the card claims", () => {
       label: "Approves a delegate",
       value: `Asks to let an address in lookup table ${LOWER} (index 0) that limen could not read move up to 5 base units from token account ${userTokenAccount}. Your wallet signs as the owner the instruction names.`,
     });
-  });
-
-  it("A8: says your token account only when a read shows the wallet owns it", async () => {
-    const tokenData = new Uint8Array(165);
-    tokenData.set(decodePublicKey(fixture.keys.mint) ?? new Uint8Array(32), 0);
-    tokenData.set(decodePublicKey(fixture.user) ?? new Uint8Array(32), 32);
-    tokenData[64] = 200;
-    tokenData[108] = 1;
-    const result = await preflight(
-      recordedEndpoint({
-        accounts: {
-          [fixture.user]: {
-            lamports: 5_000_000_000,
-            owner: SYSTEM_PROGRAM,
-            data: ["", "base64"],
-          },
-          [userTokenAccount]: {
-            lamports: 2_039_280,
-            owner: TOKEN_PROGRAM,
-            data: [Buffer.from(tokenData).toString("base64"), "base64"],
-          },
-        },
-        simulation: { err: null, accounts: {} },
-      }),
-      transactionOf("drainer: SOL balance out"),
-      fixture.user,
-    );
-    assert.ok(result.kind === "ready");
-    assert.deepEqual(result.userTokenAccounts, [userTokenAccount]);
-    const card = transactionCardText(LINK, null, result);
-    assert.ok(
-      card.rows.some(
-        (row) =>
-          row.label === "Approves a delegate" &&
-          row.value ===
-            `Asks to let ${attacker} move up to 18446744073709551615 base units, the largest allowance a token account can hold, from your token account ${userTokenAccount}.`,
-      ),
-    );
   });
 
   it("1: the largest allowance is not called unlimited", async () => {
@@ -836,37 +762,12 @@ describe("the owner's audit: what the card claims", () => {
     ]);
   });
 
-  it("A9: a change in the wallet's data length alone is named in the headline", async () => {
-    const wallet = (lamports: number, length: number) => ({
-      lamports,
-      owner: SYSTEM_PROGRAM,
-      data: [Buffer.alloc(length).toString("base64"), "base64"] as const,
-    });
-    const result = await preflight(
-      recordedEndpoint({
-        accounts: { [fixture.user]: wallet(5_000_000_000, 0) },
-        simulation: {
-          err: null,
-          accounts: { [fixture.user]: wallet(4_990_000_000, 64) },
-        },
-      }),
-      transactionOf("unknown program"),
-      fixture.user,
-    );
-    const card = transactionCardText(LINK, null, result);
-    assert.equal(
-      card.status,
-      "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation ran, and the balance changes it found are shown below. As simulated, your wallet or one of its token accounts would be left with less than a tenth of what it held, or, compared with a read taken before the simulation, would come under another address's control or hold a different amount of data.",
-    );
-  });
-
   it("10: a decoded hand-over with a failed run says the run failed", async () => {
     const result = await drainerOffline();
     const failed = {
       status: "ran" as const,
       err: { InstructionError: [1, "Custom"] },
       changes: [],
-      fromReadBefore: FROM_READ_BEFORE,
     };
     const card = transactionCardText(LINK, null, {
       ...result,
@@ -896,84 +797,6 @@ describe("the owner's audit: what the card claims", () => {
       fallback.status,
       "limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. The simulation failed, so no balance change is shown. It asks your wallet to give another address control of tokens or accounts.",
     );
-  });
-
-  it("A2: each change row says which values come from a read before the simulation", async () => {
-    const result = await drainerOffline();
-    const token = (change: Record<string, unknown>) => ({
-      kind: "token" as const,
-      account: userTokenAccount,
-      mint: fixture.keys.mint,
-      before: "200",
-      after: "200",
-      delegateBefore: null,
-      delegateAfter: null,
-      delegatedAmountBefore: "0",
-      delegatedAmountAfter: "0",
-      ownerAfter: "user",
-      closeAuthorityBefore: null,
-      closeAuthorityAfter: null,
-      ...change,
-    });
-    const card = transactionCardText(LINK, null, {
-      ...result,
-      simulation: {
-        status: "ran" as const,
-        err: null,
-        fromReadBefore: FROM_READ_BEFORE,
-        changes: [
-          {
-            kind: "sol" as const,
-            account: "user",
-            before: "5000000000",
-            after: "4990000000",
-            ownerBefore: SYSTEM_PROGRAM,
-            ownerAfter: SYSTEM_PROGRAM,
-            dataLengthBefore: 0,
-            dataLengthAfter: 64,
-          },
-          token({
-            delegateAfter: attacker,
-            delegatedAmountAfter: "100",
-            closeAuthorityAfter: attacker,
-          }),
-          token({
-            delegateBefore: attacker,
-            delegateAfter: attacker,
-            delegatedAmountBefore: "5",
-            delegatedAmountAfter: "100",
-          }),
-          token({
-            delegateBefore: attacker,
-            delegatedAmountBefore: "5",
-            closeAuthorityBefore: attacker,
-          }),
-        ],
-      },
-      blocks: [],
-    });
-    const simulated = card.rows.filter((row) =>
-      row.label.endsWith("simulated"),
-    );
-    assert.deepEqual(simulated, [
-      {
-        label: "Your wallet, simulated",
-        value:
-          "5 SOL before, 4.99 SOL after. Your wallet account's data: 0 bytes in a read taken before the simulation, 64 bytes after it.",
-      },
-      {
-        label: `Your token account ${userTokenAccount}, simulated`,
-        value: `200 base units before, 200 after. The delegate: none in a read taken before the simulation, ${attacker} after it, for up to 100 base units. The close authority: none in a read taken before the simulation, ${attacker} after it.`,
-      },
-      {
-        label: `Your token account ${userTokenAccount}, simulated`,
-        value: `200 base units before, 200 after. The allowance of delegate ${attacker}: 5 base units in a read taken before the simulation, 100 base units after it.`,
-      },
-      {
-        label: `Your token account ${userTokenAccount}, simulated`,
-        value: `200 base units before, 200 after. The delegate: ${attacker} in a read taken before the simulation, none after it. The close authority: ${attacker} in a read taken before the simulation, none after it.`,
-      },
-    ]);
   });
 
   it("hunt: a row the token program always refuses says it would fail", async () => {
@@ -1162,12 +985,11 @@ describe("the owner's audit: what the card claims", () => {
     );
     assert.ok(result.kind === "ready");
     assert.equal(result.simulation.status, "ran");
-    assert.deepEqual(result.userTokenAccounts, [userTokenAccount]);
     const card = transactionCardText(LINK, null, result);
     assert.equal(card.tone, "neutral");
     assert.equal(
       card.status,
-      "This card shows the changes limen simulated to your wallet's SOL, owner program and data, and to the token amount, delegate, owner and close authority of each token account a read shows your wallet owns. Other changes, such as SOL sent to a token account by another signer, may not be shown.",
+      "This card shows the change limen simulated to your wallet's SOL. Other simulated changes, such as tokens moved or SOL sent to a token account by another signer, are not shown.",
     );
     // The fee is the only change shown; the token account's new SOL is not.
     assert.deepEqual(

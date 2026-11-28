@@ -196,42 +196,41 @@ describe("E-09 done test: the drainer pre-flight", () => {
     });
     assert.deepEqual(result.simulation, {
       status: "ran",
-      fromReadBefore: [
-        "ownerBefore",
-        "dataLengthBefore",
-        "delegateBefore",
-        "delegatedAmountBefore",
-        "closeAuthorityBefore",
-      ],
       err: null,
       changes: [
+        // Ruling 20a: only the wallet's SOL, from the run's own balances.
+        // The token account's simulated delegate is no longer listed; the
+        // delegate approved is the decoded effect above.
         {
           kind: "sol",
           account: "user",
           before: "5000000000",
           after: "9995000",
-          ownerBefore: SYSTEM_PROGRAM,
-          ownerAfter: SYSTEM_PROGRAM,
-          dataLengthBefore: 0,
-          dataLengthAfter: 0,
-        },
-        {
-          kind: "token",
-          account: USER_TOKEN_ACCOUNT,
-          mint: MINT,
-          before: "1000",
-          after: "1000",
-          delegateBefore: null,
-          delegateAfter: ATTACKER,
-          delegatedAmountBefore: "0",
-          delegatedAmountAfter: U64_MAX,
-          ownerAfter: "user",
-          closeAuthorityBefore: null,
-          closeAuthorityAfter: null,
         },
       ],
     });
     assert.deepEqual(result.blocks, []);
+  });
+
+  it("ruling 20a: asks for no account but the lookup tables, and takes the wallet's SOL from the run", async () => {
+    const legacy = observed(drainerRpc());
+    ready(await preflight(legacy.endpoint, drainer.transaction, USER));
+    assert.deepEqual(legacy.methods, ["getGenesisHash", "simulateTransaction"]);
+    // The v0 drainer reads its lookup table, which decoding needs, and
+    // nothing else.
+    const v0 = observed(drainerRpc());
+    const result = ready(
+      await preflight(v0.endpoint, drainerV0.transaction, USER),
+    );
+    assert.deepEqual(v0.methods, [
+      "getGenesisHash",
+      "getMultipleAccounts",
+      "simulateTransaction",
+    ]);
+    assert.ok(result.simulation.status === "ran");
+    assert.deepEqual(result.simulation.changes, [
+      { kind: "sol", account: "user", before: "5000000000", after: "9995000" },
+    ]);
   });
 
   it("loads lookup tables through the RPC, so the v0 drainer names the attacker", async () => {

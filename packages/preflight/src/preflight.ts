@@ -1,15 +1,19 @@
 // Transaction-request pre-flight (E-09): decode, simulate, and decide whether
-// signing may go ahead. The network is reached only through the Rpc given.
+// signing may go ahead. The network is reached only through the package's own
+// JSON-RPC client, at the endpoint given.
 //
 // Whose wallet: the caller names the user's wallet, and limen pre-flights
 // only transactions that wallet pays the fee for. With no wallet named, or
 // another wallet as fee payer, the pre-flight stops and yields no summary. The
-// summary and the balance changes write the role marker "user" in place of the
-// wallet's address; a report also writes "user token account N" for the
-// wallet's token accounts and has every address scrubbed from the text the RPC
-// wrote (marker.ts). So the app and a server produce the same report for the
-// same bytes, and a report names neither the wallet nor a token account limen
-// found to be its own.
+// summary and the balance change write the role marker "user" in place of the
+// wallet's address; a report also marks the other accounts named in
+// instructions the wallet signs and has every address scrubbed from the text
+// the RPC wrote (marker.ts). So the app and a server produce the same report
+// for the same bytes.
+//
+// From a simulation, limen takes only the run's status and the wallet's SOL
+// change, from the run's own balances (the owner's ruling 20a): it reads no
+// account before or after the run, only the lookup tables decoding needs.
 //
 // Signing follows the Solana Pay specification (solana-foundation/pay
 // 8e1b87c, "POST Response"). The wallet signs only when its signature is
@@ -33,7 +37,6 @@ import {
   USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER,
   WALLET_SIGNED_ACCOUNT_MARKER,
   USER_MARKER,
-  USER_TOKEN_ACCOUNT_MARKER,
   withMarker,
   withMarkers,
 } from "./marker.ts";
@@ -47,12 +50,7 @@ import {
   type RpcEndpoint,
 } from "./rpc.ts";
 import {
-  balanceChanges,
-  FROM_READ_BEFORE,
-  runEvidenceProblem,
-  ownedTokenAccounts,
-  unchangedBetween,
-  watchedAddresses,
+  walletSolChange,
   watchProblem,
   type BalanceChange,
 } from "./simulate.ts";
@@ -76,12 +74,11 @@ export type SimulationOutcome =
       readonly status: "ran";
       /** The runtime error the simulation reported, or null. */
       readonly err: unknown;
-      readonly changes: readonly BalanceChange[];
       /**
-       * Always FROM_READ_BEFORE (simulate.ts): the fields of the changes
-       * taken from a read before the simulation, not simulated.
+       * The wallet's SOL change, from the run's own balances (simulate.ts);
+       * none when the run failed or left the wallet's SOL as it was.
        */
-      readonly fromReadBefore: typeof FROM_READ_BEFORE;
+      readonly changes: readonly BalanceChange[];
     }
   | { readonly status: "not-run"; readonly reason: string };
 
@@ -127,19 +124,12 @@ export type Preflight =
       readonly blocks: readonly SignBlock[];
       readonly simulatedAt: SimulatedAt | null;
       /**
-       * The wallet's token accounts, in the message's account order: those
-       * the read before the simulation shows it owns. A report writes "user
-       * token account N" for the Nth, and the card says "your token account"
-       * only for these.
-       */
-      readonly userTokenAccounts: readonly string[];
-      /**
-       * Other token accounts the decoded instructions name as the wallet's
+       * Token accounts the decoded instructions name as the wallet's
        * (summary.ts, userTokenAccounts) or act on with the wallet as signing
-       * authority (summary.ts, userAuthorizedTokenAccounts), and those only
-       * the simulation's state after shows the wallet owns, in the same
-       * order: neither an instruction nor the run alone is a read that shows
-       * ownership. A report writes "user-authorized token account N".
+       * authority, or that a wallet-signed transfer sends to
+       * (userAuthorizedTokenAccounts), in the message's account order. limen
+       * reads no account (ruling 20a), so none is shown to be the wallet's.
+       * A report writes "user-authorized token account N".
        */
       readonly userAuthorizedTokenAccounts: readonly string[];
       /**
@@ -154,9 +144,8 @@ export type Preflight =
        * SOL or token transfer's destination, a delegate, a new authority, a
        * close's or a mint's destination, a new owner program), in the
        * effects' order, from the unmarked decode (bundleLists). It leaves out
-       * the wallet and the token accounts a read shows it owns, and an
-       * address behind a lookup table limen could not read, which is not
-       * known. A report (toReport) never holds it: a report marks every
+       * the wallet, and an address behind a lookup table limen could not
+       * read, which is not known. A report (toReport) never holds it: a report marks every
        * account a wallet-signed instruction names, these included.
        */
       readonly recipients: readonly string[];
@@ -281,13 +270,6 @@ export async function preflight(
   let tables: LookupTables = new Map();
   let simulation: SimulationOutcome;
   let simulatedAt: SimulatedAt | null = null;
-  let owned: string[] = [];
-  // Token accounts only the simulation's state after shows the wallet owns,
-  // such as one the transaction creates: no read confirms them.
-  let ownedAfterOnly: string[] = [];
-  // Whether the accounts were read before the simulation; with no read,
-  // nothing shows which token accounts are the wallet's.
-  let read = false;
   try {
     // The package's own JSON-RPC client is the only RPC (rpc.ts).
     const rpc = jsonRpc(endpoint);
@@ -299,27 +281,17 @@ export async function preflight(
     // The simulation is used only when its evidence covers every account the
     // transaction can write and belongs to this transaction alone; otherwise
     // it is marked not used, which holds signing (signBlocks).
-    const unwatched = watchProblem(feePayer, accounts);
-    if (unwatched !== null) throw new Error(unwatched);
-    const watched = watchedAddresses(feePayer, accounts);
-    const before = await rpc.getAccounts(watched);
-    read = true;
-    owned = ownedTokenAccounts(feePayer, watched, before, []);
-    const result = await rpc.simulate(base64, watched);
+    const unresolved = watchProblem(accounts);
+    if (unresolved !== null) throw new Error(unresolved);
+    // limen reads no account before or after the run (ruling 20a): it asks
+    // for none, and takes the wallet's SOL from the run's own balances.
+    const result = await rpc.simulate(base64);
     const err = result.err;
-    if (result.accounts.length !== watched.length) {
-      throw new Error(
-        `the simulation returned ${result.accounts.length} accounts for the ${watched.length} asked`,
-      );
-    }
     const keys = accounts.map((account) => account.address);
-    const { preBalances, postBalances, preTokenBalances, postTokenBalances } =
-      result;
+    const { preBalances, postBalances } = result;
     if (
       preBalances === null ||
       postBalances === null ||
-      preTokenBalances === null ||
-      postTokenBalances === null ||
       preBalances.length !== keys.length ||
       postBalances.length !== keys.length
     ) {
@@ -327,51 +299,16 @@ export async function preflight(
         "the simulation did not return the balances of its own run",
       );
     }
-    const balances = {
-      keys,
-      pre: preBalances,
-      post: postBalances,
-      preToken: preTokenBalances,
-      postToken: postTokenBalances,
-    };
-    // A clean run's evidence must agree with itself for every account it
-    // returns, or no result is used (simulate.ts, runEvidenceProblem). A
-    // failed run returns every account as null and lists no change (below).
-    if (err === null) {
-      const problem = runEvidenceProblem(watched, result.accounts, balances);
-      if (problem !== null) throw new Error(problem);
-    }
-    // The amounts come from the simulation's own run, except a token
-    // account's in a transaction with no token program, which cannot change
-    // (simulate.ts, balanceChanges). The other fields come from the read
-    // before it, which a second read must confirm, so a change another
-    // transaction made in between is not taken for this one's.
-    const again = await rpc.getAccounts(watched);
-    if (!unchangedBetween(before, again)) {
-      throw new Error(
-        "an account limen watches changed on devnet during the check",
-      );
-    }
-    ownedAfterOnly = ownedTokenAccounts(
-      feePayer,
-      watched,
-      [],
-      result.accounts,
-    ).filter((address) => !owned.includes(address));
     // A run that failed returns every account as null (anza-xyz/agave
     // a64fa73, rpc/src/rpc.rs:3554 and :3555), which shows nothing the
     // transaction would do, so a failed run lists no change.
     const changes =
-      err === null
-        ? balanceChanges(feePayer, watched, before, result.accounts, balances)
-        : [];
+      err === null ? walletSolChange(USER_MARKER, preBalances, postBalances) : [];
     simulation = {
       status: "ran",
       // The runtime's error, with any address the RPC wrote into it scrubbed.
       err: scrubAddresses(err),
-      // Like the summary, the changes name the user's wallet by its role.
-      changes: withMarker(changes, feePayer),
-      fromReadBefore: FROM_READ_BEFORE,
+      changes,
     };
     // A blockhash is 32 bytes, and never one of the transaction's own
     // accounts; any other value from the RPC is not kept.
@@ -396,28 +333,20 @@ export async function preflight(
     (account) => account.address,
   );
   const inOrder = (a: string, b: string) => order.indexOf(a) - order.indexOf(b);
-  // The wallet's token accounts are those a read shows it owns. An
-  // instruction alone shows no ownership: an account it names as the
-  // wallet's is marked as user-authorized instead.
-  const tokenAccounts = [...new Set(owned)].sort(inOrder);
-  // With no read, a wallet-signed transfer's destination is marked too: it
-  // could be another of the wallet's token accounts.
+  // limen reads no account, so no token account is shown to be the
+  // wallet's; one the decoded instructions name as the wallet's, or that a
+  // wallet-signed transfer sends to, is marked as user-authorized.
   const authorizedAccounts = [
     ...new Set([
       ...userTokenAccounts(transaction, tables),
-      ...ownedAfterOnly,
-      ...userAuthorizedTokenAccounts(transaction, tables, !read),
+      ...userAuthorizedTokenAccounts(transaction, tables, true),
     ]),
-  ]
-    .filter((address) => !tokenAccounts.includes(address))
-    .sort(inOrder);
+  ].sort(inOrder);
   // Every other account an instruction the wallet signs names, whatever the
   // instruction (summary.ts, walletSignedAccounts).
   const signedAccounts = walletSignedAccounts(transaction, tables)
     .filter(
-      (address) =>
-        !tokenAccounts.includes(address) &&
-        !authorizedAccounts.includes(address),
+      (address) => !authorizedAccounts.includes(address),
     )
     .sort(inOrder);
   // The RPC's text can hold an address inside a longer run, which the scrub
@@ -425,7 +354,6 @@ export async function preflight(
   // it occurs.
   const walletAddresses = [
     feePayer,
-    ...tokenAccounts,
     ...authorizedAccounts,
     ...signedAccounts,
   ];
@@ -445,10 +373,9 @@ export async function preflight(
     simulation,
     blocks: signBlocks(summary, simulation),
     simulatedAt,
-    userTokenAccounts: tokenAccounts,
     userAuthorizedTokenAccounts: authorizedAccounts,
     walletSignedAccounts: signedAccounts,
-    ...bundleLists(transaction, summary, tokenAccounts),
+    ...bundleLists(transaction, summary),
   };
 }
 
@@ -460,13 +387,11 @@ export async function preflight(
 function bundleLists(
   transaction: ParsedTransaction,
   summary: TransactionSummary,
-  owned: readonly string[],
 ): { recipients: string[]; programIds: string[] } {
   const recipients: string[] = [];
   const add = (address: string) => {
     if (
       address !== USER_MARKER &&
-      !owned.includes(address) &&
       !recipients.includes(address)
     ) {
       recipients.push(address);
@@ -570,10 +495,6 @@ export function toReport(result: Preflight): PreflightReport {
   if (result.kind !== "ready") return result;
   const { feePayerSet, summary, simulation, blocks } = result;
   const markers = new Map([
-    ...result.userTokenAccounts.map(
-      (address, i) =>
-        [address, `${USER_TOKEN_ACCOUNT_MARKER} ${i + 1}`] as const,
-    ),
     ...result.userAuthorizedTokenAccounts.map(
       (address, i) =>
         [address, `${USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER} ${i + 1}`] as const,

@@ -92,7 +92,7 @@ describe("the PM's guard on item 4: a bundle's recipients and program IDs come f
     }
   });
 
-  it("leaves out the wallet and a token account a read shows it owns", async () => {
+  it("lists a token transfer's destination, since limen reads no account", async () => {
     const user = new web3.PublicKey(USER);
     const message = new web3.TransactionMessage({
       payerKey: user,
@@ -107,29 +107,15 @@ describe("the PM's guard on item 4: a bundle's recipients and program IDs come f
       ],
     }).compileToLegacyMessage();
     const bytes = new web3.VersionedTransaction(message).serialize();
-    const base64 = Buffer.from(bytes).toString("base64");
-    const read = await preflight(
-      recordedEndpoint({
-        accounts: {
-          [USER]: wallet(5_000_000_000),
-          [K.userToken2022Account]: tokenOf(200),
-          [K.userTokenAccount]: tokenOf(0),
-        },
-        simulation: { err: null, accounts: {} },
-      }),
-      base64,
+    const result = await preflight(
+      offline(),
+      Buffer.from(bytes).toString("base64"),
       USER,
     );
-    assert.ok(read.kind === "ready");
-    assert.deepEqual(read.userTokenAccounts, [
-      K.userToken2022Account,
-      K.userTokenAccount,
-    ]);
-    assert.deepEqual(read.recipients, []);
-    assert.deepEqual(read.programIds, [TOKEN_PROGRAM]);
-    // With no read, the destination could be anyone's, so it is listed.
-    const unread = await preflight(offline(), base64, USER);
-    assert.ok(unread.kind === "ready");
-    assert.deepEqual(unread.recipients, [K.userTokenAccount]);
+    assert.ok(result.kind === "ready");
+    // The destination could be another of the wallet's token accounts; no
+    // read says whose it is (ruling 20a), so it is listed.
+    assert.deepEqual(result.recipients, [K.userTokenAccount]);
+    assert.deepEqual(result.programIds, [TOKEN_PROGRAM]);
   });
 });
