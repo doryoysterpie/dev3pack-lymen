@@ -7,8 +7,8 @@
 //     symbol, and the station, session and check-in time as additional fields.
 // The organizer key is the mint authority and the metadata update authority, and pays for
 // everything. Devnet only (D-03): the module has one connection, to DEVNET_URL, made by a private
-// factory with a fetch that fails on any redirect, and no helper takes a connection or an
-// endpoint. mintPass, revokePass and passMintState each refuse a cluster whose genesis hash is not
+// factory with a fetch that fails on any redirect, and no exported function takes a connection or
+// an endpoint. mintPass, revokePass and passMintState each refuse a cluster whose genesis hash is not
 // devnet's with their first request, before anything is sent (mintPass refuses an over-long
 // station or session ID even before that request), and a send is confirmed by polling over HTTP,
 // so no WebSocket is opened.
@@ -69,8 +69,9 @@ export interface PassDetails {
 
 /**
  * The most bytes of UTF-8 a station or session ID may take. The mint transaction is 820 bytes
- * with both IDs empty and grows by one byte for each byte of either, so at this limit it is 948
- * bytes, 284 under Solana's 1232-byte limit; at 206 bytes each it would be too large to send.
+ * empty with both IDs empty and grows by one byte for each byte of either, so at this limit it is
+ * 948 bytes empty, 964 bytes with a SOL top-up, and 947 bytes when the address already covers
+ * rent, well under Solana's 1232-byte limit; at 206 bytes each it would be too large to send.
  */
 export const MAX_PASS_ID_BYTES = 64;
 
@@ -155,8 +156,9 @@ export function buildPassMintTransaction(input: {
   lamports: number;
   /**
    * Lamports already at the mint address, as a System-owned account with no data that anyone's
-   * transfer can make. When there are any, the account is topped up, allocated and assigned,
-   * each signed by the mint keypair, instead of created, which a funded address would refuse.
+   * transfer can make. When there are any, the account is topped up when needed, allocated and
+   * assigned instead of created (which a funded address would refuse): the organizer authorizes
+   * the SOL top-up and the mint keypair authorizes allocation and assignment; both sign.
    */
   funded?: number;
 }): Transaction {
@@ -290,8 +292,9 @@ function makeDevnetConnection(): Connection {
 let devnet: Connection | null = null;
 
 /**
- * limen's one devnet connection, made on first use. No caller can supply another: no helper here
- * takes a connection or an endpoint. The devnet check script reads and sends through it.
+ * limen's one devnet connection, made on first use. No caller can supply another: no exported
+ * function here takes a connection or an endpoint. The devnet check script reads and sends through
+ * it.
  */
 export function devnetConnection(): Connection {
   return (devnet ??= makeDevnetConnection());
@@ -328,16 +331,14 @@ async function sendAndConfirm(
 }
 
 /**
- * The account at a pass's mint address is one limen did not make: neither empty, nor a
- * System-owned account with no data (which anyone's transfer can make), nor an initialized
- * Token-2022 mint. Nothing is minted over it; an operator looks at it.
+ * `mintPass` found an account already at a pass's mint address other than a System-owned account
+ * with no data (for example a pass another request already minted there, or another account), so
+ * nothing is minted over it.
  */
 export class MintAddressOccupiedError extends Error {
   override name = "MintAddressOccupiedError";
   constructor(mint: PublicKey) {
-    super(
-      `mint address occupied: ${mint.toBase58()} holds an account limen did not make`,
-    );
+    super(`mint address occupied: ${mint.toBase58()} already holds an account`);
   }
 }
 
@@ -389,7 +390,10 @@ export async function mintPass(
  *     make, so no pass was issued and one can be minted there;
  *   - "minted": an issued pass with decimals 0 and a supply of one, whose one token `holder`'s
  *     associated token account, holding that mint for that owner, holds;
- *   - "unheld": an issued pass that `holder` does not hold: for a check-in's wallet, one burned;
+ *   - "unheld": any other initialized Token-2022 mint there: supply other than one (such as 0
+ *     after a burn), mismatched decimals (other than 0), or `holder`'s associated token account
+ *     missing, unreadable as a Token-2022 account, for another mint, owned by a wrong owner, or
+ *     holding an amount other than one;
  *   - "occupied": any other account, which limen did not make.
  * A request that fails is thrown, not read as a state. Another cluster is refused first.
  */

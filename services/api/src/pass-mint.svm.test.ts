@@ -422,8 +422,25 @@ test("in-process SVM: an account at the mint address that is no initialized Toke
       );
       await assert.rejects(
         mintPass(organizer, holder.publicKey, DETAILS, mintKey),
-        /^MintAddressOccupiedError: /,
+        (err: Error) => {
+          assert.equal(err.name, "MintAddressOccupiedError");
+          assert.doesNotMatch(err.message, /did not make|foreign/i);
+          return true;
+        },
       );
     });
   }
+
+  // A losing concurrent mint whose getAccountInfo runs after the winner's pass landed hits the
+  // same check on the winner's initialized Token-2022 mint, so the error must not call it foreign.
+  const { svm, organizer, mintKey, holder } = setup();
+  await withDevnetStub(svmRpc(svm), async () => {
+    await assert.rejects(
+      mintPass(organizer, holder.publicKey, DETAILS, mintKey),
+      {
+        name: "MintAddressOccupiedError",
+        message: `mint address occupied: ${mintKey.publicKey.toBase58()} already holds an account`,
+      },
+    );
+  });
 });

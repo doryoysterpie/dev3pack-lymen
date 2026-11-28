@@ -2,6 +2,7 @@
 // parameters. The on-chain results (transfer fails, delegate burn succeeds) are checked against
 // devnet by src/devnet/pass-mint.check.ts, which needs a funded key and does not run in CI.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
@@ -32,6 +33,7 @@ import {
   DEVNET_GENESIS_HASH,
   DEVNET_URL,
   devnetConnection,
+  MintAddressOccupiedError,
   mintPass,
   passAccountLen,
   passFields,
@@ -192,36 +194,78 @@ test("exactly one token is minted to the holder's Token-2022 associated account"
   );
 });
 
-test("a pass with 64-character station and session IDs still fits in one transaction", () => {
-  const tx = build({
+test("a pass with 64-character station and session IDs is 948 bytes empty, 964 with a top-up, and 947 when the address already covers rent, with the organizer authorizing the top-up and the mint key authorizing allocation and assignment", () => {
+  const maxDetails = {
     station: "s".repeat(64),
     session: "t".repeat(64),
     checkedInAt: 1_795_811_665,
-  });
+  };
+  const tx = build(maxDetails);
   tx.recentBlockhash = Keypair.generate().publicKey.toBase58();
   tx.sign(organizer, mint);
   const size = tx.serialize().length;
+  assert.equal(size, 948);
   assert.ok(
     size <= 1232,
     `serialized size ${size} is over the 1232-byte limit`,
   );
-  // At an address that already holds lamports, the top-up, allocate and assign still fit.
+
+  // At an address that holds less than rent, the organizer authorizes the SOL top-up and the mint
+  // keypair authorizes allocation and assignment; both sign the transaction (964 bytes).
   const funded = buildPassMintTransaction({
     organizer: organizer.publicKey,
     mint: mint.publicKey,
     holder,
-    details: {
-      station: "s".repeat(64),
-      session: "t".repeat(64),
-      checkedInAt: 1_795_811_665,
-    },
+    details: maxDetails,
     lamports: 5_000_000,
     funded: 1_000_000,
   });
   funded.recentBlockhash = Keypair.generate().publicKey.toBase58();
   funded.sign(organizer, mint);
   assert.equal(funded.instructions.length, tx.instructions.length + 2);
-  assert.ok(funded.serialize().length <= 1232);
+  assert.equal(funded.serialize().length, 964);
+  assert.equal(funded.verifySignatures(), true);
+
+  const topUp = SystemInstruction.decodeTransfer(funded.instructions[0]!);
+  assert.equal(topUp.fromPubkey.toBase58(), organizer.publicKey.toBase58());
+  assert.equal(topUp.toPubkey.toBase58(), mint.publicKey.toBase58());
+  assert.equal(topUp.lamports, 4_000_000n);
+  assert.equal(funded.instructions[0]!.keys[0]!.isSigner, true);
+  assert.equal(funded.instructions[0]!.keys[1]!.isSigner, false);
+
+  const alloc = SystemInstruction.decodeAllocate(funded.instructions[1]!);
+  assert.equal(alloc.accountPubkey.toBase58(), mint.publicKey.toBase58());
+  assert.equal(alloc.space, 274);
+  assert.equal(funded.instructions[1]!.keys[0]!.isSigner, true);
+
+  const assign = SystemInstruction.decodeAssign(funded.instructions[2]!);
+  assert.equal(assign.accountPubkey.toBase58(), mint.publicKey.toBase58());
+  assert.equal(assign.programId.toBase58(), TOKEN_2022_PROGRAM_ID.toBase58());
+  assert.equal(funded.instructions[2]!.keys[0]!.isSigner, true);
+
+  // When the address already covers rent, no top-up transfer is added (947 bytes).
+  const rentCovered = buildPassMintTransaction({
+    organizer: organizer.publicKey,
+    mint: mint.publicKey,
+    holder,
+    details: maxDetails,
+    lamports: 5_000_000,
+    funded: 5_000_000,
+  });
+  rentCovered.recentBlockhash = Keypair.generate().publicKey.toBase58();
+  rentCovered.sign(organizer, mint);
+  assert.equal(rentCovered.instructions.length, tx.instructions.length + 1);
+  assert.equal(rentCovered.serialize().length, 947);
+  assert.equal(rentCovered.verifySignatures(), true);
+
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /964 bytes with a top-up/);
+  assert.match(readme, /947 when the address already covers rent/);
+  assert.doesNotMatch(readme, /each signed by the mint keypair/);
+  assert.match(
+    readme,
+    /the organizer authorizes the SOL top-up and the mint keypair authorizes allocation and assignment; both sign/,
+  );
 });
 
 test("station and session IDs over 64 bytes of UTF-8 are refused, before anything is sent", async () => {
@@ -299,7 +343,7 @@ const table =
     return answers[method];
   };
 
-test("the module has one devnet connection: it exports nothing that makes one, and no helper takes a connection or an endpoint", async () => {
+test("the module has one devnet connection: it exports nothing that makes one, and no exported function takes a connection or an endpoint", async () => {
   const mod = await import("./pass-mint.ts");
   // Exactly these functions and the one error class: none makes a connection, and only
   // devnetConnection returns one.
@@ -327,6 +371,17 @@ test("the module has one devnet connection: it exports nothing that makes one, a
   assert.deepEqual(
     [mintPass.length, revokePass.length, passMintState.length],
     [3, 3, 2],
+  );
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const source = readFileSync(
+    new URL("./pass-mint.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(readme, /no exported function takes a connection/);
+  assert.doesNotMatch(readme, /no helper takes a connection/);
+  assert.doesNotMatch(
+    source,
+    /no helper(?:\s+here)?\s*\n?\s*\/\/?\s*\*?\s*takes a connection/,
   );
 });
 
@@ -561,4 +616,22 @@ test("passMintState says minted only for the holder's one token of that mint; an
       );
     },
   );
+
+  // MintAddressOccupiedError describes the occupied mint address without calling a winner's mint foreign.
+  const occupiedErr = new MintAddressOccupiedError(passMint);
+  assert.equal(
+    occupiedErr.message,
+    `mint address occupied: ${passMint.toBase58()} already holds an account`,
+  );
+  assert.doesNotMatch(occupiedErr.message, /did not make|foreign/i);
+
+  // passMintState's doc comment explains unheld covers mismatched decimals and wrong owner, not only a burn.
+  const source = readFileSync(
+    new URL("./pass-mint.ts", import.meta.url),
+    "utf8",
+  );
+  const unheldDoc =
+    /-\s*"unheld":[\s\S]*?- "occupied":/.exec(source)?.[0] ?? "";
+  assert.match(unheldDoc, /decimals/);
+  assert.match(unheldDoc, /owner/);
 });

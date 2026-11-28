@@ -162,8 +162,9 @@ export function registrationsFrom(
 }
 
 /**
- * The account at a check-in's mint address is one limen did not make, so no pass is minted over
- * it and the check-in answers 502 mint_address_occupied, staying pending for an operator.
+ * `mintPass` found an account already at a check-in's mint address other than a System-owned
+ * account with no data (a winning concurrent request's pass, or an account limen did not make), so
+ * no pass is minted over it and the check-in answers 502 mint_address_occupied.
  */
 export class MintAddressOccupied extends Error {
   override name = "MintAddressOccupied";

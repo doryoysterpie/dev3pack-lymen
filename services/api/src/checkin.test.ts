@@ -1048,15 +1048,16 @@ test("a pending check-in recorded under another PASS_MINT_SECRET answers 502, mi
   ]);
 });
 
-test("a pass burned after its check-in was recorded done still answers 409 already_checked_in, read from the row", async () => {
+test("a check-in recorded done is not read again from the minter: after changing the pass's owner to Bob, a retry still answers 409 already_checked_in", async () => {
   const { db, deps, alice, bob, minting } = setup();
   const mint = passAddress("day-2", "LMN-0001");
   assert.equal(
     (await checkInAt(deps, request(alice, "LMN-0001"), T + 5)).status,
     201,
   );
-  // The chain no longer shows the wallet holding it; the row says done, and is not read again.
+  // Changing the pass's owner in mintDouble makes state() say unheld, while the done row is not read again.
   minting.chain.set(mint, bob.address);
+  assert.equal(await deps.minter.state(alice.address, mint), "unheld");
   assert.deepEqual(await retryAt(deps, alice, T + 12), {
     status: 409,
     body: { error: "already_checked_in" },
@@ -1107,6 +1108,60 @@ test("two concurrent requests for one check-in, each pass landing a turn after i
   assert.deepEqual(mintRows(db), [
     { mint: passAddress("day-2", "LMN-0001"), mint_status: "done" },
   ]);
+});
+
+test("two concurrent requests through devnetMinter where the winner's pass lands before the loser's mintPass reads the address: the winner gets 201 and the loser gets 502 mint_address_occupied", async () => {
+  const { db, deps, alice } = setup();
+  const dir = mkdtempSync(join(tmpdir(), "limen-checkin-"));
+  const keyPath = join(dir, "organizer.json");
+  writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
+  const mint = passAddress("day-2", "LMN-0001");
+  const svm = new LiteSVM();
+  svm.airdrop(
+    Keypair.fromSecretKey(Uint8Array.from(RFC_KEYPAIR)).publicKey,
+    10_000_000_000n,
+  );
+  const baseRpc = svmRpc(svm);
+  let mintAccountReads = 0;
+  let winnerLanded!: () => void;
+  const waitForWinner = new Promise<void>((resolve) => {
+    winnerLanded = resolve;
+  });
+  try {
+    const minter = devnetMinter(loadOrganizerKey(keyPath));
+    await withDevnetStub(
+      async (method, params) => {
+        // Call 1 is the winner's mintPass getAccountInfo(mint); call 2 is the loser's
+        // passMintState getAccountInfo(mint) (still empty); call 3 is the loser's mintPass
+        // getAccountInfo(mint), held until the winner's transaction has landed in LiteSVM.
+        if (method === "getAccountInfo" && String(params[0]) === mint) {
+          mintAccountReads += 1;
+          if (mintAccountReads === 3) await waitForWinner;
+        }
+        const res = await baseRpc(method, params);
+        if (method === "sendTransaction") winnerLanded();
+        return res;
+      },
+      async () => {
+        const body = request(alice, "LMN-0001");
+        const answers = await Promise.all(
+          [0, 1].map(() => checkInAt({ ...deps, minter }, body, T + 5)),
+        );
+        assert.deepEqual(answers.map((a) => a.status).sort(), [201, 502]);
+        assert.deepEqual(answers.find((a) => a.status === 502)?.body, {
+          error: "mint_address_occupied",
+        });
+      },
+    );
+    assert.deepEqual(mintRows(db), [{ mint, mint_status: "done" }]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(
+    readme,
+    /whose own mint reaches the address after another's answers `502 mint_address_occupied`[^.]*or `502 mint_failed`/,
+  );
 });
 
 test("a request that finds the pass on chain while the first awaits confirmation gets the 201; the first then gets 409", async () => {
