@@ -31,7 +31,8 @@ Set both when building the app. Expo inlines them into the bundle, so neither ma
   - a valid QR verifies to its exact payload;
   - an expired one is accepted at 60 s and refused at 60.001 s, 60.999 s and 61 s;
   - a QR cut short by its session's end is accepted 1 ms before its `expires_at` and refused at it, including one E-03 cut to 59 s because its 60 s would have ended exactly at the session's end;
-  - one changed payload byte gives `bad_signature`, and no QR with any single character changed is accepted;
+  - one changed payload byte gives `bad_signature`, and no QR with one character changed, to any base64url character or a dot, at any position, is accepted;
+  - the backend test's 15 QRs whose payload is re-spelled in non-canonical base64url, each signed by the organizer key, are refused as `invalid_payload`, as the backend refuses them;
   - a key off the allowlist gives `signer_not_allowlisted`.
 - `ed25519.test.ts`: the device refuses the 12 speccheck vectors, the eight small-order points as key or as R (noble alone accepts each as R), and a mixed-order key whose signature Node's OpenSSL accepts; on honest keys it agrees with OpenSSL on the RFC 8032 vectors, on the fixture QRs and on 200 random signatures, valid and altered.
 - `mwa-signer.test.ts`: with a fake wallet that returns the message followed by its signature, as the MWA fake wallet does:

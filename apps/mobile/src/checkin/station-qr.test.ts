@@ -1,7 +1,13 @@
 // E-05 app half: the device verifies E-03's fixture station QRs to the answers E-03's own
 // verifier gives. Ed25519 here is node:crypto; on the device it is the library passed in.
 import assert from "node:assert/strict";
-import { createPublicKey, verify } from "node:crypto";
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  sign,
+  verify,
+} from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
@@ -101,9 +107,16 @@ test("a QR cut short by its session's end is refused from its expires_at on, as 
 
 test("a QR with one payload byte changed is refused as bad_signature", () => {
   assert.equal(reasonAt(FIXTURE.tampered, T), "bad_signature");
-  // And no single-character change anywhere in the valid QR is accepted.
+});
+
+test("no QR with one character changed, to any base64url character or a dot, is accepted, at every position", () => {
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.";
+  let tried = 0;
+  let owed = 0;
   for (let i = 0; i < FIXTURE.valid.length; i++) {
-    for (const c of ["A", "_", "."]) {
+    owed += alphabet.length - (alphabet.includes(FIXTURE.valid[i]!) ? 1 : 0);
+    for (const c of alphabet) {
       if (FIXTURE.valid[i] === c) continue;
       const changed =
         FIXTURE.valid.slice(0, i) + c + FIXTURE.valid.slice(i + 1);
@@ -112,8 +125,64 @@ test("a QR with one payload byte changed is refused as bad_signature", () => {
         "ok",
         `character ${i} changed to ${c}`,
       );
+      tried++;
     }
   }
+  // Every position, every character but the one already there.
+  assert.equal(tried, owed);
+});
+
+/**
+ * The backend test's 15 QRs (services/api/src/station-qr.test.ts, respelledPayloadQrs): a
+ * 121-byte payload re-spelled in its last character, each signed over its own text by the
+ * organizer key, RFC 8032 TEST 1. Ed25519 signing is deterministic, so the same SHA-256 shows they
+ * are the same 15 texts.
+ */
+const RESPELLED_PAYLOAD_QRS_SHA256 =
+  "febf959a807543922f905199635de4b09c6913e9fdb26e84bba654cc26f946f9";
+function respelledPayloadQrs(): string[] {
+  const organizer = createPrivateKey({
+    key: Buffer.concat([
+      Buffer.from("302e020100300506032b657004220420", "hex"),
+      Buffer.from(
+        "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+        "hex",
+      ),
+    ]),
+    format: "der",
+    type: "pkcs8",
+  });
+  const json =
+    '{"station":"st-front","session":"day-21","nonce":"AAECAwQFBgcICQoLDA0ODw","issued_at":1795000000,"expires_at":1795000060}';
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const canonical = Buffer.from(json, "utf8").toString("base64url");
+  const qrs: string[] = [];
+  for (const c of alphabet) {
+    const payload = canonical.slice(0, -1) + c;
+    if (
+      payload === canonical ||
+      Buffer.from(payload, "base64url").toString("utf8") !== json
+    )
+      continue;
+    const message = `limen:station:v1.${payload}`;
+    const signature = sign(null, Buffer.from(message, "ascii"), organizer);
+    qrs.push(
+      `${message}.${FIXTURE.organizer_signer_id}.${signature.toString("base64url")}`,
+    );
+  }
+  return qrs;
+}
+
+test("a payload re-spelled in non-canonical base64url is refused as invalid_payload, as the backend refuses it", () => {
+  const qrs = respelledPayloadQrs();
+  assert.equal(qrs.length, 15);
+  assert.equal(
+    createHash("sha256").update(qrs.join("\n")).digest("hex"),
+    RESPELLED_PAYLOAD_QRS_SHA256,
+  );
+  for (const qr of qrs)
+    assert.equal(reasonAt(qr, 1_795_000_010), "invalid_payload", qr);
 });
 
 test("a QR signed by a key off the allowlist is refused as signer_not_allowlisted", () => {
