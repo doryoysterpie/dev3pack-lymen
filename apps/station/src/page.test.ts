@@ -2,6 +2,7 @@
 // clock. Each run imports main.ts afresh, so it starts as a page load does.
 import assert from "node:assert/strict";
 import { createPrivateKey } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import type { AddressInfo } from "node:net";
@@ -121,6 +122,16 @@ function element(id: string, log: string[]) {
 
 let runs = 0;
 
+const INDEX_HTML = readFileSync(
+  new URL("../index.html", import.meta.url),
+  "utf8",
+);
+/** The inline script that index.html runs first in <head>, as text, or null if it has none. */
+function headScript(): string | null {
+  const m = /<head>\s*<script>([\s\S]*?)<\/script>/.exec(INDEX_HTML);
+  return m?.[1] ?? null;
+}
+
 /**
  * Loads main.ts at `href`. `fetchFn` answers the page's requests; it may wait on `clock`. Returns
  * the page's elements, the shared log of what the page did, and the clock.
@@ -155,12 +166,38 @@ async function loadPage(
     clearTimeout: clock.clearTimeout,
     performance: { now: () => clock.now },
   };
+  // As in a browser: index.html's first script runs before the page module loads.
+  const script = headScript();
+  if (script !== null) new Function("window", script)(g.window);
   await import(new URL(`./main.ts?run=${++runs}`, import.meta.url).href);
   await flush();
   return { elements, log, clock };
 }
 
 const never = (): Promise<Response> => new Promise(() => {});
+
+test("index.html's first element in <head> is an inline script, not a module", () => {
+  assert.notEqual(headScript(), null, "<head> opens with <script>");
+});
+
+test("the inline script takes the address and removes the token from the address bar, so it is gone even if the page module never runs", () => {
+  const log: string[] = [];
+  const href =
+    "http://127.0.0.1:5173/?station=st-front#token=station-token-0123456789";
+  const win = {
+    location: { href },
+    history: {
+      replaceState: (_state: unknown, _title: string, url: URL | string) =>
+        log.push(`address: ${String(url)}`),
+    },
+  } as Record<string, unknown>;
+  const script = headScript();
+  assert.ok(script !== null);
+  new Function("window", script)(win);
+  // No module ran here, as when its import fails.
+  assert.deepEqual(log, ["address: http://127.0.0.1:5173/?station=st-front"]);
+  assert.equal(win.limenStationAddress, href);
+});
 
 test("the token leaves the address bar before a station error is shown", async () => {
   for (const href of [
