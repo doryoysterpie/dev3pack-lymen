@@ -185,6 +185,31 @@ test("a payload re-spelled in non-canonical base64url is refused as invalid_payl
     assert.equal(reasonAt(qr, 1_795_000_010), "invalid_payload", qr);
 });
 
+test("a signed payload that repeats a key is refused as invalid_payload, as the backend refuses it", () => {
+  // The backend test's QR (services/api/src/station-qr.test.ts, repeatedSessionQr): the session
+  // named twice, signed by the organizer key. The same SHA-256 shows it is the same text.
+  const organizer = createPrivateKey({
+    key: Buffer.concat([
+      Buffer.from("302e020100300506032b657004220420", "hex"),
+      Buffer.from(
+        "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+        "hex",
+      ),
+    ]),
+    format: "der",
+    type: "pkcs8",
+  });
+  const json =
+    '{"station":"st-front","session":"day-2","session":"day-3","nonce":"AAECAwQFBgcICQoLDA0ODw","issued_at":1795000000,"expires_at":1795000060}';
+  const message = `limen:station:v1.${Buffer.from(json, "utf8").toString("base64url")}`;
+  const qr = `${message}.${FIXTURE.organizer_signer_id}.${sign(null, Buffer.from(message, "ascii"), organizer).toString("base64url")}`;
+  assert.equal(
+    createHash("sha256").update(qr).digest("hex"),
+    "feffa49047995ec2b47a045f51228298712d5f0c61f09b84ccb9d6ea03bca5a2",
+  );
+  assert.equal(reasonAt(qr, 1_795_000_010), "invalid_payload");
+});
+
 test("a QR signed by a key off the allowlist is refused as signer_not_allowlisted", () => {
   assert.equal(reasonAt(FIXTURE.stranger, T), "signer_not_allowlisted");
   // The same QR passes once its key is allowlisted, so the allowlist is what refused it.
@@ -195,7 +220,7 @@ test("a QR signed by a key off the allowlist is refused as signer_not_allowliste
   assert.equal(reasonAt(FIXTURE.valid, T, new Set()), "signer_not_allowlisted");
 });
 
-test("other text, a throwing verifier and wrong shapes are refused with the owed reason", () => {
+test("other text and wrong shapes are refused with the owed reason, and a verifier that throws is no bad signature", () => {
   assert.equal(reasonAt("https://example.com/", T), "not_station_qr");
   assert.equal(reasonAt(`${FIXTURE.valid}.x`, T), "malformed");
   assert.equal(
@@ -212,7 +237,8 @@ test("other text, a throwing verifier and wrong shapes are refused with the owed
       throw new Error("library failure");
     },
   });
-  assert.deepEqual(throwing, { ok: false, reason: "bad_signature" });
+  // The check could not run, so the QR is refused as unchecked, not as badly signed.
+  assert.deepEqual(throwing, { ok: false, reason: "verify_failed" });
 });
 
 test("with no usable clock the device fails closed, as E-03 does: missing, NaN or infinite nowMs is invalid_clock", () => {

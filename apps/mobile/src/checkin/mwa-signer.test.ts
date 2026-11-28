@@ -21,6 +21,8 @@ function fakeWallet(
     base58?: boolean;
     /** The account the wallet authorizes when asked again with its token: by default, the same. */
     laterAccount?: "same" | "none" | "other";
+    /** An answer not in the owed form. */
+    shape?: "no-token" | "accounts-not-a-list" | "two-signed" | "none-signed";
   } = {},
 ) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -40,12 +42,19 @@ function fakeWallet(
       const later = params.auth_token !== undefined;
       const which = later ? (opts.laterAccount ?? "same") : "same";
       const count = which === "none" ? 0 : (opts.accounts ?? 1);
-      return {
-        accounts: Array.from({ length: count }, () => ({
-          address: which === "other" ? other : address,
-        })),
-        auth_token: "token-1",
-      };
+      const accounts = Array.from({ length: count }, () => ({
+        address: which === "other" ? other : address,
+      }));
+      if (opts.shape === "no-token")
+        return { accounts } as unknown as Awaited<
+          ReturnType<MwaWallet["authorize"]>
+        >;
+      if (opts.shape === "accounts-not-a-list")
+        return {
+          accounts: address,
+          auth_token: "token-1",
+        } as unknown as Awaited<ReturnType<MwaWallet["authorize"]>>;
+      return { accounts, auth_token: "token-1" };
     },
     async signMessages(params) {
       calls.push({ method: "signMessages", params });
@@ -57,9 +66,10 @@ function fakeWallet(
         opts.tamper === "message"
           ? Buffer.concat([message, Buffer.from("x")]).subarray(1)
           : message;
-      return {
-        signed_payloads: [Buffer.concat([body, signature]).toString("base64")],
-      };
+      const one = Buffer.concat([body, signature]).toString("base64");
+      if (opts.shape === "two-signed") return { signed_payloads: [one, one] };
+      if (opts.shape === "none-signed") return { signed_payloads: [] };
+      return { signed_payloads: [one] };
     },
   };
   const transact: Transact = (callback) => {
@@ -162,6 +172,22 @@ test("a bad signature, a changed message, no account, or an account no longer au
   await assert.rejects(signerFor(fakeWallet({ accounts: 0 })).connect(), {
     message: "The wallet authorized no account.",
   });
+});
+
+test("an authorization or a signed answer not in the owed form is refused, not read as far as it goes", async () => {
+  for (const shape of ["no-token", "accounts-not-a-list"] as const) {
+    await assert.rejects(signerFor(fakeWallet({ shape })).connect(), {
+      message: "The wallet's authorization is not in the owed form.",
+    });
+  }
+  for (const shape of ["two-signed", "none-signed"] as const) {
+    const w = fakeWallet({ shape });
+    const signer = signerFor(w);
+    const account = await signer.connect();
+    await assert.rejects(signer.sign(account, MESSAGE), {
+      message: "The wallet's signed message is not in the owed form.",
+    });
+  }
 });
 
 test("only a signed message that is exactly the message plus 64 bytes yields a signature", () => {

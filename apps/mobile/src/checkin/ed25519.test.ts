@@ -298,6 +298,23 @@ test("noble and node:crypto agree on 200 random signatures, valid and altered", 
   }
 });
 
+test("an error inside noble's check is thrown, not read as an invalid signature", () => {
+  // RFC 8032 TEST 1's key and signature, which pass the prime-order checks; a message that is
+  // not bytes makes noble's own check throw.
+  const pub = Buffer.from(
+    "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    "hex",
+  );
+  const sig = Buffer.from(
+    "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+    "hex",
+  );
+  assert.equal(ed25519Verify(pub, new Uint8Array(0), sig), true);
+  assert.throws(() =>
+    ed25519Verify(pub, "not bytes" as unknown as Uint8Array, sig),
+  );
+});
+
 test("a key or signature of the wrong length is refused, not thrown", () => {
   assert.equal(
     ed25519Verify(new Uint8Array(31), new Uint8Array(0), new Uint8Array(64)),

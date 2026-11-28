@@ -71,12 +71,29 @@ export function mwaSigner(
     readonly verify: Ed25519Verify;
   },
 ): WalletSigner {
-  const authorize = (wallet: MwaWallet, authToken?: string) =>
-    wallet.authorize({
+  // The wallet's answer is checked whole before any part of it is used.
+  const authorize = async (wallet: MwaWallet, authToken?: string) => {
+    const auth = await wallet.authorize({
       identity: { name: opts.appName },
       chain: opts.chain,
       ...(authToken === undefined ? {} : { auth_token: authToken }),
     });
+    if (
+      typeof auth !== "object" ||
+      auth === null ||
+      typeof auth.auth_token !== "string" ||
+      !Array.isArray(auth.accounts) ||
+      !auth.accounts.every(
+        (a: unknown) =>
+          typeof a === "object" &&
+          a !== null &&
+          typeof (a as { address?: unknown }).address === "string",
+      )
+    ) {
+      throw new Error("The wallet's authorization is not in the owed form.");
+    }
+    return auth;
+  };
   return {
     connect: () =>
       transact(async (wallet): Promise<WalletAccount> => {
@@ -111,7 +128,16 @@ export function mwaSigner(
           addresses: [account.address],
           payloads: [encodeBase64(message)],
         });
-        const signed = decodeBase64(signed_payloads[0] ?? "");
+        if (
+          !Array.isArray(signed_payloads) ||
+          signed_payloads.length !== 1 ||
+          typeof signed_payloads[0] !== "string"
+        ) {
+          throw new Error(
+            "The wallet's signed message is not in the owed form.",
+          );
+        }
+        const signed = decodeBase64(signed_payloads[0]);
         const signature =
           signed === null ? null : signatureFromSignedPayload(signed, message);
         if (

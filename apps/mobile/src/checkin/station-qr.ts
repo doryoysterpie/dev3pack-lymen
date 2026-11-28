@@ -11,6 +11,7 @@
 // this module stays pure.
 
 import { decodeBase64Url } from "./base64.ts";
+import { hasRepeatedKey } from "./json-keys.ts";
 
 export type Ed25519Verify = (
   publicKey: Uint8Array,
@@ -32,6 +33,8 @@ export type StationQrRejection =
   | "unsupported_version"
   | "signer_not_allowlisted"
   | "bad_signature"
+  // The verifier threw, so the signature could not be checked either way.
+  | "verify_failed"
   | "invalid_payload"
   | "not_yet_valid"
   | "expired"
@@ -87,6 +90,8 @@ function parsePayload(encoded: string): StationPayload | null {
   } catch {
     return null;
   }
+  // A repeated key would leave the payload's meaning to whichever value a reader keeps.
+  if (hasRepeatedKey(json)) return null;
   if (typeof value !== "object" || value === null || Array.isArray(value))
     return null;
   const keys = Object.keys(value).sort();
@@ -154,7 +159,7 @@ export function verifyStationQrOnDevice(
     valid =
       signed !== null && options.verify(signerBytes, signed, signatureBytes);
   } catch {
-    valid = false;
+    return reject("verify_failed");
   }
   if (!valid) return reject("bad_signature");
 

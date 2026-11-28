@@ -152,7 +152,7 @@ async function prepareAndSign(
   return prepared.ok ? prepared.sign() : prepared;
 }
 
-test("nothing is signed before the message is shown: prepareCheckin gives its six lines, and only sign() has the wallet sign, exactly those bytes", async () => {
+test("nothing is signed while preparing: prepareCheckin gives its six lines, and only sign() has the wallet sign, exactly those bytes", async () => {
   const wallet = fakeWallet();
   const server = fakeServer(wallet.key);
   const prepared = await prepareCheckin(deps(wallet, server), {
@@ -220,6 +220,31 @@ test("a QR that expires while its message is on screen is refused at sign(), bef
     message: CHECKIN_MESSAGES.station_qr_expired,
   });
   assert.deepEqual(wallet.events, ["connect"]);
+  assert.equal(server.posted.length, 0);
+});
+
+test("a QR whose signature the device could not check is refused as unchecked, not as failing the check", async () => {
+  const wallet = fakeWallet();
+  const server = fakeServer(wallet.key);
+  const throwing: Ed25519Verify = () => {
+    throw new Error("library failure");
+  };
+  assert.deepEqual(
+    await prepareCheckin(
+      { ...deps(wallet, server), verify: throwing },
+      { qr: FIXTURE.valid, registrationText: "" },
+    ),
+    {
+      ok: false,
+      error: "station_qr_unchecked",
+      message: FLOW_MESSAGES.qr_unchecked,
+    },
+  );
+  assert.equal(
+    FLOW_MESSAGES.qr_unchecked,
+    "The app could not check this station QR's signature. Nothing was sent.",
+  );
+  assert.deepEqual(wallet.events, []);
   assert.equal(server.posted.length, 0);
 });
 

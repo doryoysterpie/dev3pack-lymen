@@ -72,6 +72,8 @@ export const FLOW_MESSAGES = {
   wallet_declined:
     "The wallet did not sign, or its signature did not verify on this device. Nothing was sent.",
   no_message: "There is no check-in message to sign for this account.",
+  qr_unchecked:
+    "The app could not check this station QR's signature. Nothing was sent.",
 } as const;
 
 const refuse = (error: string, message: string): CheckinRefusal => ({
@@ -88,6 +90,9 @@ function checkQr(deps: CheckinFlowDeps, qr: string) {
     verify: deps.verify,
   });
   if (result.ok) return result;
+  // The check could not run: that is no finding about the QR.
+  if (result.reason === "verify_failed")
+    return refuse("station_qr_unchecked", FLOW_MESSAGES.qr_unchecked);
   const error =
     result.reason === "expired" ? "station_qr_expired" : "station_qr_invalid";
   return refuse(error, CHECKIN_MESSAGES[error] as string);

@@ -25,13 +25,11 @@ function primeOrderPoint(bytes: Uint8Array): boolean {
 
 export const ed25519Verify: Ed25519Verify = (publicKey, message, signature) => {
   if (publicKey.length !== 32 || signature.length !== 64) return false;
-  try {
-    return (
-      primeOrderPoint(publicKey) &&
-      primeOrderPoint(signature.subarray(0, 32)) &&
-      ed25519.verify(signature, message, publicKey, { zip215: false })
-    );
-  } catch {
-    return false;
-  }
+  // A key or R that does not decode is an invalid signature (primeOrderPoint). An error inside
+  // noble's own check is not: it is thrown, so the caller reports the check as not run.
+  return (
+    primeOrderPoint(publicKey) &&
+    primeOrderPoint(signature.subarray(0, 32)) &&
+    ed25519.verify(signature, message, publicKey, { zip215: false })
+  );
 };
