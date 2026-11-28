@@ -51,7 +51,8 @@ const now = (): number => window.Date.now();
 let clearing: number | null = null;
 let renders = 0;
 
-function render(view: StationView): void {
+/** Shows `view`. For a QR, the promise settles once it is drawn and shown, or refused. */
+function render(view: StationView): void | Promise<void> {
   if (clearing !== null) window.clearTimeout(clearing);
   clearing = null;
   const mine = ++renders;
@@ -64,7 +65,7 @@ function render(view: StationView): void {
     showRefreshing();
     return;
   }
-  QRCode.toCanvas(canvas, view.qr, {
+  return QRCode.toCanvas(canvas, view.qr, {
     width: 480,
     margin: 2,
     errorCorrectionLevel: "M",

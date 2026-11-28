@@ -51,11 +51,15 @@ function fakeClock(start = 0) {
   let now = start;
   let nextId = 1;
   const timers = new Map<number, { at: number; fn: () => void }>();
+  /** The delay each timer was armed with, in order. */
+  const delays: number[] = [];
   return {
+    delays,
     get now() {
       return now;
     },
     setTimeout: (fn: () => void, ms: number): number => {
+      delays.push(ms);
       const id = nextId++;
       timers.set(id, { at: now + ms, fn });
       return id;
@@ -504,7 +508,7 @@ test("a genuine full-length QR issued 2 minutes ago is not shown", async () => {
   assert.ok(!log.some((l) => l.startsWith("caption: Station")));
 });
 
-test("a slow draw that finishes just before the deadline shows the QR, and clears it at the deadline, read from the clock after the draw", async () => {
+test("a slow draw that ends 100 ms before the deadline shows the QR and arms its clearing timer for those 100 ms", async () => {
   const clock = fakeClock(T * 1000);
   const qr = signedQr("st-front"); // signed at T for 60 s
   // The first answer comes 100 ms after its request; later requests get no answer.
@@ -527,18 +531,23 @@ test("a slow draw that finishes just before the deadline shows the QR, and clear
   const { elements } = await loadPage(STATION_URL, once, clock, {
     token: TOKEN,
   });
-  // The request left at T, so the deadline is T + 60 s. The draw takes until 100 ms before it.
+  // The request left at T, so the deadline is T + 60 s - 5 s. The draw takes until 100 ms before
+  // it.
   const ctx = elements.qr.getContext();
   let drawn = false;
   elements.qr.getContext = () => {
-    if (!drawn) clock.jump(59_800);
+    if (!drawn) clock.jump(54_800);
     drawn = true;
     return ctx;
   };
   await clock.advance(100);
-  assert.equal(clock.now, T * 1000 + 59_900);
+  assert.equal(clock.now, T * 1000 + 54_900);
   assert.equal(elements.qr.hidden, false, "shown with 100 ms left");
   assert.equal(elements.qr.dataset.qr, qr);
+  assert.ok(
+    clock.delays.includes(100),
+    "the clearing timer is armed for 100 ms",
+  );
   await clock.advance(99);
   assert.equal(elements.qr.hidden, false, "still shown 1 ms before");
   await clock.advance(1);
