@@ -18,11 +18,14 @@
 //   wallet: <wallet address>
 //   registration: <registration ID, or empty>
 //
-// The backend re-verifies in this order, and the first failure is the answer: the request's
-// shape; the station QR (allowlisted signer, signature, at most 60 s old); the station, and the
-// session still open; the wallet's signature over the message; the registration (the wallet's
-// binding, or a first binding of registration_id); one check-in per registration per session.
-// Only then does it mint.
+// The backend checks in this order, and the first failure is the answer: the request's shape,
+// the signature's form included; the station QR (allowlisted signer, signature, at most 60 s old
+// at the millisecond clock); the station; the session still open; the wallet's key, in the
+// prime-order subgroup; the wallet's signature over the message, under strict Ed25519 rules; the
+// registration (the wallet's binding, or a first binding of registration_id); one check-in per
+// registration per session. Only then does it mint, at the mint address derived for the check-in.
+// services/api/README.md lists the answer each check gives, and checkin.test.ts holds the code
+// and that list to this order.
 import { createHmac, createPrivateKey, createPublicKey } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 

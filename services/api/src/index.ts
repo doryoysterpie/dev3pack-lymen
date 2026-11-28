@@ -47,7 +47,7 @@ export function listenUrl(host: string, port: number): string {
 /**
  * Starts the API. Throws a configuration error with an operator-readable message. `makeConnection`
  * is for tests only: it replaces the Connection constructor inside connectDevnet, so a test sees
- * every call the running check-in path makes without reaching devnet. Unset, as `npm start`
+ * every call the running check-in path makes on its Solana connection, without reaching devnet. Unset, as `npm start`
  * leaves it, the connection is web3.js's own.
  */
 export async function start(

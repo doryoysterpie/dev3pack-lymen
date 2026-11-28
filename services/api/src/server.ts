@@ -64,7 +64,7 @@ export interface ApiContext {
   };
 }
 
-/** Largest check-in body accepted, in bytes. A check-in is well under 1 KiB. */
+/** Largest check-in body accepted, in bytes; a larger one is answered 413. */
 export const MAX_CHECKIN_BODY_BYTES = 8 * 1024;
 
 function readBody(req: IncomingMessage, limit: number): Promise<Buffer | null> {

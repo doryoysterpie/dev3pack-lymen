@@ -2,7 +2,9 @@
 // reason; an expired window is refused; a fresh wallet with no registration binding is refused.
 // Registration binding is E-07's real code (registrationsFrom, on registrations imported with
 // importRegistrations). Minting is E-06's mintPass on devnet, which spends devnet SOL, so a test
-// whose check-in would succeed uses mintDouble, a named test double, instead.
+// whose check-in would succeed uses mintDouble, a named test double, instead. One test goes
+// through start() to the running API's own minter, and replaces only the Connection constructor
+// inside connectDevnet, with a stand-in that reaches nothing.
 import assert from "node:assert/strict";
 import {
   createHash,
@@ -14,7 +16,7 @@ import {
   verify,
   type KeyObject,
 } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -367,10 +369,15 @@ function setup() {
 function request(
   w: Wallet,
   registrationId: string | null,
-  opts: { issuedAt?: number; session?: string; signer?: StationSigner } = {},
+  opts: {
+    issuedAt?: number;
+    station?: string;
+    session?: string;
+    signer?: StationSigner;
+  } = {},
 ) {
   const { text, payload } = issueStationQr({
-    station: "st-front",
+    station: opts.station ?? "st-front",
     session: opts.session ?? "day-2",
     now: opts.issuedAt ?? T,
     signer: opts.signer ?? ORGANIZER,
@@ -550,6 +557,11 @@ test("a registration already bound to another wallet is refused, and nothing is 
   assert.deepEqual(await checkInAt(deps, request(bob, "LMN-9999"), T + 7), {
     status: 403,
     body: { error: "unknown_registration" },
+  });
+  // A space is outside E-07's registration ID form.
+  assert.deepEqual(await checkInAt(deps, request(bob, "LMN 0001"), T + 8), {
+    status: 400,
+    body: { error: "invalid_registration_id" },
   });
   assert.equal(minting.calls.length, 1);
 });
@@ -836,6 +848,105 @@ test("a pending check-in recorded under another PASS_MINT_SECRET answers 502, mi
   ]);
 });
 
+test("the first failure is the earliest check, in the order the README lists", async () => {
+  const { db, deps, alice, bob, fresh, minting } = setup();
+  // Each request fails two adjacent checks; the earlier one answers.
+  // 1. Shape before the QR: an expired QR with no signature.
+  const noSignature: Record<string, unknown> = {
+    ...request(alice, "LMN-0001", { issuedAt: T - 120 }),
+  };
+  delete noSignature.signature;
+  assert.deepEqual(await checkInAt(deps, noSignature, T), {
+    status: 400,
+    body: { error: "invalid_request", field: "signature" },
+  });
+  // 2. The QR before the station: a QR off the allowlist, for a station that does not exist.
+  assert.deepEqual(
+    await checkInAt(
+      deps,
+      request(alice, "LMN-0001", { station: "st-nowhere", signer: STRANGER }),
+      T + 5,
+    ),
+    {
+      status: 400,
+      body: { error: "station_qr_invalid", reason: "signer_not_allowlisted" },
+    },
+  );
+  // 3. The station before the session: a station that does not exist, in a session not open.
+  assert.deepEqual(
+    await checkInAt(
+      deps,
+      request(alice, "LMN-0001", { station: "st-nowhere", session: "day-3" }),
+      T + 5,
+    ),
+    { status: 404, body: { error: "unknown_station" } },
+  );
+  // 4. The session before the wallet key: a session not open, and a wallet that is not a key.
+  assert.deepEqual(
+    await checkInAt(
+      deps,
+      { ...request(alice, "LMN-0001", { session: "day-3" }), wallet: "1111" },
+      T + 5,
+    ),
+    { status: 409, body: { error: "session_closed" } },
+  );
+  // 5. The wallet key before the signature: a wallet that is not a key, so no signature checks.
+  assert.deepEqual(
+    await checkInAt(
+      deps,
+      { ...request(alice, "LMN-0001"), wallet: "1111" },
+      T + 5,
+    ),
+    { status: 400, body: { error: "invalid_request", field: "wallet" } },
+  );
+  // 6. The signature before the registration: another wallet's signature, from an unbound wallet.
+  assert.deepEqual(
+    await checkInAt(
+      deps,
+      { ...request(bob, null), wallet: fresh.address },
+      T + 5,
+    ),
+    { status: 401, body: { error: "bad_wallet_signature" } },
+  );
+  assert.equal(checkinCount(db), 0);
+  assert.equal(minting.calls.length, 0);
+  // 7. The registration before one check-in per session: LMN-0001 is checked in and bound to
+  // alice, so bob's check-in with it is refused for the binding.
+  assert.equal(
+    (await checkInAt(deps, request(alice, "LMN-0001"), T + 5)).status,
+    201,
+  );
+  assert.deepEqual(await checkInAt(deps, request(bob, "LMN-0001"), T + 6), {
+    status: 403,
+    body: { error: "registration_bound_to_other_wallet" },
+  });
+  assert.equal(minting.calls.length, 1);
+});
+
+test("the README lists the check-in's checks in the order the code runs them", () => {
+  // The answer each listed check gives, in the order the test above shows the code runs them.
+  const owed = [
+    "400 invalid_request",
+    "400 station_qr_expired",
+    "404 unknown_station",
+    "409 session_closed",
+    "400 invalid_request",
+    "401 bad_wallet_signature",
+    "403 no_registration_binding",
+    "409 already_checked_in",
+  ];
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const section = readme.slice(readme.indexOf("## Check-in (E-05)"));
+  const steps = section
+    .slice(0, section.indexOf("Only then"))
+    .split("\n")
+    .filter((line) => /^\d+\. /.test(line));
+  assert.deepEqual(
+    steps.map((line) => /`(\d{3} [a-z_]+)`/.exec(line)?.[1]),
+    owed,
+  );
+});
+
 test("a malformed request is refused by field", async () => {
   const { deps, alice } = setup();
   const good = request(alice, "LMN-0001");
@@ -936,7 +1047,11 @@ test("POST /checkins runs the check-in end to end, and answers 503 on a server b
       [503, { error: "check_in_unavailable" }],
     );
     assert.equal((await post(urls[0]!, req, "text/plain")).status, 415);
-    assert.equal((await post(urls[0]!, "{not json")).status, 400);
+    const notJson = await post(urls[0]!, "{not json");
+    assert.deepEqual(
+      [notJson.status, await notJson.json()],
+      [400, { error: "invalid_json" }],
+    );
     assert.equal(
       (await post(urls[0]!, "x".repeat(MAX_CHECKIN_BODY_BYTES + 1))).status,
       413,
@@ -1353,6 +1468,12 @@ test("the minter reaches only the allowlisted devnet endpoint: another URL is re
     assert.deepEqual(mintRows(db), [
       { mint: passAddress("day-2", "LMN-0001"), mint_status: "pending" },
     ]);
+    // The failed connection is not kept: the next request connects again, and is refused again.
+    assert.deepEqual(await retryAt({ ...deps, minter }, alice, T + 12), {
+      status: 502,
+      body: { error: "mint_failed" },
+    });
+    assert.deepEqual(calls, ["getGenesisHash", "getGenesisHash"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

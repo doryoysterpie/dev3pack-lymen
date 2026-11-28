@@ -65,7 +65,7 @@ function setup() {
     !(result instanceof FailedTransactionMetadata),
     `pass mint failed: ${String(result)}`,
   );
-  return { svm, organizer, mint: mint.publicKey, holder };
+  return { svm, organizer, mint: mint.publicKey, mintKey: mint, holder };
 }
 
 function send(
@@ -309,4 +309,32 @@ test("in-process SVM: passMintState reads a pass as absent, minted to its holder
     await passMintState(connection, mint, holder.publicKey),
     "other",
   );
+});
+
+test("in-process SVM: a second mint at the same mint keypair fails at createAccount, and the holder keeps one pass", () => {
+  const { svm, organizer, mint, mintKey, holder } = setup();
+  // A fresh blockhash, so the retry is a new transaction and not refused as a duplicate.
+  svm.expireBlockhash();
+  const again = buildPassMintTransaction({
+    organizer: organizer.publicKey,
+    mint,
+    holder: holder.publicKey,
+    details: DETAILS,
+    lamports: Number(
+      svm.minimumBalanceForRentExemption(BigInt(passAccountLen(DETAILS))),
+    ),
+  });
+  again.recentBlockhash = svm.latestBlockhash();
+  again.sign(organizer, mintKey);
+  const result = svm.sendTransaction(again);
+  assert.ok(result instanceof FailedTransactionMetadata);
+  assert.ok(
+    result
+      .meta()
+      .logs()
+      .some((line) => /already in use/.test(line)),
+    "the System Program refuses the second createAccount",
+  );
+  assert.equal(mintState(svm, mint).mint.supply, 1n);
+  assert.equal(balance(svm, mint, holder.publicKey), 1n);
 });

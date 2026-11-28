@@ -292,8 +292,7 @@ export async function mintPass(
  * Where a pass stands on chain, read without sending anything: "absent" when no account exists
  * at `mint`, "minted" when it is a Token-2022 mint with a supply of one and `holder`'s associated
  * token account holds that one token, and "other" for anything else. A connection to any other
- * cluster than devnet is refused first. The mint transaction is one transaction, so it lands
- * whole or not at all.
+ * cluster than devnet is refused first.
  */
 export async function passMintState(
   connection: Connection,
