@@ -32,6 +32,19 @@ body {
   background: var(--paper);
 }
 
+/* The logo (E-19) is a black wordmark. Its descender is a fifth of its height, so it sits that
+   far below the line; in the dark scheme it is inverted to read on the dark page. */
+.logo {
+  height: 1.1em;
+  vertical-align: -0.2em;
+}
+
+@media (prefers-color-scheme: dark) {
+  .logo {
+    filter: invert(1);
+  }
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
