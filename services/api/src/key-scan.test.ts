@@ -119,6 +119,31 @@ test("CI runs the scan, and git ignores .der, .pem, .key and .p12 files anywhere
   }
 });
 
+test("the CI step label and README state exactly what the key scan covers and does not cover", () => {
+  const ci = readFileSync(
+    new URL("../../../.github/workflows/lint.yml", import.meta.url),
+    "utf8",
+  );
+  const step =
+    /\n {6}- name: ([^\n]+)\n {8}run: node services\/api\/src\/key-scan\.ts\n/.exec(
+      ci,
+    )?.[1];
+  assert.ok(step !== undefined, "CI step label is present");
+  assert.match(step, /tracked files/i);
+  assert.match(step, /PEM/i);
+  assert.match(step, /Ed25519 PKCS#8 DER/i);
+  assert.match(step, /Solana Ed25519 keypairs/i);
+
+  const readme = readFileSync(
+    new URL("../../../README.md", import.meta.url),
+    "utf8",
+  );
+  assert.match(readme, /untracked files or git history/i);
+  assert.match(readme, /non-key secrets/i);
+  assert.match(readme, /PEM private-key headers/i);
+  assert.match(readme, /Ed25519 PKCS#8 DER/i);
+});
+
 test("the scan flags exactly what the organizer-key loader accepts: every number form JSON allows, and base58 of any length", async () => {
   const { acceptsAsKeypair } = await import("./organizer-key.ts");
   const pair = solanaKeypair();
