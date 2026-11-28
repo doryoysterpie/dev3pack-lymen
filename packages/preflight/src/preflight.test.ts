@@ -375,3 +375,103 @@ describe("signing gate", () => {
     );
   });
 });
+
+describe("ruling 20a, item 6: the run's keys are the message's", () => {
+  // The recorded answer, with its simulateTransaction value changed.
+  const changed = (change: (value: Record<string, unknown>) => void) => {
+    const base = drainerRpc();
+    return {
+      url: base.url,
+      fetch: (async (url, init) => {
+        const answer = await base.fetch(url, init);
+        if (!init.body.includes('"simulateTransaction"')) return answer;
+        const body = JSON.parse(answer.text) as {
+          result: { value: Record<string, unknown> };
+        };
+        change(body.result.value);
+        return { ...answer, text: JSON.stringify(body) };
+      }) satisfies RpcEndpoint["fetch"],
+    };
+  };
+  const LOADED =
+    "the simulation's loaded addresses do not match the lookup tables read";
+  const notUsed = async (
+    endpoint: RpcEndpoint,
+    transaction: string,
+    reason: string,
+  ) => {
+    const result = ready(await preflight(endpoint, transaction, USER));
+    assert.deepEqual(result.simulation, { status: "not-run", reason });
+    assert.deepEqual(result.blocks, ["simulation-not-run"]);
+  };
+
+  it("uses a v0 run whose loaded addresses are the table read", async () => {
+    const result = ready(
+      await preflight(drainerRpc(), drainerV0.transaction, USER),
+    );
+    assert.equal(result.simulation.status, "ran");
+  });
+
+  it("leaves a run unused when its loaded addresses differ from the table read", async () => {
+    for (const change of [
+      (value: Record<string, unknown>) => {
+        value.loadedAddresses = { writable: [], readonly: [] };
+      },
+      (value: Record<string, unknown>) => {
+        const loaded = value.loadedAddresses as {
+          writable: string[];
+          readonly: string[];
+        };
+        value.loadedAddresses = {
+          writable: loaded.readonly,
+          readonly: loaded.writable,
+        };
+      },
+      (value: Record<string, unknown>) => {
+        value.loadedAddresses = {
+          writable: [USER_TOKEN_ACCOUNT],
+          readonly: [],
+        };
+      },
+      (value: Record<string, unknown>) => {
+        delete value.loadedAddresses;
+      },
+    ]) {
+      await notUsed(changed(change), drainerV0.transaction, LOADED);
+    }
+  });
+
+  it("leaves a legacy run unused when it names loaded addresses, or none at all", async () => {
+    await notUsed(
+      changed((value) => {
+        value.loadedAddresses = { writable: [ATTACKER], readonly: [] };
+      }),
+      drainer.transaction,
+      LOADED,
+    );
+    await notUsed(
+      changed((value) => {
+        value.loadedAddresses = null;
+      }),
+      drainer.transaction,
+      LOADED,
+    );
+  });
+
+  it("leaves a run unused when its balances do not match the message's keys", async () => {
+    for (const change of [
+      (value: Record<string, unknown>) => {
+        value.preBalances = (value.preBalances as number[]).slice(1);
+      },
+      (value: Record<string, unknown>) => {
+        value.postBalances = [...(value.postBalances as number[]), 0];
+      },
+    ]) {
+      await notUsed(
+        changed(change),
+        drainer.transaction,
+        "the simulation did not return the balances of its own run",
+      );
+    }
+  });
+});

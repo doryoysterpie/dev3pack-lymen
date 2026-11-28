@@ -105,7 +105,12 @@ function endpoint(answers: {
       // is given no addresses.
       result = {
         context: { slot: "slot" in answers ? answers.slot : 2 },
-        value: answers.simulation([]),
+        // agave always lists the loaded addresses (a64fa73,
+        // rpc/src/rpc.rs:3612), empty for a legacy transaction.
+        value: {
+          loadedAddresses: { writable: [], readonly: [] },
+          ...answers.simulation([]),
+        },
       };
     }
     const id = answers.id ? answers.id(request.id, request.method) : request.id;

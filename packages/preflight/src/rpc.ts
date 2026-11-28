@@ -61,6 +61,15 @@ export interface Simulation {
    */
   readonly preBalances: readonly string[] | null;
   readonly postBalances: readonly string[] | null;
+  /**
+   * The addresses the run loaded from lookup tables, writable then
+   * read-only (agave a64fa73, rpc/src/rpc.rs:3612; empty lists for a legacy
+   * transaction). Null when the endpoint gives none.
+   */
+  readonly loadedAddresses: {
+    readonly writable: readonly string[];
+    readonly readonly: readonly string[];
+  } | null;
 }
 
 export class RpcError extends Error {
@@ -417,6 +426,7 @@ async function fetchSimulation(
       replacementBlockhash: null,
       preBalances: null,
       postBalances: null,
+      loadedAddresses: null,
     };
   }
   const replacement = value.replacementBlockhash;
@@ -440,6 +450,24 @@ async function fetchSimulation(
       "simulateTransaction: postBalances",
       (index) => raw(["value", "postBalances", index]),
     ),
+    loadedAddresses: loadedAddressesOf(value.loadedAddresses),
+  };
+}
+
+/** A run's loaded addresses: two lists of public keys, or null. */
+function loadedAddressesOf(value: unknown): Simulation["loadedAddresses"] {
+  if (value === undefined || value === null) return null;
+  const keys = (list: unknown, what: string) =>
+    listOf(list, what, (item) => {
+      if (!isPublicKey(item)) throw new RpcError("shape", `${what}: address`);
+      return item;
+    });
+  if (!isRecord(value)) {
+    throw new RpcError("shape", "simulateTransaction: loadedAddresses");
+  }
+  return {
+    writable: keys(value.writable, "simulateTransaction: loadedAddresses"),
+    readonly: keys(value.readonly, "simulateTransaction: loadedAddresses"),
   };
 }
 
