@@ -3,16 +3,21 @@
 // STATION_API_URL, from the shell or the repository's root .env, overrides the API address
 // (default http://127.0.0.1:8787). It is read here only and never reaches the page.
 //
-// The dev server serves files from the whole workspace, the repository root, by /@fs/ path, so
-// a station link file left in the repository's .station-links/ folder could be read by any page
-// on localhost. The link tool now refuses to write inside the repository, and the dev server
-// also denies that folder. Setting server.fs.deny replaces Vite's own list, so Vite 8.3.8's
+// By default the dev server serves files from the whole workspace, the repository root, by
+// /@fs/ path, so any page on localhost could read the organizer keypair in keys/, the API's
+// database or a station link file. server.fs.allow narrows that to this app's folder and the
+// repository's node_modules, which hold the page's dependencies and Vite's own client. The deny
+// list stays as a second guard. Setting server.fs.deny replaces Vite's own list, so Vite 8.3.8's
 // default entries are repeated here first.
 import { fileURLToPath } from "node:url";
 
 import { defineConfig, loadEnv } from "vite";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+const appRoot = fileURLToPath(new URL(".", import.meta.url));
+const dependencies = fileURLToPath(
+  new URL("../../node_modules", import.meta.url),
+);
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, repoRoot, "");
@@ -34,6 +39,7 @@ export default defineConfig(({ mode }) => {
       strictPort: true,
       proxy,
       fs: {
+        allow: [appRoot, dependencies],
         deny: [
           ".env",
           ".env.*",
