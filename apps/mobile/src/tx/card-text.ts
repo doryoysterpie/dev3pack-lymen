@@ -2,12 +2,16 @@
 // rules (rule 9) can be checked in one place.
 
 import {
+  decodeInstruction,
   drainPattern,
   handsOverControl,
+  messageAccounts,
   PROGRAM_NAME,
   REFUSAL_WHY,
   toReport,
+  type Account,
   type BalanceChange,
+  type Decoded,
   type Effect,
   type InstructionVerdict,
   type Place,
@@ -277,6 +281,108 @@ const UNDECODED: Readonly<Record<UndecodedReason, string>> = {
 const MULTISIG =
   " Your wallet's signature may still count toward it, for example as one signer of a multisig.";
 
+function actorAccount(decoded: Decoded): Account | null {
+  switch (decoded.kind) {
+    case "sol-transfer":
+      return decoded.from;
+    case "sol-transfer-with-seed":
+      return decoded.base;
+    case "create-account":
+    case "create-token-account":
+      return decoded.funder;
+    case "assign":
+      return decoded.account;
+    case "token-transfer":
+    case "token-approve":
+    case "token-revoke":
+    case "token-set-authority":
+    case "token-close-account":
+    case "token-burn":
+    case "token-mint-to":
+      return decoded.authorizers[0] ?? null;
+    case "advance-nonce":
+    case "token-initialize-account":
+    case "token-sync-native":
+    case "token-initialize-account-3":
+    case "token-initialize-immutable-owner":
+    case "compute-budget":
+    case "memo":
+    case "undecoded":
+      return null;
+  }
+}
+
+function lookupStatus(table: string, readTables: readonly string[]): string {
+  return readTables.includes(table)
+    ? "that limen does not show"
+    : "that limen could not read";
+}
+
+function unresolvedOtherText(
+  kind: TransactionSummary["others"][number]["kind"],
+  place: string,
+): string | null {
+  switch (kind) {
+    case "sol-transfer":
+      return `A SOL transfer whose sender is ${place}, so limen could not tell whether it names your wallet.`;
+    case "sol-transfer-with-seed":
+      return `A SOL transfer from an account derived from ${place}, so limen could not tell whether it names your wallet.`;
+    case "create-account":
+      return `An account creation whose payer is ${place}, so limen could not tell whether it names your wallet.`;
+    case "assign":
+      return `An owner change for ${place}, so limen could not tell whether it names your wallet account.`;
+    case "create-token-account":
+      return `A token account creation whose payer is ${place}, so limen could not tell whether it names your wallet.`;
+    case "token-transfer":
+      return `A token transfer whose authority is ${place}, so limen could not tell whether it names your wallet.${MULTISIG}`;
+    case "token-approve":
+      return `A delegate approval whose authority is ${place}, so limen could not tell whether it names your wallet.${MULTISIG}`;
+    case "token-revoke":
+      return `A delegate removal whose authority is ${place}, so limen could not tell whether it names your wallet.${MULTISIG}`;
+    case "token-set-authority":
+      return `An authority change whose authority is ${place}, so limen could not tell whether it names your wallet.${MULTISIG}`;
+    case "token-close-account":
+      return `A token account close whose authority is ${place}, so limen could not tell whether it names your wallet.${MULTISIG}`;
+    case "token-burn":
+      return `A token burn whose authority is ${place}, so limen could not tell whether it names your wallet.${MULTISIG}`;
+    case "token-mint-to":
+      return `A mint whose mint authority is ${place}, so limen could not tell whether it names your wallet.${MULTISIG}`;
+    case "compute-budget":
+    case "memo":
+    case "token-initialize-account":
+    case "token-sync-native":
+    case "token-initialize-account-3":
+    case "token-initialize-immutable-owner":
+    case "advance-nonce":
+      return null;
+  }
+}
+
+function unresolvedControlText(
+  verdicts: readonly InstructionVerdict[],
+  readTables: readonly string[],
+): string | null {
+  const unresolved = verdicts.filter(
+    (
+      verdict,
+    ): verdict is Extract<
+      InstructionVerdict,
+      { verdict: "unresolved-hand-over" }
+    > => verdict.verdict === "unresolved-hand-over",
+  );
+  if (unresolved.length === 0) return null;
+  const targets: string[] = [];
+  for (const entry of unresolved) {
+    const target = `an address in lookup table ${entry.table} at index ${entry.index} ${lookupStatus(entry.table, readTables)}`;
+    if (!targets.includes(target)) targets.push(target);
+  }
+  const lead =
+    unresolved.length === 1 ? "An instruction asks" : "Instructions ask";
+  const pronoun =
+    targets.length === 1 ? "that address is" : "those addresses are";
+  return `${lead} your wallet to give control of tokens or accounts to ${targets.join(" and ")}, so limen could not tell whether ${pronoun} your wallet.`;
+}
+
 // The summary keeps each instruction that names the wallet neither as its
 // payer nor as its authority as its index and kind only, so the card names
 // the kind and shows no text from it.
@@ -457,16 +563,32 @@ export function transactionCardText(
   }
 
   const { summary, verdicts, simulation, blocks } = result;
+  const readTables = result.readTables ?? [];
   const fallback = summary.undecoded.length > 0;
   // The card's flag is the drain pattern, the one definition (drain.ts),
-  // which reads each instruction's one verdict (effect.ts).
+  // which reads each instruction's one verdict (effect.ts). An unresolved
+  // approval delegate or close destination gets its own verdict so the card
+  // never calls an unread lookup entry "another address" (ac1ce67, Major 1).
   const handsOver = verdicts.some(handsOverControl);
+  const unresolvedControl = unresolvedControlText(verdicts, readTables);
+  const decodedControl =
+    handsOver && unresolvedControl !== null
+      ? `${DRAIN.decoded} ${unresolvedControl}`
+      : handsOver
+        ? DRAIN.decoded
+        : unresolvedControl;
   const verdictOf = (instruction: number) =>
     verdicts.find((verdict) => verdict.instruction === instruction);
   const drains = drainPattern(toReport(result));
   const failed = simulation.status === "ran" && simulation.err !== null;
   const lower = (text: string) =>
     `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+  const accounts = messageAccounts(result.transaction.message, new Map()).map(
+    (entry, i) => ({
+      ...entry,
+      address: result.accountKeys[i] ?? entry.address,
+    }),
+  );
 
   const rows: CardRow[] = [from];
   if (message !== null) {
@@ -489,12 +611,29 @@ export function transactionCardText(
   }
   for (const other of summary.others) {
     const verdict = verdictOf(other.instruction);
+    const compiled = result.transaction.message.instructions[other.instruction];
+    const decoded =
+      compiled === undefined ? null : decodeInstruction(compiled, accounts);
+    const actor =
+      decoded !== null && decoded.kind === other.kind
+        ? actorAccount(decoded)
+        : null;
+    const unresolvedOther =
+      actor !== null && actor.address === null
+        ? unresolvedOtherText(
+            other.kind,
+            actor.lookup === null
+              ? "an unresolved lookup table entry"
+              : `an address in lookup table ${actor.lookup.table} at index ${actor.lookup.index} ${lookupStatus(actor.lookup.table, readTables)}`,
+          )
+        : null;
+    const base = unresolvedOther ?? otherText(other.kind);
     rows.push({
       label: "Also in the transaction",
       value:
         verdict?.verdict === "refused"
-          ? `${otherText(other.kind)} It asks for what ${PROGRAM_NAME[verdict.program]} refuses (${REFUSAL_WHY[verdict.refusal]}), so the transaction would fail.`
-          : otherText(other.kind),
+          ? `${base} It asks for what ${PROGRAM_NAME[verdict.program]} refuses (${REFUSAL_WHY[verdict.refusal]}), so the transaction would fail.`
+          : base,
     });
   }
   if (summary.unresolvedAccounts > 0) {
@@ -540,13 +679,16 @@ export function transactionCardText(
     title: fallback
       ? "Fallback: limen cannot decode all of this transaction"
       : "Solana Pay transaction request",
-    tone: fallback || drains || blocks.length > 0 ? "flagged" : "neutral",
+    tone:
+      fallback || drains || decodedControl !== null || blocks.length > 0
+        ? "flagged"
+        : "neutral",
     status: fallback
-      ? `limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. ${simulated(simulation)}${handsOver ? ` ${DRAIN.decoded}` : drains ? ` ${DRAIN.simulated}` : ""}`
-      : handsOver
+      ? `limen flags this transaction: it calls programs or instructions limen cannot decode, so this card cannot show everything it would do. ${simulated(simulation)}${decodedControl !== null ? ` ${decodedControl}` : drains ? ` ${DRAIN.simulated}` : ""}`
+      : decodedControl !== null
         ? failed
-          ? `limen flags this transaction: ${lower(DRAIN.decoded)} The simulation failed, so signed now it would most likely fail.`
-          : `limen flags this transaction: ${lower(DRAIN.decoded)}`
+          ? `limen flags this transaction: ${lower(decodedControl)} The simulation failed, so signed now it would most likely fail.`
+          : `limen flags this transaction: ${lower(decodedControl)}`
         : drains
           ? `limen flags this transaction: ${lower(DRAIN.simulated)}`
           : simulation.status === "ran" && simulation.err === null

@@ -157,6 +157,13 @@ export type Preflight =
        * instructions call, in the order first called. Never in a report.
        */
       readonly programIds: readonly string[];
+      /**
+       * Lookup table addresses loadTables parsed from the endpoint before
+       * reconciliation. Held in memory only so the card does not call a table
+       * "limen could not read" when loadTables read it and a failed or
+       * unused run left its entries unresolved. Never in a report.
+       */
+      readonly readTables?: readonly string[];
     };
 
 export function signBlocks(
@@ -275,6 +282,7 @@ export async function preflight(
   // and loadedAddresses matched the tables read; a failed run or any other
   // exit leaves every lookup entry unresolved (the audit of 6c4e64e,
   // Major 2; the audit of 1856942, bug 1).
+  let readTables: string[] = [];
   let resolved: LookupTables = new Map();
   let simulation: SimulationOutcome;
   let simulatedAt: SimulatedAt | null = null;
@@ -293,6 +301,7 @@ export async function preflight(
       });
     }
     const read = await loadTables(rpc, transaction);
+    readTables = [...read.keys()];
     const refused = lookupProblem(transaction, read);
     if (refused !== null) return { kind: "malformed", problem: refused };
     const accounts = messageAccounts(transaction.message, read);
@@ -415,6 +424,7 @@ export async function preflight(
     blocks: signBlocks(summary, simulation),
     simulatedAt,
     accountKeys,
+    readTables,
     ...bundleLists(transaction, summary),
   };
 }

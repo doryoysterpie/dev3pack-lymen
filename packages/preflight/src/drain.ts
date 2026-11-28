@@ -20,15 +20,16 @@
 // transaction's fee payer, written "user" in the report), either holds:
 //
 // 1. Control handed over, in the decoded instructions: an instruction the
-//    wallet authorizes whose verdict is hands-over. That is a delegate other
-//    than the wallet approved for more than 0 base units over a token
-//    account; the wallet account assigned, or created anew, for a program
-//    other than the System Program and the wallet's own address; a token
-//    account or mint authority moved to an address other than the wallet;
-//    or a token account closed with its SOL sent to an address other than
-//    the wallet. An instruction its program refuses whatever the accounts
-//    hold, such as a close into the account itself, or one that moves
-//    nothing, is never a hand-over.
+//    wallet authorizes whose verdict is hands-over. That is a delegate known
+//    to be other than the wallet approved for more than 0 base units over a
+//    token account; the wallet account assigned, or created anew, for a
+//    program other than the System Program and the wallet's own address; a
+//    token account or mint authority moved to an address other than the
+//    wallet; or a token account closed with its SOL sent to a known address
+//    other than the wallet. An instruction its program refuses whatever the
+//    accounts hold, such as a close into the account itself, one that moves
+//    nothing, or one whose delegate or close destination sits in an
+//    unresolved lookup table (unresolved-hand-over), is never a hand-over.
 // 2. A sweep of the wallet's SOL, in a simulation that ran without an error:
 //    the wallet left with less than a tenth of the lamports it held, from the
 //    run's own pre and post balances.

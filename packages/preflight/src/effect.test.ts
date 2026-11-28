@@ -416,3 +416,91 @@ describe("the audit of 6c4e64e, Major 7, swept: compute budget instructions the 
     );
   });
 });
+
+describe("the audit of ac1ce67, Major 1: an unresolved lookup-table destination gets its own verdict", () => {
+  const tableKey = web3.PublicKey.unique();
+  const table = new web3.AddressLookupTableAccount({
+    key: tableKey,
+    state: {
+      deactivationSlot: BigInt("18446744073709551615"),
+      lastExtendedSlot: 0,
+      lastExtendedSlotStartIndex: 0,
+      addresses: [mint, attacker],
+    },
+  });
+  const v0 = (...instructions: web3.TransactionInstruction[]) => {
+    const message = new web3.TransactionMessage({
+      payerKey: user,
+      recentBlockhash: mint.toBase58(),
+      instructions,
+    }).compileToV0Message([table]);
+    return Buffer.from(
+      new web3.VersionedTransaction(message).serialize(),
+    ).toString("base64");
+  };
+
+  it("gives unresolved-hand-over to a non-zero approval or close whose target is in an unread lookup table", async () => {
+    for (const instruction of [
+      spl.createApproveInstruction(account, attacker, user, 1, [], SPL),
+      spl.createApproveCheckedInstruction(
+        account,
+        mint,
+        attacker,
+        user,
+        1,
+        6,
+        [],
+        T22,
+      ),
+      spl.createCloseAccountInstruction(account, attacker, user, [], SPL),
+    ]) {
+      const result = ready(await preflight(offline, v0(instruction), USER));
+      assert.deepEqual(result.verdicts, [
+        {
+          instruction: 0,
+          verdict: "unresolved-hand-over",
+          table: tableKey.toBase58(),
+          index: 1,
+        },
+      ]);
+      assert.equal(await drainsOffline(v0(instruction)), false);
+      assert.deepEqual(result.blocks, ["simulation-not-run"]);
+    }
+  });
+
+  it("keeps an approval of 0 or an unauthorized close as other even when the target is in an unread lookup table", async () => {
+    const otherSigner = web3.Keypair.generate().publicKey;
+    const zeroApprove = ready(
+      await preflight(
+        offline,
+        v0(spl.createApproveInstruction(account, attacker, user, 0, [], SPL)),
+        USER,
+      ),
+    );
+    assert.deepEqual(zeroApprove.verdicts, [
+      { instruction: 0, verdict: "other" },
+    ]);
+    const otherCloseMessage = new web3.TransactionMessage({
+      payerKey: user,
+      recentBlockhash: mint.toBase58(),
+      instructions: [
+        spl.createCloseAccountInstruction(account, attacker, otherSigner),
+      ],
+    }).compileToV0Message([table]);
+    const otherClose = ready(
+      await preflight(
+        offline,
+        Buffer.from(
+          new web3.VersionedTransaction(otherCloseMessage, [
+            new Uint8Array(64),
+            new Uint8Array(64).fill(1),
+          ]).serialize(),
+        ).toString("base64"),
+        USER,
+      ),
+    );
+    assert.deepEqual(otherClose.verdicts, [
+      { instruction: 0, verdict: "other" },
+    ]);
+  });
+});

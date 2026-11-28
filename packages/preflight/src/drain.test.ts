@@ -441,7 +441,7 @@ describe("drainPattern on decoded instructions", () => {
     });
   }
 
-  it("account closed to an address in a lookup table limen could not read: true", async () => {
+  it("account closed or delegate approved to an address in a lookup table limen could not read: false", async () => {
     const table = new web3.AddressLookupTableAccount({
       key: web3.PublicKey.unique(),
       state: {
@@ -451,19 +451,41 @@ describe("drainPattern on decoded instructions", () => {
         addresses: [other],
       },
     });
-    const message = new web3.TransactionMessage({
-      payerKey: user,
-      recentBlockhash: MINT,
-      instructions: [
-        spl.createCloseAccountInstruction(account, other, user, [], SPL),
-      ],
-    }).compileToV0Message([table]);
-    const base64 = Buffer.from(
-      new web3.VersionedTransaction(message).serialize(),
-    ).toString("base64");
-    const result = await preflight(offline, base64, USER);
-    assert.ok(result.kind === "ready");
-    assert.equal(result.summary.unresolvedAccounts, 1);
-    assert.equal(drainPattern(toReport(result)), true);
+    for (const instruction of [
+      spl.createCloseAccountInstruction(account, other, user, [], SPL),
+      spl.createApproveInstruction(account, other, user, 5, [], SPL),
+      spl.createApproveCheckedInstruction(
+        account,
+        mint,
+        other,
+        user,
+        5,
+        6,
+        [],
+        spl.TOKEN_2022_PROGRAM_ID,
+      ),
+    ]) {
+      const message = new web3.TransactionMessage({
+        payerKey: user,
+        recentBlockhash: MINT,
+        instructions: [instruction],
+      }).compileToV0Message([table]);
+      const base64 = Buffer.from(
+        new web3.VersionedTransaction(message).serialize(),
+      ).toString("base64");
+      const result = await preflight(offline, base64, USER);
+      assert.ok(result.kind === "ready");
+      assert.equal(result.summary.unresolvedAccounts, 1);
+      assert.deepEqual(result.verdicts, [
+        {
+          instruction: 0,
+          verdict: "unresolved-hand-over",
+          table: table.key.toBase58(),
+          index: 0,
+        },
+      ]);
+      assert.equal(drainPattern(toReport(result)), false);
+      assert.deepEqual(result.blocks, ["simulation-not-run"]);
+    }
   });
 });

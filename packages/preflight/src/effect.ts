@@ -9,8 +9,12 @@
 // - refused: the program refuses the instruction whatever the accounts hold,
 //   so the transaction cannot succeed;
 // - no-effect: accepted, it moves nothing;
-// - hands-over: the wallet authorizes it, and it gives an address other than
-//   the wallet control of the wallet's tokens or accounts (drain.ts, clause 1);
+// - hands-over: the wallet authorizes it, and it gives a known address other
+//   than the wallet control of the wallet's tokens or accounts (drain.ts,
+//   clause 1);
+// - unresolved-hand-over: the wallet authorizes an approval (over 0) or a
+//   close whose delegate or destination sits in a lookup table limen did not
+//   resolve, so limen could not tell whether that address is the wallet;
 // - other: anything else, including what limen cannot tell from the
 //   instruction alone;
 // - not-decoded.
@@ -129,6 +133,11 @@ export type Verdict =
     }
   | { readonly verdict: "no-effect" }
   | { readonly verdict: "hands-over" }
+  | {
+      readonly verdict: "unresolved-hand-over";
+      readonly table: string;
+      readonly index: number;
+    }
   | { readonly verdict: "other" }
   | { readonly verdict: "not-decoded" };
 
@@ -160,7 +169,22 @@ export function instructionEffect(
   user: string,
   walletIsSystemAccount: boolean,
 ): Verdict {
-  const isWallet = (account: Account) => account.address === user;
+  const isWallet = (account: Account) =>
+    account.address !== null && account.address === user;
+  // Never negate isWallet on an Account whose address may be null: an
+  // unresolved lookup entry is neither known to be the wallet nor known to be
+  // another address (the audit of ac1ce67, Major 1).
+  const handOverTo = (target: Account): Verdict => {
+    if (target.address !== null) {
+      return target.address === user ? OTHER : HANDS_OVER;
+    }
+    const lookup = target.lookup ?? { table: "", index: -1 };
+    return {
+      verdict: "unresolved-hand-over",
+      table: lookup.table,
+      index: lookup.index,
+    };
+  };
   // The wallet is the authority a token instruction names, and signs
   // (summary.ts, authorizedByUser).
   const authorized = (authorizers: readonly Account[]) =>
@@ -235,10 +259,8 @@ export function instructionEffect(
           [decoded.source],
           decoded.mint === null ? [] : [decoded.mint],
         ) ??
-        (authorized(decoded.authorizers) &&
-        decoded.amount !== "0" &&
-        !isWallet(decoded.delegate)
-          ? HANDS_OVER
+        (authorized(decoded.authorizers) && decoded.amount !== "0"
+          ? handOverTo(decoded.delegate)
           : OTHER)
       );
     case "token-revoke":
@@ -265,8 +287,8 @@ export function instructionEffect(
       }
       return (
         tokenState(decoded.program, [decoded.account], []) ??
-        (authorized(decoded.authorizers) && !isWallet(decoded.destination)
-          ? HANDS_OVER
+        (authorized(decoded.authorizers)
+          ? handOverTo(decoded.destination)
           : OTHER)
       );
     case "token-burn":
