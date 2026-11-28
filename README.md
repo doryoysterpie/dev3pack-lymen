@@ -1,4 +1,4 @@
-# <img src="assets/limen-logo.svg" alt="limen" height="64">
+# <picture><source media="(prefers-color-scheme: dark)" srcset="assets/limen-logo-light.svg"><img src="assets/limen-logo.svg" alt="limen" height="64"></picture>
 
 limen is a mobile build-station check-in pass with QR pre-flight, and a report triage service, on Solana devnet.
 
