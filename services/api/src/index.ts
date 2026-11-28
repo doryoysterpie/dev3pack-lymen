@@ -3,8 +3,6 @@
 import type { Server } from "node:http";
 import { isIPv6, type AddressInfo } from "node:net";
 
-import type { Connection } from "@solana/web3.js";
-
 import { chainabuseHook, parseChainabuseMode } from "./chainabuse.ts";
 import {
   devnetMinter,
@@ -44,16 +42,9 @@ export function listenUrl(host: string, port: number): string {
   return `http://${isIPv6(host) ? `[${host}]` : host}:${port}`;
 }
 
-/**
- * Starts the API. Throws a configuration error with an operator-readable message.
- * `connectionFor` is for tests only: it replaces the Connection constructor inside connectDevnet,
- * so a test sees every call the running check-in path makes on its Solana connection, without
- * reaching devnet. Unset, as `npm start` leaves it, connectDevnet builds the connection with
- * makeConnection (pass-mint.ts), whose HTTP requests refuse redirects.
- */
+/** Starts the API. Throws a configuration error with an operator-readable message. */
 export async function start(
   env: NodeJS.ProcessEnv = process.env,
-  connectionFor?: (url: string) => Connection,
 ): Promise<StartedApi> {
   // Loaded first so a bad key file stops start-up before anything else happens.
   const organizerKey = loadOrganizerKey(env.ORGANIZER_KEYPAIR_PATH);
@@ -62,8 +53,9 @@ export async function start(
   );
   const chainabuse = parseChainabuseMode(env.CHAINABUSE_POST);
   // SOLANA_RPC_URL must be unset, empty or the one devnet endpoint; anything else stops start-up,
-  // whether or not check-in is wired, and the error does not echo it (devnet-endpoint.ts).
-  const rpcEndpoint = devnetEndpoint(env.SOLANA_RPC_URL);
+  // whether or not check-in is wired, and the error does not echo it (devnet-endpoint.ts). The
+  // API's one devnet connection (pass-mint.ts) is to that endpoint whatever the variable says.
+  devnetEndpoint(env.SOLANA_RPC_URL);
   // Check-in (E-05) binds registrations with E-07's code under REGISTRATION_SALT and mints with
   // E-06's mintPass at that endpoint, paid for by the organizer key, at a mint address derived
   // from PASS_MINT_SECRET. With REGISTRATION_SALT unset or empty, POST /checkins answers 503; a
@@ -101,7 +93,7 @@ export async function start(
         ? undefined
         : {
             registrations: registrationsFrom(db, salt),
-            minter: devnetMinter(rpcEndpoint, organizerKey, connectionFor),
+            minter: devnetMinter(organizerKey),
             mintSecret,
           },
     reports: {

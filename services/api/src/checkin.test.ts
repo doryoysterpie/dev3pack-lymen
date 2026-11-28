@@ -2,9 +2,9 @@
 // reason; an expired window is refused; a fresh wallet with no registration binding is refused.
 // Registration binding is E-07's real code (registrationsFrom, on registrations imported with
 // importRegistrations). Minting is E-06's mintPass on devnet, which spends devnet SOL, so a test
-// whose check-in would succeed uses mintDouble, a named test double, instead. Two tests run the
-// API's own minter, one through start() and one as a restarted API builds it, and replace only
-// the Connection constructor inside connectDevnet, with a stand-in that reaches nothing.
+// whose check-in would succeed uses mintDouble, a named test double, instead. Three tests run the
+// API's own minter, with devnet's JSON-RPC answered by a stand-in for globalThis.fetch
+// (rpc-stub.ts) that reaches nothing.
 import assert from "node:assert/strict";
 import {
   createHash,
@@ -28,8 +28,7 @@ import {
   Keypair,
   PublicKey,
   SystemInstruction,
-  type Connection,
-  type Transaction,
+  Transaction,
 } from "@solana/web3.js";
 
 import {
@@ -48,6 +47,7 @@ import { openDatabase } from "./db.ts";
 import { start } from "./index.ts";
 import { loadOrganizerKey } from "./organizer-key.ts";
 import { DEVNET_GENESIS_HASH, passTokenAccount } from "./pass-mint.ts";
+import { accountInfoResult, sendAnswers, withDevnetStub } from "./rpc-stub.ts";
 import {
   bindRegistration,
   importRegistrations,
@@ -317,7 +317,7 @@ function mintDouble() {
     async state(wallet, mint) {
       const holder = chain.get(mint);
       if (holder === undefined) return "absent";
-      return holder === wallet ? "minted" : "other";
+      return holder === wallet ? "minted" : "unheld";
     },
   };
   return {
@@ -1432,9 +1432,9 @@ test("the running API checks in with E-07's binding: refusals only the salted bi
   }
 });
 
-test("the running API mints a check-in through devnetMinter, connectDevnet and mintPass at the devnet endpoint", async () => {
-  // start() is given a stand-in for the Connection constructor inside connectDevnet. It records
-  // every URL and call, so nothing reaches devnet and no devnet SOL is spent.
+test("the running API mints a check-in through devnetMinter and mintPass, on its one devnet connection", async () => {
+  // Devnet's JSON-RPC is answered by a stand-in for globalThis.fetch (rpc-stub.ts), so nothing
+  // reaches devnet and no devnet SOL is spent; the API itself is started as npm start starts it.
   const dir = mkdtempSync(join(tmpdir(), "limen-checkin-"));
   const keyPath = join(dir, "organizer.json");
   writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
@@ -1447,87 +1447,71 @@ test("the running API mints a check-in through devnetMinter, connectDevnet and m
   `);
   importRegistrations(db, SALT, ["LMN-0001"]);
   const alice = wallet();
-  const urls: string[] = [];
-  const calls: string[] = [];
-  const sent: Transaction[] = [];
-  const answers: Record<string, (arg: unknown) => unknown> = {
-    getGenesisHash: () => DEVNET_GENESIS_HASH,
-    getMinimumBalanceForRentExemption: () => 4_181_760,
-    sendTransaction: (tx) => {
-      sent.push(tx as Transaction);
-      return "stand-in-signature";
-    },
-    confirmTransaction: () => ({ context: { slot: 1 }, value: { err: null } }),
-  };
-  // A stand-in for the Connection made to `url`: its endpoint is that URL.
-  const standInFor = (url: string) =>
-    new Proxy(
-      {},
-      {
-        get: (_target, name) =>
-          name === "then"
-            ? undefined
-            : name === "rpcEndpoint"
-              ? url
-              : async (arg: unknown) => {
-                  calls.push(String(name));
-                  const answer = answers[String(name)];
-                  if (answer === undefined)
-                    throw new Error(`unexpected call: ${String(name)}`);
-                  return answer(arg);
-                },
-      },
-    ) as unknown as Connection;
+  const signature = "5".repeat(88);
+  let sent: Transaction | undefined;
   let api: Awaited<ReturnType<typeof start>> | undefined;
+  const mint = passAddress("day-2", "LMN-0001");
   try {
-    api = await start(
-      {
-        ORGANIZER_KEYPAIR_PATH: keyPath,
-        STATION_DISPLAY_TOKEN: "test-display-token-0123456789abcdef",
-        DATABASE_PATH: dbPath,
-        REGISTRATION_SALT: SALT,
-        PASS_MINT_SECRET: MINT_SECRET,
-        API_PORT: String(await freePort()),
+    await withDevnetStub(
+      (method, params) => {
+        if (method === "sendTransaction")
+          sent = Transaction.from(Buffer.from(String(params[0]), "base64"));
+        const answers: Record<string, unknown> = {
+          getGenesisHash: DEVNET_GENESIS_HASH,
+          getMinimumBalanceForRentExemption: 4_181_760,
+          ...sendAnswers(signature),
+        };
+        if (!(method in answers)) throw new Error(`unexpected ${method}`);
+        return answers[method];
       },
-      (url) => {
-        urls.push(url);
-        return standInFor(url);
+      async (calls) => {
+        api = await start({
+          ORGANIZER_KEYPAIR_PATH: keyPath,
+          STATION_DISPLAY_TOKEN: "test-display-token-0123456789abcdef",
+          DATABASE_PATH: dbPath,
+          REGISTRATION_SALT: SALT,
+          PASS_MINT_SECRET: MINT_SECRET,
+          API_PORT: String(await freePort()),
+        });
+        const res = await fetch(`${api.url}/checkins`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(request(alice, "LMN-0001", { issuedAt: now })),
+        });
+        assert.deepEqual(
+          [res.status, await res.json()],
+          [
+            201,
+            {
+              status: "checked_in",
+              station: "st-front",
+              session: "day-2",
+              mint,
+              signature,
+            },
+          ],
+        );
+        // The genesis check, then one transaction, sent and confirmed over HTTP.
+        assert.deepEqual(
+          calls.map((c) => c.method),
+          [
+            "getGenesisHash",
+            "getMinimumBalanceForRentExemption",
+            "getLatestBlockhash",
+            "sendTransaction",
+            "getSignatureStatuses",
+          ],
+        );
+        for (const call of calls) {
+          assert.equal(call.url, "https://api.devnet.solana.com");
+          assert.equal(call.redirect, "error");
+        }
       },
     );
-    const res = await fetch(`${api.url}/checkins`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(request(alice, "LMN-0001", { issuedAt: now })),
-    });
-    const mint = passAddress("day-2", "LMN-0001");
-    assert.deepEqual(
-      [res.status, await res.json()],
-      [
-        201,
-        {
-          status: "checked_in",
-          station: "st-front",
-          session: "day-2",
-          mint,
-          signature: "stand-in-signature",
-        },
-      ],
-    );
-    // One connection, to the one devnet endpoint, made by connectDevnet.
-    assert.deepEqual(urls, ["https://api.devnet.solana.com"]);
-    // connectDevnet's genesis check, then mintPass's own, before the one transaction is sent.
-    assert.deepEqual(calls, [
-      "getGenesisHash",
-      "getGenesisHash",
-      "getMinimumBalanceForRentExemption",
-      "sendTransaction",
-      "confirmTransaction",
-    ]);
     // The transaction is E-06's: it creates the pass at the derived address, paid for by the
     // organizer key, and mints to the checking-in wallet's Token-2022 account.
-    const [tx] = sent;
-    assert.ok(tx !== undefined && sent.length === 1);
-    const create = SystemInstruction.decodeCreateAccount(tx.instructions[0]!);
+    assert.ok(sent !== undefined);
+    const create = SystemInstruction.decodeCreateAccount(sent.instructions[0]!);
     assert.equal(create.newAccountPubkey.toBase58(), mint);
     assert.equal(
       create.fromPubkey.toBase58(),
@@ -1538,7 +1522,7 @@ test("the running API mints a check-in through devnetMinter, connectDevnet and m
       new PublicKey(alice.address),
     );
     assert.ok(
-      tx.instructions.some((ix) =>
+      sent.instructions.some((ix) =>
         ix.keys.some((k) => k.pubkey.equals(holderAccount)),
       ),
     );
@@ -1621,7 +1605,7 @@ test("the API refuses a SOLANA_RPC_URL that is not the allowlisted devnet endpoi
   }
 });
 
-test("after a restart that left a check-in pending, the minter first connects for the chain read, through connectDevnet", async () => {
+test("after a restart that left a check-in pending, the minter's first use is the chain read, then the mint, on the one devnet connection", async () => {
   const { db, deps, alice } = setup();
   const dir = mkdtempSync(join(tmpdir(), "limen-checkin-"));
   const keyPath = join(dir, "organizer.json");
@@ -1632,120 +1616,81 @@ test("after a restart that left a check-in pending, the minter first connects fo
   db.prepare(
     "INSERT INTO checkins (session_id, station_id, reg_hash, wallet, station_nonce, mint, mint_status, created_at) VALUES ('day-2', 'st-front', ?, ?, 'n', ?, 'pending', ?)",
   ).run(regHashOf("LMN-0001"), alice.address, mint, T);
-  const urls: string[] = [];
-  const calls: string[] = [];
-  const answers: Record<string, unknown> = {
-    getGenesisHash: DEVNET_GENESIS_HASH,
-    getAccountInfo: null,
-    getMinimumBalanceForRentExemption: 4_181_760,
-    sendTransaction: "stand-in-signature",
-    confirmTransaction: { context: { slot: 1 }, value: { err: null } },
-  };
-  const standInFor = (url: string) =>
-    new Proxy(
-      {},
-      {
-        get: (_target, name) =>
-          name === "then"
-            ? undefined
-            : name === "rpcEndpoint"
-              ? url
-              : async () => {
-                  calls.push(String(name));
-                  if (!(String(name) in answers))
-                    throw new Error(`unexpected call: ${String(name)}`);
-                  return answers[String(name)];
-                },
-      },
-    ) as unknown as Connection;
   try {
-    // A minter as a restarted API builds it: nothing connected yet.
-    const minter = devnetMinter(
-      "https://api.devnet.solana.com",
-      loadOrganizerKey(keyPath),
-      (url) => {
-        urls.push(url);
-        return standInFor(url);
+    // A minter as a restarted API builds it.
+    const minter = devnetMinter(loadOrganizerKey(keyPath));
+    await withDevnetStub(
+      (method) => {
+        const answers: Record<string, unknown> = {
+          getGenesisHash: DEVNET_GENESIS_HASH,
+          getAccountInfo: accountInfoResult(null),
+          getMinimumBalanceForRentExemption: 4_181_760,
+          ...sendAnswers("5".repeat(88)),
+        };
+        if (!(method in answers)) throw new Error(`unexpected ${method}`);
+        return answers[method];
+      },
+      async (calls) => {
+        const answer = await retryAt({ ...deps, minter }, alice, T + 12);
+        assert.equal(answer.status, 201);
+        assert.deepEqual(
+          calls.map((c) => c.method),
+          [
+            "getGenesisHash",
+            "getAccountInfo",
+            "getGenesisHash",
+            "getMinimumBalanceForRentExemption",
+            "getLatestBlockhash",
+            "sendTransaction",
+            "getSignatureStatuses",
+          ],
+        );
       },
     );
-    const answer = await retryAt({ ...deps, minter }, alice, T + 12);
-    assert.equal(answer.status, 201);
-    assert.deepEqual(urls, ["https://api.devnet.solana.com"]);
-    assert.deepEqual(calls, [
-      "getGenesisHash",
-      "getGenesisHash",
-      "getAccountInfo",
-      "getGenesisHash",
-      "getMinimumBalanceForRentExemption",
-      "sendTransaction",
-      "confirmTransaction",
-    ]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("the minter reaches only the allowlisted devnet endpoint: another URL is refused when it is built, and another cluster after one getGenesisHash", async () => {
+test("the minter refuses a cluster that is not devnet's after one genesis check, sends nothing, and checks again at the next request", async () => {
   const { db, deps, alice } = setup();
   const dir = mkdtempSync(join(tmpdir(), "limen-checkin-"));
   const keyPath = join(dir, "organizer.json");
   writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
-  // A connection that answers with another cluster's genesis hash and records every call made.
-  const calls: string[] = [];
-  // At the devnet endpoint, so only the genesis check can refuse it.
-  const otherCluster = new Proxy(
-    {},
-    {
-      get: (_target, name) =>
-        name === "then"
-          ? undefined
-          : name === "rpcEndpoint"
-            ? "https://api.devnet.solana.com"
-            : async () => {
-                calls.push(String(name));
-                return name === "getGenesisHash"
-                  ? "not-the-devnet-genesis-hash"
-                  : undefined;
-              },
-    },
-  ) as unknown as Connection;
   try {
-    // A URL off the allowlist is refused before any connection is made.
-    assert.throws(
-      () =>
-        devnetMinter(
-          "http://127.0.0.1:9/",
-          loadOrganizerKey(keyPath),
-          () => otherCluster,
-        ),
-      {
-        message:
-          "SOLANA_RPC_URL must be https://api.devnet.solana.com, the one devnet endpoint limen calls (D-03); unset, it is used.",
+    const minter = devnetMinter(loadOrganizerKey(keyPath));
+    await withDevnetStub(
+      (method) => {
+        if (method === "getGenesisHash") return "not-the-devnet-genesis-hash";
+        throw new Error(`unexpected ${method}`);
+      },
+      async (calls) => {
+        assert.deepEqual(
+          await checkInAt(
+            { ...deps, minter },
+            request(alice, "LMN-0001"),
+            T + 5,
+          ),
+          { status: 502, body: { error: "mint_failed" } },
+        );
+        assert.deepEqual(
+          calls.map((c) => c.method),
+          ["getGenesisHash"],
+        );
+        // Nothing was sent; the reservation stays pending for a later request.
+        assert.deepEqual(mintRows(db), [
+          { mint: passAddress("day-2", "LMN-0001"), mint_status: "pending" },
+        ]);
+        assert.deepEqual(await retryAt({ ...deps, minter }, alice, T + 12), {
+          status: 502,
+          body: { error: "mint_failed" },
+        });
+        assert.deepEqual(
+          calls.map((c) => c.method),
+          ["getGenesisHash", "getGenesisHash"],
+        );
       },
     );
-    assert.deepEqual(calls, []);
-    // The genesis check stays as a second guard: an endpoint that answers another cluster's
-    // genesis hash is refused after that one call, and nothing is sent.
-    const minter = devnetMinter(
-      "https://api.devnet.solana.com",
-      loadOrganizerKey(keyPath),
-      () => otherCluster,
-    );
-    assert.deepEqual(
-      await checkInAt({ ...deps, minter }, request(alice, "LMN-0001"), T + 5),
-      { status: 502, body: { error: "mint_failed" } },
-    );
-    assert.deepEqual(calls, ["getGenesisHash"]);
-    // Nothing was sent; the reservation stays pending for a later request.
-    assert.deepEqual(mintRows(db), [
-      { mint: passAddress("day-2", "LMN-0001"), mint_status: "pending" },
-    ]);
-    // The failed connection is not kept: the next request connects again, and is refused again.
-    assert.deepEqual(await retryAt({ ...deps, minter }, alice, T + 12), {
-      status: 502,
-      body: { error: "mint_failed" },
-    });
-    assert.deepEqual(calls, ["getGenesisHash", "getGenesisHash"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -1,5 +1,5 @@
 // Check-in, backend half (E-05). Registration binding is E-07's (registration.ts) and pass
-// minting is E-06's (mintPass on devnet, through connectDevnet). checkIn reaches them through the
+// minting is E-06's (mintPass, on pass-mint.ts's one devnet connection). checkIn reaches them through the
 // two interfaces below, so tests can pass doubles; registrationsFrom and devnetMinter build the
 // real ones, and the running API (index.ts) uses those.
 //
@@ -29,10 +29,7 @@
 import { createHmac, createPrivateKey, createPublicKey } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
-import type { Connection } from "@solana/web3.js";
-
 import { encodeBase58 } from "./base58.ts";
-import { devnetEndpoint } from "./devnet-endpoint.ts";
 import type { OrganizerKey } from "./organizer-key.ts";
 import {
   bindRegistration,
@@ -85,8 +82,8 @@ export interface PassMinter {
       readonly checkedInAt: number;
     },
   ): Promise<{ readonly signature: string }>;
-  /** Reads the chain at `mint`: no account, the pass held by `wallet`, or anything else. */
-  state(wallet: string, mint: string): Promise<"absent" | "minted" | "other">;
+  /** Reads the chain at `mint`: no account, the pass held by `wallet`, or a pass it does not hold. */
+  state(wallet: string, mint: string): Promise<"absent" | "minted" | "unheld">;
 }
 
 /**
@@ -161,53 +158,42 @@ export function registrationsFrom(
 }
 
 /**
- * E-06's pass mint on devnet, paid for and signed by the organizer key. `url` must be unset or
- * the one devnet endpoint (devnet-endpoint.ts); any other URL is refused here, when the minter is
- * built, before any connection. The connection is made at the minter's first use: a mint, or,
- * for a check-in an earlier request or process left pending, the chain read before it. It is
- * always made through connectDevnet, which checks the URL again and refuses a cluster whose
- * genesis hash is not devnet's before anything is sent; a failed connection is tried again at the
- * next use. `make` replaces only the Connection constructor connectDevnet calls, so a test can see
- * every call the minter makes without reaching devnet. E-06's code and @solana/web3.js load at
- * that first use too, so the API starts without them where no check-in reaches the minter.
+ * E-06's pass mint on devnet, paid for and signed by the organizer key. It reaches devnet only
+ * through pass-mint.ts's one connection, which no caller can replace; each mint and each chain
+ * read first refuses a cluster whose genesis hash is not devnet's. E-06's code and
+ * @solana/web3.js load at the minter's first use, a mint or, for a check-in an earlier request or
+ * process left pending, the chain read before it, so the API starts without them where no
+ * check-in reaches the minter.
  */
-export function devnetMinter(
-  url: string | undefined,
-  organizer: OrganizerKey,
-  make?: (url: string) => Connection,
-): PassMinter {
-  const endpoint = devnetEndpoint(url);
-  const prepare = async (): Promise<PassMinter> => {
-    const { Keypair, PublicKey } = await import("@solana/web3.js");
-    const { connectDevnet, mintPass, passMintState } =
-      await import("./pass-mint.ts");
-    const connection = await connectDevnet(endpoint, make);
-    const payer = Keypair.fromSecretKey(organizer.secretKeyBytes());
-    return {
-      async mint(wallet, seed, details) {
-        const minted = await mintPass(
-          connection,
-          payer,
-          new PublicKey(wallet),
-          details,
-          Keypair.fromSeed(seed),
-        );
-        return { signature: minted.signature };
-      },
-      state: (wallet, mint) =>
-        passMintState(connection, new PublicKey(mint), new PublicKey(wallet)),
-    };
-  };
-  let ready: Promise<PassMinter> | null = null;
-  const minter = (): Promise<PassMinter> =>
-    (ready ??= prepare().catch((err: unknown) => {
-      ready = null;
+export function devnetMinter(organizer: OrganizerKey): PassMinter {
+  const load = async () => ({
+    web3: await import("@solana/web3.js"),
+    passes: await import("./pass-mint.ts"),
+  });
+  let loading: ReturnType<typeof load> | null = null;
+  const loaded = () =>
+    (loading ??= load().catch((err: unknown) => {
+      loading = null;
       throw err;
     }));
   return {
-    mint: async (wallet, seed, details) =>
-      (await minter()).mint(wallet, seed, details),
-    state: async (wallet, mint) => (await minter()).state(wallet, mint),
+    async mint(wallet, seed, details) {
+      const { web3, passes } = await loaded();
+      const minted = await passes.mintPass(
+        web3.Keypair.fromSecretKey(organizer.secretKeyBytes()),
+        new web3.PublicKey(wallet),
+        details,
+        web3.Keypair.fromSeed(seed),
+      );
+      return { signature: minted.signature };
+    },
+    async state(wallet, mint) {
+      const { web3, passes } = await loaded();
+      return passes.passMintState(
+        new web3.PublicKey(mint),
+        new web3.PublicKey(wallet),
+      );
+    },
   };
 }
 
@@ -550,7 +536,7 @@ async function completePass(
     if (reservation.earlier === true) {
       const state = await deps.minter.state(wallet, mint);
       if (state === "minted") return done(null);
-      if (state === "other") return refuse(502, "mint_failed");
+      if (state === "unheld") return refuse(502, "mint_failed");
     }
     const { signature } = await deps.minter.mint(wallet, seed, {
       station: reservation.station,

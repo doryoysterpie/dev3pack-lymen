@@ -6,12 +6,11 @@
 //   - MetadataPointer pointing at the mint itself, which holds TokenMetadata: the name, the
 //     symbol, and the station, session and check-in time as additional fields.
 // The organizer key is the mint authority and the metadata update authority, and pays for
-// everything. Devnet only (D-03): connectDevnet connects only to DEVNET_URL, refusing any other URL
-// before a connection is made, and builds the Connection with makeConnection, whose every HTTP
-// request fails on a redirect rather than following it (the WebSocket web3.js opens to confirm a
-// transaction does not use that fetch). connectDevnet, mintPass, revokePass and
-// passMintState each refuse a connection whose own endpoint is not DEVNET_URL, and then one whose
-// cluster's genesis hash is not devnet's, before anything is sent.
+// everything. Devnet only (D-03): the module has one connection, to DEVNET_URL, made by a private
+// factory with a fetch that fails on any redirect, and no helper takes a connection or an
+// endpoint. mintPass, revokePass and passMintState each refuse a cluster whose genesis hash is not
+// devnet's before anything else, and a send is confirmed by polling over HTTP, so no WebSocket is
+// opened.
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   createBurnCheckedInstruction,
@@ -36,16 +35,11 @@ import {
   Connection,
   Keypair,
   PublicKey,
-  sendAndConfirmTransaction,
   SystemProgram,
   Transaction,
 } from "@solana/web3.js";
 
-import {
-  DEVNET_ENDPOINT,
-  devnetEndpoint,
-  requireDevnetEndpoint,
-} from "./devnet-endpoint.ts";
+import { DEVNET_ENDPOINT } from "./devnet-endpoint.ts";
 
 /** The one devnet endpoint limen calls (devnet-endpoint.ts). */
 export const DEVNET_URL = DEVNET_ENDPOINT;
@@ -240,7 +234,6 @@ export function buildRevokeTransaction(input: {
 
 /** Refuses the connection unless its cluster's genesis hash is devnet's (D-03). */
 async function requireDevnet(connection: Connection): Promise<void> {
-  requireDevnetEndpoint(connection.rpcEndpoint);
   const genesis = await connection.getGenesisHash();
   if (genesis !== DEVNET_GENESIS_HASH) {
     throw new Error(
@@ -251,55 +244,75 @@ async function requireDevnet(connection: Connection): Promise<void> {
 
 /**
  * globalThis.fetch, read at each call, with redirect "error": a redirect from the endpoint fails
- * the request rather than being followed, to another host or anywhere else. web3.js's own fetch
- * follows redirects.
+ * the request rather than being followed. web3.js's own fetch follows redirects.
  */
-export const noRedirectFetch = ((
+const noRedirectFetch = ((
   input: Parameters<typeof fetch>[0],
   init?: Parameters<typeof fetch>[1],
 ) => globalThis.fetch(input, { ...init, redirect: "error" })) as typeof fetch;
 
-/**
- * A Connection to `url` whose every HTTP request refuses redirects. connectDevnet makes every
- * Connection limen uses with it, unless a test passes a stand-in.
- */
-export function makeConnection(url: string): Connection {
-  return new Connection(url, {
+/** The one private factory: a Connection to DEVNET_URL whose every HTTP request refuses redirects. */
+function makeDevnetConnection(): Connection {
+  return new Connection(DEVNET_URL, {
     commitment: "confirmed",
     fetch: noRedirectFetch,
   });
 }
 
+let devnet: Connection | null = null;
+
 /**
- * Opens a connection to the devnet endpoint, built by `make` (makeConnection unless a test passes
- * a stand-in). A URL other than DEVNET_URL is refused before any connection is made; a connection
- * whose own endpoint is not DEVNET_URL is refused before any call; and a cluster whose genesis
- * hash is not devnet's is refused after that one call.
+ * limen's one devnet connection, made on first use. No caller can supply another: no helper here
+ * takes a connection or an endpoint. The devnet check script reads and sends through it.
  */
-export async function connectDevnet(
-  url: string = DEVNET_URL,
-  make: (url: string) => Connection = makeConnection,
-): Promise<Connection> {
-  const connection = make(devnetEndpoint(url));
-  await requireDevnet(connection);
-  return connection;
+export function devnetConnection(): Connection {
+  return (devnet ??= makeDevnetConnection());
+}
+
+/** Signs and sends `tx`, and waits until devnet confirms it, over HTTP only. */
+async function sendAndConfirm(
+  tx: Transaction,
+  signers: Keypair[],
+): Promise<string> {
+  const connection = devnetConnection();
+  const { blockhash, lastValidBlockHeight } =
+    await connection.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = blockhash;
+  tx.sign(...signers);
+  const signature = await connection.sendRawTransaction(tx.serialize(), {
+    preflightCommitment: "confirmed",
+  });
+  for (;;) {
+    const [status] = (await connection.getSignatureStatuses([signature])).value;
+    if (status?.err)
+      throw new Error(
+        `devnet refused the transaction: ${JSON.stringify(status.err)}`,
+      );
+    if (
+      status?.confirmationStatus === "confirmed" ||
+      status?.confirmationStatus === "finalized"
+    )
+      return signature;
+    if ((await connection.getBlockHeight("confirmed")) > lastValidBlockHeight)
+      throw new Error("the transaction expired before devnet confirmed it");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }
 
 /**
  * Mints one pass to `holder` on devnet, at `mint`'s address: a new keypair unless one is given,
  * as E-05 gives one derived per check-in so a retry targets the same address. Returns the mint,
  * the holder's token account and the signature. Over-long details are refused before the cluster
- * is asked anything, and a connection to any other endpoint or cluster is refused before anything
- * is sent.
+ * is asked anything, and another cluster is refused before anything is sent.
  */
 export async function mintPass(
-  connection: Connection,
   organizer: Keypair,
   holder: PublicKey,
   details: PassDetails,
   mint: Keypair = Keypair.generate(),
 ): Promise<{ mint: PublicKey; tokenAccount: PublicKey; signature: string }> {
   const space = passAccountLen(details);
+  const connection = devnetConnection();
   await requireDevnet(connection);
   const lamports = await connection.getMinimumBalanceForRentExemption(space);
   const tx = buildPassMintTransaction({
@@ -309,10 +322,7 @@ export async function mintPass(
     details,
     lamports,
   });
-  const signature = await sendAndConfirmTransaction(connection, tx, [
-    organizer,
-    mint,
-  ]);
+  const signature = await sendAndConfirm(tx, [organizer, mint]);
   return {
     mint: mint.publicKey,
     tokenAccount: passTokenAccount(mint.publicKey, holder),
@@ -321,17 +331,19 @@ export async function mintPass(
 }
 
 /**
- * Where a pass stands on chain, read without sending anything: "absent" when no account exists
+ * Where a pass stands on devnet, read without sending anything: "absent" when no account exists
  * at `mint`; "minted" when it is a Token-2022 mint with decimals 0 and a supply of one, and
- * `holder`'s associated token account, holding that mint for that owner, holds the one token;
- * and "other" for any other account there. A request that fails is thrown, not read as "other".
- * A connection to any other endpoint or cluster than devnet's is refused first.
+ * `holder`'s associated token account, holding that mint for that owner, holds the one token; and
+ * "unheld" for any other account there. Only the holder of the mint keypair can create an account
+ * at its address, so "unheld" means a pass was issued there that `holder` does not hold: for a
+ * check-in's wallet, a pass since burned. A request that fails is thrown, not read as a state.
+ * Another cluster is refused first.
  */
 export async function passMintState(
-  connection: Connection,
   mint: PublicKey,
   holder: PublicKey,
-): Promise<"absent" | "minted" | "other"> {
+): Promise<"absent" | "minted" | "unheld"> {
+  const connection = devnetConnection();
   await requireDevnet(connection);
   const info = await connection.getAccountInfo(mint, "confirmed");
   if (info === null) return "absent";
@@ -354,31 +366,30 @@ export async function passMintState(
       held.owner.equals(holder) &&
       held.amount === 1n
       ? "minted"
-      : "other";
+      : "unheld";
   } catch (err) {
     // spl-token's refusals are facts about the accounts there: missing, not Token-2022's, or not
     // a mint or token account. Any other error, such as a failed request, is no fact, so it is
-    // thrown rather than read as "other".
-    if (err instanceof TokenError) return "other";
+    // thrown rather than read as a state.
+    if (err instanceof TokenError) return "unheld";
     throw err;
   }
 }
 
 /**
- * Revokes a pass: the organizer burns the holder's token as permanent delegate. A connection to
- * any other endpoint or cluster than devnet's is refused before anything is sent.
+ * Revokes a pass: the organizer burns the holder's token as permanent delegate. Another cluster
+ * is refused before anything is sent.
  */
 export async function revokePass(
-  connection: Connection,
   organizer: Keypair,
   mint: PublicKey,
   holder: PublicKey,
 ): Promise<string> {
-  await requireDevnet(connection);
+  await requireDevnet(devnetConnection());
   const tx = buildRevokeTransaction({
     organizer: organizer.publicKey,
     mint,
     holder,
   });
-  return sendAndConfirmTransaction(connection, tx, [organizer]);
+  return sendAndConfirm(tx, [organizer]);
 }

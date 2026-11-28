@@ -20,9 +20,8 @@ import {
 } from "@solana/spl-token";
 import {
   Keypair,
+  PublicKey,
   Transaction,
-  type Connection,
-  type PublicKey,
   type TransactionInstruction,
 } from "@solana/web3.js";
 import { FailedTransactionMetadata, LiteSVM } from "litesvm";
@@ -31,11 +30,15 @@ import {
   buildPassMintTransaction,
   buildRevokeTransaction,
   DEVNET_GENESIS_HASH,
-  DEVNET_URL,
   passAccountLen,
   passMintState,
   passTokenAccount,
 } from "./pass-mint.ts";
+import {
+  accountInfoResult,
+  withDevnetStub,
+  type RpcAnswer,
+} from "./rpc-stub.ts";
 
 const DETAILS = {
   station: "st-front",
@@ -265,55 +268,48 @@ test("in-process SVM: a key that is not the permanent delegate cannot burn the p
 });
 
 /**
- * A Connection stand-in that gives devnet's endpoint and genesis hash, as the helpers require, and
- * reads accounts from litesvm.
+ * Devnet's JSON-RPC answered from litesvm (rpc-stub.ts): devnet's genesis hash, and each account
+ * as litesvm holds it. The helpers reach it only through their one connection.
  */
-function svmConnection(svm: LiteSVM): Connection {
-  return {
-    rpcEndpoint: DEVNET_URL,
-    getGenesisHash: async () => DEVNET_GENESIS_HASH,
-    getAccountInfo: async (address: PublicKey) => {
-      const info = svm.getAccount(address);
-      return info === null ? null : { ...info, data: Buffer.from(info.data) };
-    },
-  } as unknown as Connection;
-}
+const svmAnswer =
+  (svm: LiteSVM): RpcAnswer =>
+  (method, params) => {
+    if (method === "getGenesisHash") return DEVNET_GENESIS_HASH;
+    if (method !== "getAccountInfo")
+      throw new Error(`unexpected method ${method}`);
+    const info = svm.getAccount(new PublicKey(String(params[0])));
+    return accountInfoResult(
+      info === null ? null : { owner: info.owner.toBase58(), data: info.data },
+    );
+  };
 
-test("in-process SVM: passMintState reads a pass as absent, minted to its holder, or other", async () => {
+test("in-process SVM: passMintState reads a pass as absent, minted to its holder, or unheld once burned", async () => {
   const { svm, organizer, mint, holder } = setup();
-  const connection = svmConnection(svm);
-  assert.equal(
-    await passMintState(
-      connection,
-      Keypair.generate().publicKey,
-      holder.publicKey,
-    ),
-    "absent",
-  );
-  assert.equal(
-    await passMintState(connection, mint, holder.publicKey),
-    "minted",
-  );
-  assert.equal(
-    await passMintState(connection, mint, Keypair.generate().publicKey),
-    "other",
-  );
-  // Burned by the organizer as permanent delegate, its supply is 0.
-  const burned = send(
-    svm,
-    organizer,
-    [],
-    ...buildRevokeTransaction({
-      organizer: organizer.publicKey,
-      mint,
-      holder: holder.publicKey,
-    }).instructions,
-  );
-  assert.ok(!(burned instanceof FailedTransactionMetadata));
-  assert.equal(
-    await passMintState(connection, mint, holder.publicKey),
-    "other",
-  );
+  await withDevnetStub(svmAnswer(svm), async () => {
+    assert.equal(
+      await passMintState(Keypair.generate().publicKey, holder.publicKey),
+      "absent",
+    );
+    assert.equal(await passMintState(mint, holder.publicKey), "minted");
+    assert.equal(
+      await passMintState(mint, Keypair.generate().publicKey),
+      "unheld",
+    );
+    // Burned by the organizer as permanent delegate: the mint is still there, with a supply of 0.
+    const burned = send(
+      svm,
+      organizer,
+      [],
+      ...buildRevokeTransaction({
+        organizer: organizer.publicKey,
+        mint,
+        holder: holder.publicKey,
+      }).instructions,
+    );
+    assert.ok(!(burned instanceof FailedTransactionMetadata));
+    assert.notEqual(svm.getAccount(mint), null);
+    assert.equal(await passMintState(mint, holder.publicKey), "unheld");
+  });
 });
 
 test("in-process SVM: a second mint at the same mint keypair fails at createAccount, and the holder keeps one pass", () => {
