@@ -3,6 +3,8 @@
 // Sessions may not overlap: where two did, the API would issue for the later one while QRs from
 // the earlier one stayed valid for up to 60 s. Back-to-back sessions, one ending where the next
 // starts, do not overlap, since a session's end is exclusive.
+// A session's end may not move once the session has started, or starts within 60 s: QRs issued
+// for it carry expiry times cut to its end, so an earlier end would leave them valid after it.
 //
 //   npm run seed -w @limen/api -- ../../fixtures/demo-event.json
 //
@@ -118,11 +120,26 @@ export function seedEvent(
   const session = db.prepare(
     "INSERT INTO sessions (id, name, starts_at, ends_at) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET name = excluded.name, starts_at = excluded.starts_at, ends_at = excluded.ends_at",
   );
+  const existing = db.prepare(
+    "SELECT starts_at, ends_at FROM sessions WHERE id = ?",
+  );
   db.exec("BEGIN IMMEDIATE");
   try {
     for (const s of seed.stations) station.run(s.id, s.name, now);
-    for (const s of seed.sessions)
+    for (const s of seed.sessions) {
+      const was = existing.get(s.id) as
+        { starts_at: number; ends_at: number } | undefined;
+      if (
+        was !== undefined &&
+        was.starts_at < now + 60 &&
+        was.ends_at !== s.ends_at
+      )
+        fail(
+          "sessions",
+          `${s.id} has started, or starts within 60 s, so its end cannot move`,
+        );
       session.run(s.id, s.name, s.starts_at, s.ends_at);
+    }
     const overlap = db
       .prepare(
         "SELECT a.id AS first, b.id AS second FROM sessions a JOIN sessions b ON a.id < b.id AND a.starts_at < b.ends_at AND b.starts_at < a.ends_at ORDER BY a.id, b.id LIMIT 1",
