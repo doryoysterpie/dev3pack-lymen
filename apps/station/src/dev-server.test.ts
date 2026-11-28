@@ -516,3 +516,49 @@ console.log(c.server.proxy["/api"].target);`,
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("the preview refuses to start on a missing, invalid or wrong-shaped manifest", async () => {
+  const cases: [string, string | null][] = [
+    ["missing", null],
+    ["not JSON", "{not json"],
+    ["an array", "[]"],
+    ["an entry with no file", JSON.stringify({ "index.html": { css: [] } })],
+    [
+      "a path outside the output",
+      JSON.stringify({ "index.html": { file: "../keys/organizer.json" } }),
+    ],
+  ];
+  for (const [label, manifest] of cases) {
+    const outDir = mkdtempSync(join(tmpdir(), "limen-station-build-"));
+    let previewServer: Awaited<ReturnType<typeof preview>> | null = null;
+    try {
+      writeFileSync(join(outDir, "index.html"), "<!doctype html>\n");
+      if (manifest !== null) {
+        mkdirSync(join(outDir, ".vite"));
+        writeFileSync(join(outDir, ".vite", "manifest.json"), manifest);
+      }
+      await assert.rejects(
+        (async () => {
+          previewServer = await preview({
+            configFile: join(APP, "vite.config.ts"),
+            root: APP,
+            logLevel: "silent",
+            build: { outDir },
+            preview: { port: await freePort(), strictPort: true },
+          });
+        })(),
+        /Vite manifest/,
+        label,
+      );
+    } finally {
+      const started = previewServer as Awaited<
+        ReturnType<typeof preview>
+      > | null;
+      if (started !== null)
+        await new Promise<void>((resolve) =>
+          started.httpServer.close(() => resolve()),
+        );
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  }
+});
