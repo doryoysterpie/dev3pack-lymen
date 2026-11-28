@@ -27,6 +27,15 @@ export const USER_TOKEN_ACCOUNT_MARKER = "user token account";
 export const USER_AUTHORIZED_TOKEN_ACCOUNT_MARKER =
   "user-authorized token account";
 
+/**
+ * A report writes this, then a number from 1, for every other account in the
+ * account list of an instruction the wallet signs (summary.ts,
+ * walletSignedAccounts), whatever its position: any could be one of the
+ * wallet's accounts. The stored transaction bytes still name each one.
+ */
+export const WALLET_SIGNED_ACCOUNT_MARKER =
+  "account in a wallet-signed instruction";
+
 /** What scrubAddresses writes in place of an address. */
 export const SCRUBBED = "an address";
 
