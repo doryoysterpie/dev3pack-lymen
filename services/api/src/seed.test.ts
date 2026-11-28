@@ -145,6 +145,57 @@ test("a seed whose session overlaps one already in the database is refused, and 
   );
 });
 
+test("a seed may not move the end of a session that has started, or starts within 60 s", () => {
+  const db = openDatabase(":memory:");
+  seedEvent(db, { stations: [], sessions: [session("day-1", 1000, 2000)] }, 1);
+  // At 1500 day-1 has started: QRs already issued for it carry expiry times cut to its end at
+  // 2000, so an earlier end would leave them valid after it.
+  for (const ends of [1800, 2500]) {
+    assert.throws(
+      () =>
+        seedEvent(
+          db,
+          { stations: [], sessions: [session("day-1", 1000, ends)] },
+          1500,
+        ),
+      {
+        message:
+          "seed sessions: day-1 has started, or starts within 60 s, so its end cannot move",
+      },
+    );
+  }
+  assert.deepEqual(sessionRows(db), [
+    { id: "day-1", starts_at: 1000, ends_at: 2000 },
+  ]);
+  // Its name may still change, and its end stays where it is.
+  seedEvent(
+    db,
+    {
+      stations: [],
+      sessions: [{ ...session("day-1", 1000, 2000), name: "Day one" }],
+    },
+    1500,
+  );
+  // 59 s before it starts the end is already fixed; 60 s before, it may still move.
+  assert.throws(
+    () =>
+      seedEvent(
+        db,
+        { stations: [], sessions: [session("day-1", 1000, 1900)] },
+        941,
+      ),
+    /day-1 has started, or starts within 60 s, so its end cannot move/,
+  );
+  seedEvent(
+    db,
+    { stations: [], sessions: [session("day-1", 1000, 1900)] },
+    940,
+  );
+  assert.deepEqual(sessionRows(db), [
+    { id: "day-1", starts_at: 1000, ends_at: 1900 },
+  ]);
+});
+
 test("back-to-back sessions do not overlap, since a session's end is exclusive", () => {
   const db = openDatabase(":memory:");
   seedEvent(
