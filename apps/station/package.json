@@ -1,0 +1,17 @@
+{
+  "name": "@limen/station",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.ts",
+    "test": "node --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "qrcode": "1.5.4",
+    "vite": "8.3.8"
+  },
+  "devDependencies": {
+    "@types/qrcode": "1.5.6"
+  }
+}

@@ -8,6 +8,8 @@ import { openDatabase } from "./db.ts";
 import { isMainModule } from "./main-module.ts";
 import { loadOrganizerKey } from "./organizer-key.ts";
 import { API_VERSION, createApiServer } from "./server.ts";
+import { loadStationPage, STATION_PAGE_PATH } from "./station-page.ts";
+import { parseStationDisplaySecret } from "./station-token.ts";
 import { bundledLists, type DomainLists } from "./triage.ts";
 
 export interface StartedApi {
@@ -37,13 +39,19 @@ export function listenUrl(host: string, port: number): string {
 /** Starts the API. Throws a configuration error with an operator-readable message. */
 export async function start(
   env: NodeJS.ProcessEnv = process.env,
+  stationPagePath: string = STATION_PAGE_PATH,
 ): Promise<StartedApi> {
   // Loaded first so a bad key file stops start-up before anything else happens.
-  // E-03 hands the key to the station QR signer.
-  loadOrganizerKey(env.ORGANIZER_KEYPAIR_PATH);
+  const organizerKey = loadOrganizerKey(env.ORGANIZER_KEYPAIR_PATH);
+  const stationDisplayToken = parseStationDisplaySecret(
+    env.STATION_DISPLAY_TOKEN,
+  );
   const chainabuse = parseChainabuseMode(env.CHAINABUSE_POST);
   const port = parsePort(env.API_PORT);
   const host = env.API_HOST || "127.0.0.1";
+  // Read once, here: a symlink or anything but a regular file stops start-up. With no page built,
+  // /station answers 503 with the build command.
+  const stationPage = loadStationPage(stationPagePath);
   const db = openDatabase(env.DATABASE_PATH || "limen.db");
   // The triage lists load once, here. If they cannot, the API still starts and serves /health,
   // and only the triage routes answer 503 (E-12).
@@ -60,6 +68,11 @@ export async function start(
   const server = createApiServer({
     db,
     version: API_VERSION,
+    stationSigner: organizerKey,
+    stationDisplayToken,
+    now: () => Math.floor(Date.now() / 1000),
+    nowMs: () => Date.now(),
+    stationPage,
     reports: {
       triageToken: env.TRIAGE_TOKEN || undefined,
       lists,

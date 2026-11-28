@@ -13,6 +13,10 @@ coverage/
 keys/
 *.keypair.json
 id.json
+# Legacy: an earlier version of E-03 wrote station display links, which hold a display token, as
+# *.url files, some in a .station-links/ folder. They stay ignored.
+*.url
+.station-links/
 
 # Local databases
 *.db
@@ -21,3 +25,9 @@ id.json
 
 # OS files
 .DS_Store
+# Key files by extension, anywhere. Committed key material is caught by content in CI, whatever
+# its name (services/api/src/key-scan.ts).
+*.der
+*.pem
+*.key
+*.p12

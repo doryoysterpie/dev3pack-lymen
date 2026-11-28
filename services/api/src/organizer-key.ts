@@ -78,6 +78,35 @@ function parseKeypair(text: string): Uint8Array | null {
   return Uint8Array.from(value as number[]);
 }
 
+/** The Ed25519 private key of a keypair's first 32 bytes, and whether its last 32 are that key's public half. */
+function keypairHalves(bytes: Uint8Array): {
+  privateKey: KeyObject;
+  matches: boolean;
+} {
+  const privateKey = createPrivateKey({
+    key: Buffer.concat([PKCS8_ED25519_PREFIX, bytes.subarray(0, 32)]),
+    format: "der",
+    type: "pkcs8",
+  });
+  const jwk = createPublicKey(privateKey).export({ format: "jwk" });
+  const derived = Buffer.from(jwk.x ?? "", "base64url");
+  const stated = bytes.subarray(32);
+  return {
+    privateKey,
+    matches: derived.length === 32 && timingSafeEqual(derived, stated),
+  };
+}
+
+/**
+ * True when loadOrganizerKey would accept `text` as a key file: a JSON array of 64 integers from 0
+ * to 255 whose last 32 bytes are the Ed25519 public key of the first 32. The key scan uses this,
+ * so it flags what the loader accepts (key-scan.ts).
+ */
+export function acceptsAsKeypair(text: string): boolean {
+  const bytes = parseKeypair(text);
+  return bytes !== null && keypairHalves(bytes).matches;
+}
+
 function isByteArray(value: unknown): boolean {
   return (
     Array.isArray(value) &&
@@ -145,15 +174,8 @@ export function loadOrganizerKey(path: string | undefined): OrganizerKey {
     );
   }
 
-  const privateKey = createPrivateKey({
-    key: Buffer.concat([PKCS8_ED25519_PREFIX, bytes.subarray(0, 32)]),
-    format: "der",
-    type: "pkcs8",
-  });
-  const jwk = createPublicKey(privateKey).export({ format: "jwk" });
-  const derived = Buffer.from(jwk.x ?? "", "base64url");
-  const stated = bytes.subarray(32);
-  if (derived.length !== 32 || !timingSafeEqual(derived, stated)) {
+  const { privateKey, matches } = keypairHalves(bytes);
+  if (!matches) {
     throw new OrganizerKeyError(
       "mismatch",
       "The file ORGANIZER_KEYPAIR_PATH names is inconsistent: its public key does not match its secret key.",

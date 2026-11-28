@@ -18,6 +18,8 @@ import type { Readable } from "node:stream";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { TEST_STATION_DISPLAY_SECRET } from "./test-station.ts";
+
 const SERVICE = fileURLToPath(new URL("..", import.meta.url));
 
 // RFC 8032 section 7.1, TEST 1: a published Ed25519 test vector, not a real key.
@@ -100,6 +102,7 @@ test("without the domain list file the API starts, /health answers, and the tria
       ORGANIZER_KEYPAIR_PATH: keyPath,
       DATABASE_PATH: join(dir, "limen.db"),
       TRIAGE_TOKEN: TOKEN,
+      STATION_DISPLAY_TOKEN: TEST_STATION_DISPLAY_SECRET,
     },
   );
   try {
