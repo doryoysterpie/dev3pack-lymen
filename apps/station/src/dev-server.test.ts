@@ -213,16 +213,23 @@ test("an organizer key with an ordinary JSON name in apps/station/build gets 403
       "/README.md",
     ])
       assert.equal((await status(devPort, path)).status, 403, `dev ${path}`);
-    // The page and the modules it loads still answer.
+    // The page and every module it loads, followed import by import from main.ts, answer 200.
     assert.equal((await status(devPort, "/")).status, 200);
-    const main = await status(devPort, "/src/main.ts");
-    assert.equal(main.status, 200);
-    const imports = [...main.body.matchAll(/from\s+"(\/[^"]+)"/g)].map(
-      (m) => m[1]!,
-    );
-    assert.ok(imports.some((i) => i.includes("qrcode")));
-    for (const path of imports)
-      assert.equal((await status(devPort, path)).status, 200, path);
+    const seen = new Set<string>();
+    const queue = ["/@vite/client", "/src/main.ts"];
+    while (queue.length > 0) {
+      const path = queue.shift()!;
+      if (seen.has(path)) continue;
+      seen.add(path);
+      const module = await status(devPort, path);
+      assert.equal(module.status, 200, path);
+      for (const m of module.body.matchAll(
+        /(?:from|import)\s*\(?\s*"(\/[^"]+)"/g,
+      ))
+        queue.push(m[1]!);
+    }
+    assert.ok([...seen].some((p) => p.includes("qrcode")));
+    assert.ok([...seen].some((p) => p.includes("/src/rotation.ts")));
 
     await build({ ...config, build: { outDir, emptyOutDir: true } });
     previewServer = await preview({
