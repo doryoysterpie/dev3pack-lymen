@@ -357,16 +357,6 @@ export function linkHost(link: string): string {
   }
 }
 
-// A malformed result that is not a broken layout says what limen found; the
-// rest break the Solana transaction format (wire.ts).
-const MALFORMED: Readonly<Record<string, string>> = {
-  "not-base64": "the request did not send a transaction limen can read",
-  "not-bytes": "the request did not send a transaction limen can read",
-  "duplicate-key": "it names the same account twice, which Solana refuses",
-  "bad-lookup-index":
-    "a lookup index points past the end of its table, which Solana refuses",
-};
-
 /** The card for a transaction request, from its link and pre-flight. */
 export function transactionCardText(
   link: string,
@@ -406,7 +396,9 @@ export function transactionCardText(
     return {
       title: "Malformed transaction",
       tone: "malformed",
-      status: `limen flags this transaction: ${MALFORMED[result.problem] ?? "it does not follow the Solana transaction format"} (${result.problem}).`,
+      // limen reads legacy and version 0 transactions only, so it says what
+      // it could not read, never that the transaction breaks Solana's rules.
+      status: `limen flags this transaction: limen cannot read it as a legacy or version 0 Solana transaction (${result.problem}).`,
       rows: [from],
     };
   }
