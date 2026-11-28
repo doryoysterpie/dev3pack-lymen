@@ -31,6 +31,7 @@ import {
   buildPassMintTransaction,
   buildRevokeTransaction,
   DEVNET_GENESIS_HASH,
+  DEVNET_URL,
   passAccountLen,
   passMintState,
   passTokenAccount,
@@ -263,9 +264,13 @@ test("in-process SVM: a key that is not the permanent delegate cannot burn the p
   assert.equal(balance(svm, mint, holder.publicKey), 1n);
 });
 
-/** A Connection stand-in that answers devnet's genesis hash and reads accounts from litesvm. */
+/**
+ * A Connection stand-in that gives devnet's endpoint and genesis hash, as the helpers require, and
+ * reads accounts from litesvm.
+ */
 function svmConnection(svm: LiteSVM): Connection {
   return {
+    rpcEndpoint: DEVNET_URL,
     getGenesisHash: async () => DEVNET_GENESIS_HASH,
     getAccountInfo: async (address: PublicKey) => {
       const info = svm.getAccount(address);

@@ -7,8 +7,10 @@
 //     symbol, and the station, session and check-in time as additional fields.
 // The organizer key is the mint authority and the metadata update authority, and pays for
 // everything. Devnet only (D-03): connectDevnet connects only to DEVNET_URL, refusing any other URL
-// before a connection is made, and connectDevnet, mintPass and revokePass each refuse a connection
-// whose cluster's genesis hash is not devnet's, before anything is sent.
+// before a connection is made, and builds the Connection with makeConnection, whose every request
+// fails on a redirect rather than following it. connectDevnet, mintPass, revokePass and
+// passMintState each refuse a connection whose own endpoint is not DEVNET_URL, and then one whose
+// cluster's genesis hash is not devnet's, before anything is sent.
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   createBurnCheckedInstruction,
@@ -37,7 +39,11 @@ import {
   Transaction,
 } from "@solana/web3.js";
 
-import { DEVNET_ENDPOINT, devnetEndpoint } from "./devnet-endpoint.ts";
+import {
+  DEVNET_ENDPOINT,
+  devnetEndpoint,
+  requireDevnetEndpoint,
+} from "./devnet-endpoint.ts";
 
 /** The one devnet endpoint limen calls (devnet-endpoint.ts). */
 export const DEVNET_URL = DEVNET_ENDPOINT;
@@ -232,6 +238,7 @@ export function buildRevokeTransaction(input: {
 
 /** Refuses the connection unless its cluster's genesis hash is devnet's (D-03). */
 async function requireDevnet(connection: Connection): Promise<void> {
+  requireDevnetEndpoint(connection.rpcEndpoint);
   const genesis = await connection.getGenesisHash();
   if (genesis !== DEVNET_GENESIS_HASH) {
     throw new Error(
@@ -241,13 +248,32 @@ async function requireDevnet(connection: Connection): Promise<void> {
 }
 
 /**
- * Opens a connection to the devnet endpoint. A URL other than DEVNET_URL is refused before any
- * connection is made, and a cluster whose genesis hash is not devnet's is refused after that one
- * call.
+ * globalThis.fetch, read at each call, with redirect "error": a redirect from the endpoint fails
+ * the request rather than being followed, to another host or anywhere else. web3.js's own fetch
+ * follows redirects.
+ */
+export const noRedirectFetch = ((
+  input: Parameters<typeof fetch>[0],
+  init?: Parameters<typeof fetch>[1],
+) => globalThis.fetch(input, { ...init, redirect: "error" })) as typeof fetch;
+
+/** A Connection to `url` whose every RPC request refuses redirects. Every Connection limen makes. */
+export function makeConnection(url: string): Connection {
+  return new Connection(url, {
+    commitment: "confirmed",
+    fetch: noRedirectFetch,
+  });
+}
+
+/**
+ * Opens a connection to the devnet endpoint, built by `make` (makeConnection unless a test passes
+ * a stand-in). A URL other than DEVNET_URL is refused before any connection is made; a connection
+ * whose own endpoint is not DEVNET_URL is refused before any call; and a cluster whose genesis
+ * hash is not devnet's is refused after that one call.
  */
 export async function connectDevnet(
   url: string = DEVNET_URL,
-  make = (u: string) => new Connection(u, "confirmed"),
+  make: (url: string) => Connection = makeConnection,
 ): Promise<Connection> {
   const connection = make(devnetEndpoint(url));
   await requireDevnet(connection);
@@ -258,7 +284,8 @@ export async function connectDevnet(
  * Mints one pass to `holder` on devnet, at `mint`'s address: a new keypair unless one is given,
  * as E-05 gives one derived per check-in so a retry targets the same address. Returns the mint,
  * the holder's token account and the signature. Over-long details are refused before the cluster
- * is asked anything, and a connection to any other cluster is refused before anything is sent.
+ * is asked anything, and a connection to any other endpoint or cluster is refused before anything
+ * is sent.
  */
 export async function mintPass(
   connection: Connection,
@@ -292,7 +319,7 @@ export async function mintPass(
  * Where a pass stands on chain, read without sending anything: "absent" when no account exists
  * at `mint`, "minted" when it is a Token-2022 mint with a supply of one and `holder`'s associated
  * token account holds that one token, and "other" for anything else. A connection to any other
- * cluster than devnet is refused first.
+ * endpoint or cluster than devnet's is refused first.
  */
 export async function passMintState(
   connection: Connection,
@@ -323,7 +350,7 @@ export async function passMintState(
 
 /**
  * Revokes a pass: the organizer burns the holder's token as permanent delegate. A connection to
- * any other cluster than devnet is refused before anything is sent.
+ * any other endpoint or cluster than devnet's is refused before anything is sent.
  */
 export async function revokePass(
   connection: Connection,

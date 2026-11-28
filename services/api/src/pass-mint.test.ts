@@ -2,6 +2,8 @@
 // parameters. The on-chain results (transfer fails, delegate burn succeeds) are checked against
 // devnet by src/devnet/pass-mint.check.ts, which needs a funded key and does not run in CI.
 import assert from "node:assert/strict";
+import { createServer, type IncomingMessage, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 
 import {
@@ -13,10 +15,10 @@ import {
   TokenInstruction,
 } from "@solana/spl-token";
 import {
+  Connection,
   Keypair,
   SystemInstruction,
   SystemProgram,
-  type Connection,
   type Transaction,
 } from "@solana/web3.js";
 
@@ -25,9 +27,12 @@ import {
   buildRevokeTransaction,
   connectDevnet,
   DEVNET_GENESIS_HASH,
+  DEVNET_URL,
+  makeConnection,
   mintPass,
   passAccountLen,
   passFields,
+  passMintState,
   passTokenAccount,
   revokePass,
   tokenMetadataLen,
@@ -256,7 +261,10 @@ test("DEVNET_GENESIS_HASH is devnet's genesis hash", () => {
 
 test("a cluster whose genesis hash is not devnet's is refused", async () => {
   const fake = (hash: string) => () =>
-    ({ getGenesisHash: async () => hash }) as unknown as Connection;
+    ({
+      rpcEndpoint: DEVNET_URL,
+      getGenesisHash: async () => hash,
+    }) as unknown as Connection;
   await assert.rejects(
     connectDevnet(
       "https://api.devnet.solana.com",
@@ -279,6 +287,7 @@ test("connectDevnet refuses a URL that is not the allowlisted devnet endpoint be
   const make = () => {
     made += 1;
     return {
+      rpcEndpoint: DEVNET_URL,
       getGenesisHash: async () => DEVNET_GENESIS_HASH,
     } as unknown as Connection;
   };
@@ -306,10 +315,14 @@ const NOT_DEVNET_MESSAGE =
   /^SOLANA_RPC_URL is not devnet: its genesis hash is SomeOtherGenesisHash1+\. limen runs on devnet only \(D-03\)\.$/;
 
 /**
- * A stand-in connection for mintPass and revokePass: it answers getGenesisHash with `genesis`,
- * prices rent, accepts sends and confirms them, and records each call in order.
+ * A stand-in connection for mintPass and revokePass at `rpcEndpoint` (the devnet endpoint unless
+ * given; null for none): it answers getGenesisHash with `genesis`, prices rent, accepts sends and
+ * confirms them, and records each call in order.
  */
-function recordingConnection(genesis: string) {
+function recordingConnection(
+  genesis: string,
+  rpcEndpoint: string | null = DEVNET_URL,
+) {
   const calls: string[] = [];
   const answer =
     <T>(name: string, value: T) =>
@@ -318,6 +331,7 @@ function recordingConnection(genesis: string) {
       return value;
     };
   const connection = {
+    rpcEndpoint: rpcEndpoint ?? undefined,
     getGenesisHash: answer("getGenesisHash", genesis),
     getMinimumBalanceForRentExemption: answer(
       "getMinimumBalanceForRentExemption",
@@ -362,10 +376,114 @@ test("mintPass and revokePass refuse a cluster whose genesis hash is not devnet'
   ]);
 });
 
+test("mintPass, revokePass, passMintState and connectDevnet refuse a connection whose endpoint is not the devnet endpoint, before any call", async () => {
+  const refused = {
+    message:
+      "This connection's endpoint is not https://api.devnet.solana.com, the one devnet endpoint limen calls (D-03).",
+  };
+  // Each answers devnet's genesis hash, so only the endpoint check can refuse it.
+  for (const endpoint of [
+    "http://127.0.0.1:8899",
+    "https://api.devnet.solana.com/",
+    "https://api.devnet.solana.com.example.test",
+    null,
+  ]) {
+    const other = recordingConnection(DEVNET_GENESIS_HASH, endpoint);
+    await assert.rejects(
+      mintPass(other.connection, organizer, holder, DETAILS),
+      refused,
+    );
+    await assert.rejects(
+      revokePass(other.connection, organizer, mint.publicKey, holder),
+      refused,
+    );
+    await assert.rejects(
+      passMintState(other.connection, mint.publicKey, holder),
+      refused,
+    );
+    await assert.rejects(
+      connectDevnet(DEVNET_URL, () => other.connection),
+      refused,
+    );
+    assert.deepEqual(other.calls, [], String(endpoint));
+  }
+});
+
+/** Reads a request's body as text. */
+async function bodyOf(req: IncomingMessage): Promise<string> {
+  let text = "";
+  for await (const chunk of req) text += String(chunk);
+  return text;
+}
+
+/** Listens on `host` at a free port and returns the server's base URL. */
+async function listen(server: Server, host: string): Promise<string> {
+  await new Promise<void>((resolve) => server.listen(0, host, resolve));
+  return `http://${host}:${(server.address() as AddressInfo).port}`;
+}
+
+test("a Connection from makeConnection fails on a redirect to another host, where web3.js's default follows it", async () => {
+  const hits: string[] = [];
+  // The target, on another host name, answers getGenesisHash.
+  const target = createServer(async (req, res) => {
+    hits.push("target");
+    const { id } = JSON.parse(await bodyOf(req)) as { id: unknown };
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({ jsonrpc: "2.0", id, result: "RedirectTarget1111" }),
+    );
+  });
+  const targetUrl = await listen(target, "localhost");
+  // The endpoint answers every request with a 307 to the target.
+  const endpoint = createServer((_req, res) => {
+    hits.push("endpoint");
+    res.writeHead(307, { location: `${targetUrl}/` });
+    res.end();
+  });
+  const endpointUrl = await listen(endpoint, "127.0.0.1");
+  try {
+    // web3.js's own fetch, as connectDevnet built its Connection at 228e3f5, follows the 307.
+    assert.equal(
+      await new Connection(endpointUrl, "confirmed").getGenesisHash(),
+      "RedirectTarget1111",
+    );
+    assert.deepEqual(hits, ["endpoint", "target"]);
+    hits.length = 0;
+    await assert.rejects(makeConnection(endpointUrl).getGenesisHash());
+    assert.deepEqual(hits, ["endpoint"], "nothing reaches the target");
+  } finally {
+    for (const server of [endpoint, target])
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('connectDevnet\'s own Connection sends each request to the devnet endpoint with redirect "error"', async () => {
+  // The fetch is replaced for this test, so nothing leaves the machine.
+  const seen: { url: string; redirect: string | undefined }[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+    seen.push({ url: String(input), redirect: init?.redirect });
+    const { id } = JSON.parse(String(init?.body)) as { id: unknown };
+    return new Response(
+      JSON.stringify({ jsonrpc: "2.0", id, result: DEVNET_GENESIS_HASH }),
+      { headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  let connection: Connection;
+  try {
+    connection = await connectDevnet();
+  } finally {
+    globalThis.fetch = real;
+  }
+  assert.equal(connection.rpcEndpoint, DEVNET_URL);
+  assert.deepEqual(seen, [{ url: DEVNET_URL, redirect: "error" }]);
+});
+
 test("mintPass creates the pass at the mint keypair it is given", async () => {
   const given = Keypair.generate();
   let sent: Transaction | undefined;
   const connection = {
+    rpcEndpoint: DEVNET_URL,
     getGenesisHash: async () => DEVNET_GENESIS_HASH,
     getMinimumBalanceForRentExemption: async () => 4_181_760,
     sendTransaction: async (tx: Transaction) => {

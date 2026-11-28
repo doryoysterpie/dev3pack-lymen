@@ -1319,21 +1319,25 @@ test("the running API mints a check-in through devnetMinter, connectDevnet and m
     },
     confirmTransaction: () => ({ context: { slot: 1 }, value: { err: null } }),
   };
-  const standIn = new Proxy(
-    {},
-    {
-      get: (_target, name) =>
-        name === "then"
-          ? undefined
-          : async (arg: unknown) => {
-              calls.push(String(name));
-              const answer = answers[String(name)];
-              if (answer === undefined)
-                throw new Error(`unexpected call: ${String(name)}`);
-              return answer(arg);
-            },
-    },
-  ) as unknown as Connection;
+  // A stand-in for the Connection made to `url`: its endpoint is that URL.
+  const standInFor = (url: string) =>
+    new Proxy(
+      {},
+      {
+        get: (_target, name) =>
+          name === "then"
+            ? undefined
+            : name === "rpcEndpoint"
+              ? url
+              : async (arg: unknown) => {
+                  calls.push(String(name));
+                  const answer = answers[String(name)];
+                  if (answer === undefined)
+                    throw new Error(`unexpected call: ${String(name)}`);
+                  return answer(arg);
+                },
+      },
+    ) as unknown as Connection;
   let api: Awaited<ReturnType<typeof start>> | undefined;
   try {
     api = await start(
@@ -1347,7 +1351,7 @@ test("the running API mints a check-in through devnetMinter, connectDevnet and m
       },
       (url) => {
         urls.push(url);
-        return standIn;
+        return standInFor(url);
       },
     );
     const res = await fetch(`${api.url}/checkins`, {
@@ -1484,18 +1488,21 @@ test("the minter reaches only the allowlisted devnet endpoint: another URL is re
   writeFileSync(keyPath, JSON.stringify(RFC_KEYPAIR));
   // A connection that answers with another cluster's genesis hash and records every call made.
   const calls: string[] = [];
+  // At the devnet endpoint, so only the genesis check can refuse it.
   const otherCluster = new Proxy(
     {},
     {
       get: (_target, name) =>
         name === "then"
           ? undefined
-          : async () => {
-              calls.push(String(name));
-              return name === "getGenesisHash"
-                ? "not-the-devnet-genesis-hash"
-                : undefined;
-            },
+          : name === "rpcEndpoint"
+            ? "https://api.devnet.solana.com"
+            : async () => {
+                calls.push(String(name));
+                return name === "getGenesisHash"
+                  ? "not-the-devnet-genesis-hash"
+                  : undefined;
+              },
     },
   ) as unknown as Connection;
   try {
