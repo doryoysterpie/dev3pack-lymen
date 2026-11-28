@@ -81,6 +81,41 @@ npx expo run:android
 
 `expo prebuild` writes the native project to `android/`, which git ignores. `expo run:android` builds the debug app, installs it on the connected emulator or device and starts Metro. These two steps have not yet been run for this repository (see "Not checked yet").
 
+## Device check build (E-18)
+
+Under the owner's ruling 13a, a test build of the app, used only for the device check, trusts one test certificate, so it can fetch the devnet fixture transaction requests from a local HTTPS server. The release build is unchanged.
+
+| Path                                 | What it does                                                                                                                                                                                                                                                     |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugins/with-test-certificate.ts`   | Acts only when `LIMEN_TEST_CA_CERT` names a PEM certificate at prebuild. Then it adds that certificate as `res/raw/limen_test_ca.pem` and a network security config that trusts it for `10.0.2.2` alone. It refuses a file holding anything else, such as a key. |
+| `device-check/make-certificates.mjs` | Makes a test CA and the server's certificate for `10.0.2.2` with `openssl`, into `device-check/.certs/`, which git ignores, then deletes the CA's private key.                                                                                                   |
+| `device-check/serve.mjs`             | An HTTPS server on `127.0.0.1:8443`, which the emulator reaches as `10.0.2.2:8443`. `POST /drainer` answers with the E-09 drainer fixture built for the posted account, which becomes its fee payer. It logs each request and each failed TLS handshake.         |
+
+Steps, from the repository root. The test build is the release variant, which bundles the JavaScript, so no Metro server is needed:
+
+```bash
+npm ci
+node apps/mobile/device-check/make-certificates.mjs
+cd apps/mobile
+LIMEN_TEST_CA_CERT=device-check/.certs/ca.pem npx expo prebuild --platform android --no-install
+cd android
+./gradlew assembleRelease
+```
+
+For the release build, run the same prebuild without `LIMEN_TEST_CA_CERT`, after removing `android/`. Then start the server with `node apps/mobile/device-check/serve.mjs`, and show the app a QR of `solana:https://10.0.2.2:8443/drainer`. On the emulator, that QR can be a poster in the virtual scene camera: start the emulator with `-camera-back virtualscene -virtualscene-poster wall=<a PNG of that QR>`.
+
+What was checked, on 2026-11-28:
+
+- **Without `LIMEN_TEST_CA_CERT`:** `npx expo prebuild` wrote an Android project byte-identical to the one it writes at E-09's `b1c27af` (`diff -r`, no differences).
+- **With it:** the project differs in three places. The manifest's `application` element gains `android:networkSecurityConfig`, and `res/raw` and `res/xml` are added. `res/raw/limen_test_ca.pem` is byte-identical to `ca.pem`.
+- **A key file named instead:** prebuild stops with the plugin's error, and the key's text is not printed.
+- **The server:**
+  - At start, it checks that the drainer it builds for the fixture's user equals the fixture's drainer case, byte for byte.
+  - For another posted account, the answer has that account as fee payer, and `summarizeTransaction` gives it exactly the drainer case's owed summary.
+  - `curl` with the test CA gets HTTP 200, and without it refuses the certificate (exit 60).
+
+The device check itself has not run yet.
+
 ## Tests
 
 ```bash
